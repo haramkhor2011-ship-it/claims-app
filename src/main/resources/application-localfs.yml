@@ -1,0 +1,92 @@
+spring:
+  config:
+    activate:
+      on-profile: localfs
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/claims
+    username: claims_user
+    password: securepass
+    hikari:
+      maximum-pool-size: 12
+      minimum-idle: 3
+      auto-commit: false
+      connection-timeout: 30000
+      leak-detection-threshold: 15000
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+
+  # (Optional) Flyway: keep disabled during dev unless you want migrations to run locally
+  flyway:
+    enabled: false
+
+  main:
+    allow-bean-definition-overriding: true
+  cache:
+    type: simple
+
+logging:
+  level:
+    com.acme.claims: DEBUG
+    org.springframework.jdbc.core.JdbcTemplate: INFO
+    org.springframework.ws: WARN
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,info,metrics,env,threaddump,loggers"
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+# ================== CLAIMS APP ==================
+claims:
+  metrics:
+    batch:
+      enabled: true
+  ingestion:
+    # our logical profile switch that IngestionConfig uses to select Fetcher/Acker beans
+    profile: localfs
+
+    # Scheduler cadence (fast for dev)
+    scheduler:
+      fixedDelayString: "PT10S"          # every 10s
+      initialDelayString: "PT0S"
+
+    # Local filesystem fetcher config (only this fetcher is active under 'localfs')
+    localfs:
+      readyDir: ${CLAIMS_LOCALFS_WATCH:C:\Users\kvikr\Downloads\claims-backend-full\target\incoming}
+      archiveOkDir: ${CLAIMS_LOCALFS_ARCHIVE:C:\Users\kvikr\Downloads\claims-backend-full\target\done}
+      archiveFailDir: ${CLAIMS_LOCALFS_ERROR:C:\Users\kvikr\Downloads\claims-backend-full\target\error}
+
+    # ACK policy (default OFF per requirements)
+    ack:
+      enabled: false
+
+    # Threading (executor used by orchestrator/pipeline)
+    executor:
+      core-pool-size: 2
+      max-pool-size: 4
+      queue-capacity: 100
+    poll:
+      fixedDelayMs: ${INGESTION_POLL_MS:20000}   # 20s default
+
+  parser:
+    allowNonSchemaAttachments: false
+    maxAttachmentBytes: 10485760         # 10MB
+    failOnXsdError: false
+
+
+  # ===== Refdata & Bootstrap =====
+  refdata:
+    auto-insert: true                    # local: insert-on-miss to keep dev smooth
+  bootstrap:
+    enabled: false                       # keep OFF locally unless testing CSV
+    csv-path: "classpath:refdata/"       # your CSVs are already under resources/refdata
+
+# Optional simple cache tuning for refdata lookups (if you use Spring Cache)

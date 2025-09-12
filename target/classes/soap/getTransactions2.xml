@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+    <soap:Body>
+        <SearchTransactions xmlns="http://www.eClaimLink.ae/">
+            <login>ajay</login>
+            <pwd>rohini</pwd>
+            <direction>1</direction>
+            <callerLicense>DHA-F-0045446</callerLicense>
+            <ePartner></ePartner>
+            <transactionID>2</transactionID>
+            <TransactionStatus>2</TransactionStatus>
+<!--            <transactionFileName></transactionFileName>-->
+            <transactionFromDate>01-07-2025 00:00:00</transactionFromDate>
+            <transactionToDate>02-07-2025 00:00:00</transactionToDate>
+            <minRecordCount>1</minRecordCount>
+            <maxRecordCount>5</maxRecordCount>
+        </SearchTransactions>
+    </soap:Body>
+</soap:Envelope>

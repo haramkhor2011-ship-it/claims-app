@@ -1,0 +1,2603 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Claim.Submission xmlns:tns="http://www.eclaimlink.ae/DataDictionary/CommonTypes" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.eclaimlink.ae/DataDictionary/CommonTypes/ClaimSubmission.xsd">
+    <Header>
+        <SenderID>DHA-F-0045446</SenderID>
+        <ReceiverID>TPA002</ReceiverID>
+        <TransactionDate>11/02/2025 16:54</TransactionDate>
+        <RecordCount>32</RecordCount>
+        <DispositionFlag>PRODUCTION</DispositionFlag>
+    </Header>
+    <Claim>
+        <ID>DLJOI1021589852</ID>
+        <MemberID>I001-002-112949409-02</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-2003-4095987-1</EmiratesIDNumber>
+        <Gross>72.00</Gross>
+        <PatientShare>7.20</PatientShare>
+        <Net>64.80</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLW0000272</PatientID>
+            <Start>01/02/2025 00:04</Start>
+            <End>01/02/2025 00:34</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>R05</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300121</ID>
+            <Start>01/02/2025 00:04</Start>
+            <Type>8</Type>
+            <Code>9.01</Code>
+            <Quantity>1.0</Quantity>
+            <Net>0</Net>
+            <Clinician>DHA-P-30387015</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>109</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>72</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CONSULTATION GP FREE FOLLOW UP</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300160811</ID>
+            <Start>01/02/2025 00:04</Start>
+            <Type>3</Type>
+            <Code>94640</Code>
+            <Quantity>1.0</Quantity>
+            <Net>64.80</Net>
+            <Clinician>DHA-P-30387015</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Pressurized or nonpressurized inhalation treatment for acute airway obstruction for therapeutic purposes andor for diagnostic purposes such as sputum induction with an aerosol generator nebulizer metered dose inhaler or intermittent positive pressure breathing IPPB device</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589854</ID>
+        <MemberID>I001-002-112943212-01</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1975-3246105-6</EmiratesIDNumber>
+        <Gross>1360.00</Gross>
+        <PatientShare>136.01</PatientShare>
+        <Net>1223.99</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0242632</PatientID>
+            <Start>01/02/2025 05:51</Start>
+            <End>01/02/2025 06:21</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>M13.0</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E61.1</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>D51.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E06.3</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>200114021</ID>
+            <Start>01/02/2025 05:51</Start>
+            <Type>3</Type>
+            <Code>86038</Code>
+            <Quantity>1.0</Quantity>
+            <Net>520.20</Net>
+            <Clinician>DHA-P-0250490</Clinician>
+            <PriorAuthorizationID>EA0038287885/4</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>ANTINUCLEAR ANTIBODIES ANA</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200114031</ID>
+            <Start>01/02/2025 05:51</Start>
+            <Type>3</Type>
+            <Code>86039</Code>
+            <Quantity>1.0</Quantity>
+            <Net>218.02</Net>
+            <Clinician>DHA-P-0250490</Clinician>
+            <PriorAuthorizationID>EA0038287885/4</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>ANTINUCLEAR ANTIBODIES ANA TITER</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200114221</ID>
+            <Start>01/02/2025 05:51</Start>
+            <Type>3</Type>
+            <Code>86200</Code>
+            <Quantity>1.0</Quantity>
+            <Net>382.50</Net>
+            <Clinician>DHA-P-0250490</Clinician>
+            <PriorAuthorizationID>EA0038287885/4</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CYCLIC CITRULLINATED PEPTIDE CCPANTIBODY</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200114711</ID>
+            <Start>01/02/2025 05:51</Start>
+            <Type>3</Type>
+            <Code>86431</Code>
+            <Quantity>1.0</Quantity>
+            <Net>103.27</Net>
+            <Clinician>DHA-P-0250490</Clinician>
+            <PriorAuthorizationID>EA0038287885/4</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>RHEUMATOID FACTOR QUANTITATIVE</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589859</ID>
+        <MemberID>B949-D048-CFDA-802B</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1991-1591509-4</EmiratesIDNumber>
+        <Gross>907.62</Gross>
+        <PatientShare>0.00</PatientShare>
+        <Net>907.62</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0239931</PatientID>
+            <Start>01/02/2025 08:29</Start>
+            <End>01/02/2025 08:59</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>M23.8X1</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M25.461</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M25.561</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E10.8</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>200113031</ID>
+            <Start>01/02/2025 08:29</Start>
+            <Type>3</Type>
+            <Code>85025</Code>
+            <Quantity>1.0</Quantity>
+            <Net>92.64</Net>
+            <Clinician>DHA-P-0136343</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Blood count complete CBC automated Hgb Hct RBC WBC and platelet count and automated differential WBC count</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200110831</ID>
+            <Start>01/02/2025 08:29</Start>
+            <Type>3</Type>
+            <Code>83036</Code>
+            <Quantity>1.0</Quantity>
+            <Net>191.14</Net>
+            <Clinician>DHA-P-0136343</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>A1C</Code>
+                <Value>9</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Hemoglobin glycosylated A1C</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200110531</ID>
+            <Start>01/02/2025 08:29</Start>
+            <Type>3</Type>
+            <Code>82947</Code>
+            <Quantity>1.0</Quantity>
+            <Net>92.16</Net>
+            <Clinician>DHA-P-0136343</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>FBS</Code>
+                <Value>179</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Glucose quantitative blood except reagent strip</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>20016251</ID>
+            <Start>01/02/2025 08:29</Start>
+            <Type>3</Type>
+            <Code>80069</Code>
+            <Quantity>1.0</Quantity>
+            <Net>322.99</Net>
+            <Clinician>DHA-P-0136343</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Renal function panel This panel must include the following Albumin 82040 Calcium total 82310 Carbon dioxide bicarbonate 82374 Chloride 82435 Creatinine 82565 Glucose 82947 Phosphorus inorganic phosphate 84100 Potassium 84132 </Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>20016241</ID>
+            <Start>01/02/2025 08:29</Start>
+            <Type>3</Type>
+            <Code>80061</Code>
+            <Quantity>1.0</Quantity>
+            <Net>208.69</Net>
+            <Clinician>DHA-P-0136343</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>CHOL</Code>
+                <Value>215.20</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>TRIG</Code>
+                <Value>330.5</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>HDL</Code>
+                <Value>33.20</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>LDL</Code>
+                <Value>161.50</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>VLDL</Code>
+                <Value>66.00</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>CHR</Code>
+                <Value>5.30</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>NONHDL</Code>
+                <Value>162</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Lipid panel This panel must include the following Cholesterol serum total 82465 Lipoprotein direct measurement high density cholesterol HDL cholesterol 83718 Triglycerides 84478</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589860</ID>
+        <MemberID>A443-2350-ABF5-3541</MemberID>
+        <PayerID>INS022</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1996-7861385-4</EmiratesIDNumber>
+        <Gross>280.85</Gross>
+        <PatientShare>0.00</PatientShare>
+        <Net>280.85</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0222131</PatientID>
+            <Start>01/02/2025 08:55</Start>
+            <End>01/02/2025 09:25</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>R89.1</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>200113031</ID>
+            <Start>01/02/2025 08:55</Start>
+            <Type>3</Type>
+            <Code>85025</Code>
+            <Quantity>1.0</Quantity>
+            <Net>92.64</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <PriorAuthorizationID>EA0038299470/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Blood count complete CBC automated Hgb Hct RBC WBC and platelet count and automated differential WBC count</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200112431</ID>
+            <Start>01/02/2025 08:55</Start>
+            <Type>3</Type>
+            <Code>84403</Code>
+            <Quantity>1.0</Quantity>
+            <Net>188.21</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <PriorAuthorizationID>EA0038299470/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Testosterone total</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589874</ID>
+        <MemberID>I001-002-112519202-01</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1953-5906253-6</EmiratesIDNumber>
+        <Gross>350.00</Gross>
+        <PatientShare>35.00</PatientShare>
+        <Net>315.00</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00186849</PatientID>
+            <Start>01/02/2025 09:37</Start>
+            <End>01/02/2025 10:07</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>H11.31</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>H25.013</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300171</ID>
+            <Start>01/02/2025 09:37</Start>
+            <Type>8</Type>
+            <Code>11</Code>
+            <Quantity>1.0</Quantity>
+            <Net>315.00</Net>
+            <Clinician>DHA-P-55014905</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>149</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>66</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CONSULTATION CONSULTANT</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589882</ID>
+        <MemberID>I008-002-113315509-01</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1972-0570972-4</EmiratesIDNumber>
+        <Gross>273.06</Gross>
+        <PatientShare>0.00</PatientShare>
+        <Net>273.06</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00042940</PatientID>
+            <Start>01/02/2025 09:34</Start>
+            <End>01/02/2025 10:04</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>R89.1</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E23.3</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E88.81</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 09:34</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>273.06</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589891</ID>
+        <MemberID>I008-002-114123820-01</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1980-8472751-4</EmiratesIDNumber>
+        <Gross>1099.65</Gross>
+        <PatientShare>48.27</PatientShare>
+        <Net>1051.38</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00169359</PatientID>
+            <Start>01/02/2025 08:40</Start>
+            <End>01/02/2025 09:10</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>D50.9</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300191</ID>
+            <Start>01/02/2025 08:40</Start>
+            <Type>8</Type>
+            <Code>11.02</Code>
+            <Quantity>1.0</Quantity>
+            <Net>193.09</Net>
+            <Clinician>DHA-P-77106504</Clinician>
+            <PriorAuthorizationID>EA0038324125/2</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultant repeat visit for OP Consultation refers to week 2 3 4 from the date of initial consultation for same illness in OPD</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300162571</ID>
+            <Start>01/02/2025 08:40</Start>
+            <Type>3</Type>
+            <Code>96365</Code>
+            <Quantity>1.0</Quantity>
+            <Net>87.77</Net>
+            <Clinician>DHA-P-77106504</Clinician>
+            <PriorAuthorizationID>EA0038324125/2</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Intravenous infusion for therapy prophylaxis or diagnosis specify substance or drug initial up to 1 hour</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>3001271</ID>
+            <Start>01/02/2025 08:40</Start>
+            <Type>8</Type>
+            <Code>17.24</Code>
+            <Quantity>1.0</Quantity>
+            <Net>97.52</Net>
+            <Clinician>DHA-P-77106504</Clinician>
+            <PriorAuthorizationID>EA0038324125/2</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Short Stay  Hourly Rate</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>3001143121</ID>
+            <Start>01/02/2025 08:40</Start>
+            <Type>5</Type>
+            <Code>1838-538801-1021</Code>
+            <Quantity>1.0</Quantity>
+            <Net>673.00</Net>
+            <Clinician>DHA-P-77106504</Clinician>
+            <PriorAuthorizationID>EA0038324125/2</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>FERINJECT SOLUTION FOR INJECTION  10ML VIAL</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589897</ID>
+        <MemberID>I001-002-112447189-01</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1997-0276963-1</EmiratesIDNumber>
+        <Gross>80.75</Gross>
+        <PatientShare>8.08</PatientShare>
+        <Net>72.67</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0031825</PatientID>
+            <Start>01/02/2025 11:27</Start>
+            <End>01/02/2025 11:57</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>R92.8</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>20019951</ID>
+            <Start>01/02/2025 11:27</Start>
+            <Type>3</Type>
+            <Code>82565</Code>
+            <Quantity>1.0</Quantity>
+            <Net>72.67</Net>
+            <Clinician>DHA-P-0128573</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>CR</Code>
+                <Value>0.68</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CREATININE BLOOD</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589906</ID>
+        <MemberID>9988-D741-9EB7-6F30</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1988-0703240-8</EmiratesIDNumber>
+        <Gross>756.42</Gross>
+        <PatientShare>75.66</PatientShare>
+        <Net>680.76</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00173034</PatientID>
+            <Start>01/02/2025 10:09</Start>
+            <End>01/02/2025 10:39</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>J06.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>J02.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>J30.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R50.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M79.10</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R05</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>20019911</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>3</Type>
+            <Code>82550</Code>
+            <Quantity>1.0</Quantity>
+            <Net>72.67</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CREATINE KINASE CKCPK TOTAL</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200111161</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>3</Type>
+            <Code>83615</Code>
+            <Quantity>1.0</Quantity>
+            <Net>72.67</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>LACTATE DEHYDROGENASE LDLDH</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200116971</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>3</Type>
+            <Code>87276</Code>
+            <Quantity>1.0</Quantity>
+            <Net>75.65</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>INFECTIOUS AGENT ANTIGEN DETECTION BY IMMUNOFLUORESCENT TECHNIQUE INFLUENZA A VIRUS</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200116961</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>3</Type>
+            <Code>87275</Code>
+            <Quantity>1.0</Quantity>
+            <Net>75.65</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>INFECTIOUS AGENT ANTIGEN DETECTION BY IMMUNOFLUORESCENT TECHNIQUE INFLUENZA B VIRUS</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200113031</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>3</Type>
+            <Code>85025</Code>
+            <Quantity>1.0</Quantity>
+            <Net>91.80</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>BLOOD COUNT COMPLETE AUTOMATED HGB HCT RBC WBC AND PLATELET COUNT AND AUTOMATED DIFFERENTIAL WBC COUNT</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200114091</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>3</Type>
+            <Code>86140</Code>
+            <Quantity>1.0</Quantity>
+            <Net>91.80</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CREACTIVE PROTEIN CRP</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>3001175881</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>5</Type>
+            <Code>2190-106618-1001</Code>
+            <Quantity>1.0</Quantity>
+            <Net>3.78</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>PARAFUSIV IV 10MGML SOLUTION FOR INFUSION 100ML X 10  GLASS VIAL</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>3001175851</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>5</Type>
+            <Code>0102-152902-1001</Code>
+            <Quantity>1.0</Quantity>
+            <Net>4.50</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>LACTATED RINGERS INJECTION USP SOLUTION FOR INFUSION 500ML PLASTIC BOTTLE</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>3001141021</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>5</Type>
+            <Code>0027-149902-0511</Code>
+            <Quantity>1.0</Quantity>
+            <Net>9.54</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>VOLTAREN  INJECTION 5 X 3ML AMPOULE</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300162661</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>3</Type>
+            <Code>96374</Code>
+            <Quantity>1.0</Quantity>
+            <Net>34.20</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>THER PROPHDX NJX IV PUSH SINGLE1ST SBSTDRUG</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300162591</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>3</Type>
+            <Code>96367</Code>
+            <Quantity>1.0</Quantity>
+            <Net>40.50</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>IV INFUSION THER PROPH ADDL SEQUENTIAL TO 1 HR</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>3001271</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>8</Type>
+            <Code>17.24</Code>
+            <Quantity>2.0</Quantity>
+            <Net>108.00</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>121</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>90</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Short Stay  Hourly Rate</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300121</ID>
+            <Start>01/02/2025 10:09</Start>
+            <Type>8</Type>
+            <Code>9.01</Code>
+            <Quantity>1.0</Quantity>
+            <Net>0</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>121</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>90</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CONSULTATION GP FREE FOLLOW UP</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589907</ID>
+        <MemberID>I008-002-119767482-01</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1969-3525463-9</EmiratesIDNumber>
+        <Gross>273.06</Gross>
+        <PatientShare>54.61</PatientShare>
+        <Net>218.45</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00190714</PatientID>
+            <Start>01/02/2025 10:00</Start>
+            <End>01/02/2025 10:30</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>N40.3</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>N20.0</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>N23</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 10:00</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>218.45</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <PriorAuthorizationID>EA0038326360/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589910</ID>
+        <MemberID>I008-002-119822876-01</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-2010-8262147-1</EmiratesIDNumber>
+        <Gross>273.06</Gross>
+        <PatientShare>54.61</PatientShare>
+        <Net>218.45</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0204299</PatientID>
+            <Start>01/02/2025 10:07</Start>
+            <End>01/02/2025 10:37</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>N47.1</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 10:07</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>218.45</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <PriorAuthorizationID>EA0038326320/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589921</ID>
+        <MemberID>I008-002-119865689-01</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-2017-5887170-7</EmiratesIDNumber>
+        <Gross>321.82</Gross>
+        <PatientShare>32.18</PatientShare>
+        <Net>289.64</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0236944</PatientID>
+            <Start>01/02/2025 11:39</Start>
+            <End>01/02/2025 12:09</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>G43.C1</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>H53.8</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>H10.13</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300171</ID>
+            <Start>01/02/2025 11:39</Start>
+            <Type>8</Type>
+            <Code>11</Code>
+            <Quantity>1.0</Quantity>
+            <Net>289.64</Net>
+            <Clinician>DHA-P-55014905</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Consultant</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589929</ID>
+        <MemberID>I008-002-119760839-01</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1991-7071100-8</EmiratesIDNumber>
+        <Gross>1379.91</Gross>
+        <PatientShare>0.00</PatientShare>
+        <Net>1379.91</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0242766</PatientID>
+            <Start>01/02/2025 13:00</Start>
+            <End>01/02/2025 13:30</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>E03.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>N40.3</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>N50.819</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>200113031</ID>
+            <Start>01/02/2025 13:00</Start>
+            <Type>3</Type>
+            <Code>85025</Code>
+            <Quantity>1.0</Quantity>
+            <Net>92.64</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Blood count complete CBC automated Hgb Hct RBC WBC and platelet count and automated differential WBC count</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200112001</ID>
+            <Start>01/02/2025 13:00</Start>
+            <Type>3</Type>
+            <Code>84153</Code>
+            <Quantity>1.0</Quantity>
+            <Net>218.44</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Prostate specific antigen PSA total</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200112511</ID>
+            <Start>01/02/2025 13:00</Start>
+            <Type>3</Type>
+            <Code>84439</Code>
+            <Quantity>1.0</Quantity>
+            <Net>177.49</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Thyroxine free</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200112531</ID>
+            <Start>01/02/2025 13:00</Start>
+            <Type>3</Type>
+            <Code>84443</Code>
+            <Quantity>1.0</Quantity>
+            <Net>160.91</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Thyroid stimulating hormone TSH</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>20013811</ID>
+            <Start>01/02/2025 13:00</Start>
+            <Type>3</Type>
+            <Code>76870</Code>
+            <Quantity>1.0</Quantity>
+            <Net>457.37</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Ultrasound scrotum and contents</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 13:00</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>273.06</Net>
+            <Clinician>DHA-P-0008276</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589932</ID>
+        <MemberID>S026-002-116716200-01</MemberID>
+        <PayerID>SP0026</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1999-1410813-1</EmiratesIDNumber>
+        <Gross>268.37</Gross>
+        <PatientShare>43.69</PatientShare>
+        <Net>224.68</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0238710</PatientID>
+            <Start>01/02/2025 12:58</Start>
+            <End>01/02/2025 13:28</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>J20.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R05</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R06.00</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300111</ID>
+            <Start>01/02/2025 12:58</Start>
+            <Type>8</Type>
+            <Code>9</Code>
+            <Quantity>1.0</Quantity>
+            <Net>174.75</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>135</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>77</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation GP</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300160811</ID>
+            <Start>01/02/2025 12:58</Start>
+            <Type>3</Type>
+            <Code>94640</Code>
+            <Quantity>1.0</Quantity>
+            <Net>49.93</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Pressurized or nonpressurized inhalation treatment for acute airway obstruction for therapeutic purposes andor for diagnostic purposes such as sputum induction with an aerosol generator nebulizer metered dose inhaler or intermittent positive pressure b</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589937</ID>
+        <MemberID>E109-453E-7ED2-F8EE</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-2018-4604338-4</EmiratesIDNumber>
+        <Gross>451.52</Gross>
+        <PatientShare>50.00</PatientShare>
+        <Net>401.52</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0236352</PatientID>
+            <Start>01/02/2025 13:23</Start>
+            <End>01/02/2025 13:53</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>J22</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R05</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R06.2</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R09.81</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>2001651</ID>
+            <Start>01/02/2025 13:23</Start>
+            <Type>3</Type>
+            <Code>71045</Code>
+            <Quantity>1.0</Quantity>
+            <Net>129.70</Net>
+            <Clinician>DHA-P-0110254</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Radiologic examination chest single view</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300171</ID>
+            <Start>01/02/2025 13:23</Start>
+            <Type>8</Type>
+            <Code>11</Code>
+            <Quantity>1.0</Quantity>
+            <Net>271.82</Net>
+            <Clinician>DHA-P-0110254</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Consultant</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589945</ID>
+        <MemberID>I008-002-114963373-01</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1968-4054659-0</EmiratesIDNumber>
+        <Gross>218.44</Gross>
+        <PatientShare>21.84</PatientShare>
+        <Net>196.60</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00192930</PatientID>
+            <Start>01/02/2025 14:34</Start>
+            <End>01/02/2025 15:04</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>J45.31</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300111</ID>
+            <Start>01/02/2025 14:34</Start>
+            <Type>8</Type>
+            <Code>9</Code>
+            <Quantity>1.0</Quantity>
+            <Net>196.60</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>128</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>78</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation GP</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589946</ID>
+        <MemberID>I001-002-112969030-01</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1988-8607074-1</EmiratesIDNumber>
+        <Gross>48.20</Gross>
+        <PatientShare>4.82</PatientShare>
+        <Net>43.38</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00152870</PatientID>
+            <Start>01/02/2025 14:33</Start>
+            <End>01/02/2025 15:03</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>D51.9</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>3001137961</ID>
+            <Start>01/02/2025 14:33</Start>
+            <Type>5</Type>
+            <Code>0717-378503-1021</Code>
+            <Quantity>3.0</Quantity>
+            <Net>17.28</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>METHYCOBAL INJECTION 500MCG SOLUTION FOR INJECTION 10  X 1ML AMPOULE</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300121</ID>
+            <Start>01/02/2025 14:33</Start>
+            <Type>8</Type>
+            <Code>9.01</Code>
+            <Quantity>1.0</Quantity>
+            <Net>0</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>127</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>68</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CONSULTATION GP FREE FOLLOW UP</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300162641</ID>
+            <Start>01/02/2025 14:33</Start>
+            <Type>3</Type>
+            <Code>96372</Code>
+            <Quantity>1.0</Quantity>
+            <Net>26.10</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>THERAPEUTICPROPHYLACTICOR DIAGNOSTIC INJECTION SUBCUTANEOUS OR INTRAMUSCULAR</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589955</ID>
+        <MemberID>ECC5-C7B5-2511-EC23</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1997-4372469-4</EmiratesIDNumber>
+        <Gross>694.36</Gross>
+        <PatientShare>69.45</PatientShare>
+        <Net>624.91</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00160612</PatientID>
+            <Start>01/02/2025 15:16</Start>
+            <End>01/02/2025 15:46</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>R51.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M54.2</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>D50.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>D51.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E55.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E61.2</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E58</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E60</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E61.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R42</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R53.1</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>200110281</ID>
+            <Start>01/02/2025 15:16</Start>
+            <Type>3</Type>
+            <Code>82728</Code>
+            <Quantity>1.0</Quantity>
+            <Net>218.02</Net>
+            <Clinician>DHA-P-91021955</Clinician>
+            <PriorAuthorizationID>EA0038301636/6</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>FERRITIN</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200110311</ID>
+            <Start>01/02/2025 15:16</Start>
+            <Type>3</Type>
+            <Code>82746</Code>
+            <Quantity>1.0</Quantity>
+            <Net>93.25</Net>
+            <Clinician>DHA-P-91021955</Clinician>
+            <PriorAuthorizationID>EA0038301636/6</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>FOLIC ACID SERUM</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200111091</ID>
+            <Start>01/02/2025 15:16</Start>
+            <Type>3</Type>
+            <Code>83540</Code>
+            <Quantity>1.0</Quantity>
+            <Net>110.92</Net>
+            <Clinician>DHA-P-91021955</Clinician>
+            <PriorAuthorizationID>EA0038301636/6</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>IRON</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200111101</ID>
+            <Start>01/02/2025 15:16</Start>
+            <Type>3</Type>
+            <Code>83550</Code>
+            <Quantity>1.0</Quantity>
+            <Net>202.72</Net>
+            <Clinician>DHA-P-91021955</Clinician>
+            <PriorAuthorizationID>EA0038301636/6</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>IRON BINDING CAPACITY</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589958</ID>
+        <MemberID>I001-002-112994941-01</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1986-0282042-9</EmiratesIDNumber>
+        <Gross>533.61</Gross>
+        <PatientShare>53.36</PatientShare>
+        <Net>480.25</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00171478</PatientID>
+            <Start>01/02/2025 16:01</Start>
+            <End>01/02/2025 16:31</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>S86.001A</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>S93.411A</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300119671</ID>
+            <Start>01/02/2025 16:01</Start>
+            <Type>3</Type>
+            <Code>29425</Code>
+            <Quantity>1.0</Quantity>
+            <Net>480.25</Net>
+            <Clinician>DHA-P-0027060</Clinician>
+            <PriorAuthorizationID>EA0038334720/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>APPLICATION OF SHORT LEG CAST BELOW KNEE TO TOES WALKING OR AMBULATORY TYPE</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589944</ID>
+        <MemberID>I008-002-119475441-01</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1979-0739739-8</EmiratesIDNumber>
+        <Gross>486.82</Gross>
+        <PatientShare>0.00</PatientShare>
+        <Net>486.82</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00170275</PatientID>
+            <Start>01/02/2025 13:56</Start>
+            <End>01/02/2025 14:26</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>M67.941</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M25.541</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>S63.612A</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R60.0</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>20011541</ID>
+            <Start>01/02/2025 13:56</Start>
+            <Type>3</Type>
+            <Code>73130</Code>
+            <Quantity>1.0</Quantity>
+            <Net>106.10</Net>
+            <Clinician>DHA-P-0027060</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Radiologic examination hand minimum of 3 views</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>20011551</ID>
+            <Start>01/02/2025 13:56</Start>
+            <Type>3</Type>
+            <Code>73140</Code>
+            <Quantity>1.0</Quantity>
+            <Net>107.66</Net>
+            <Clinician>DHA-P-0027060</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Radiologic examination fingers minimum of 2 views</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 13:56</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>273.06</Net>
+            <Clinician>DHA-P-0027060</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>108</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>72</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589979</ID>
+        <MemberID>I001-002-114597964-01</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1998-9095754-3</EmiratesIDNumber>
+        <Gross>302.00</Gross>
+        <PatientShare>30.20</PatientShare>
+        <Net>271.80</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0197705</PatientID>
+            <Start>01/02/2025 16:04</Start>
+            <End>01/02/2025 16:34</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>S83.501A</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>S83.411A</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M25.561</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300163251</ID>
+            <Start>01/02/2025 16:04</Start>
+            <Type>3</Type>
+            <Code>97110</Code>
+            <Quantity>1.0</Quantity>
+            <Net>108.00</Net>
+            <Clinician>DHA-P-39280894</Clinician>
+            <PriorAuthorizationID>EA0038069927/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>THERAPEUTIC PX 1 AREAS EACH 15 MIN EXERCISES</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300163311</ID>
+            <Start>01/02/2025 16:04</Start>
+            <Type>3</Type>
+            <Code>97140</Code>
+            <Quantity>1.0</Quantity>
+            <Net>126.00</Net>
+            <Clinician>DHA-P-39280894</Clinician>
+            <PriorAuthorizationID>EA0038069927/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>MANUAL THERAPY TQS 1 REGIONS EACH 15 MINUTES</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300163111</ID>
+            <Start>01/02/2025 16:04</Start>
+            <Type>3</Type>
+            <Code>97010</Code>
+            <Quantity>1.0</Quantity>
+            <Net>37.80</Net>
+            <Clinician>DHA-P-39280894</Clinician>
+            <PriorAuthorizationID>EA0038069927/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>APPLICATION OF A MODALITY TO 1 OR MORE AREAS HOT OR COLD PACKS</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021589982</ID>
+        <MemberID>46B8-590D-E767-DE94</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1981-0365039-0</EmiratesIDNumber>
+        <Gross>682.64</Gross>
+        <PatientShare>25.00</PatientShare>
+        <Net>657.64</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLF0028430</PatientID>
+            <Start>01/02/2025 15:11</Start>
+            <End>01/02/2025 15:41</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>D25.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R10.30</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>N83.202</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>Z98.890</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>20013791</ID>
+            <Start>01/02/2025 15:11</Start>
+            <Type>3</Type>
+            <Code>76856</Code>
+            <Quantity>1.0</Quantity>
+            <Net>409.58</Net>
+            <Clinician>DHA-P-0065329</Clinician>
+            <PriorAuthorizationID>C0023246429/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Ultrasound pelvic nonobstetric real time with image documentation complete</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 15:11</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>248.06</Net>
+            <Clinician>DHA-P-0065329</Clinician>
+            <PriorAuthorizationID>C0023246429/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>190</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>105</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590000</ID>
+        <MemberID>I008-002-114926034-05</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-2011-6465369-9</EmiratesIDNumber>
+        <Gross>379.35</Gross>
+        <PatientShare>43.69</PatientShare>
+        <Net>335.66</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00019742</PatientID>
+            <Start>01/02/2025 10:23</Start>
+            <End>01/02/2025 10:53</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>S93.402A</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>20011831</ID>
+            <Start>01/02/2025 10:23</Start>
+            <Type>3</Type>
+            <Code>73600</Code>
+            <Quantity>1.0</Quantity>
+            <Net>160.91</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <PriorAuthorizationID>EA0038328344/2</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Radiologic examination ankle 2 views</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300111</ID>
+            <Start>01/02/2025 10:23</Start>
+            <Type>8</Type>
+            <Code>9</Code>
+            <Quantity>1.0</Quantity>
+            <Net>174.75</Net>
+            <Clinician>DHA-P-0094427</Clinician>
+            <PriorAuthorizationID>EA0038328344/2</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation GP</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590011</ID>
+        <MemberID>02D7-6F45-4B3F-6FC5</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1986-1683751-8</EmiratesIDNumber>
+        <Gross>888.40</Gross>
+        <PatientShare>111.54</PatientShare>
+        <Net>776.86</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>10</Type>
+            <PatientID>DL00163419</PatientID>
+            <Start>01/02/2025 13:26</Start>
+            <End>01/02/2025 13:56</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>Z01.818</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>200113031</ID>
+            <Start>01/02/2025 13:26</Start>
+            <Type>3</Type>
+            <Code>85025</Code>
+            <Quantity>1.0</Quantity>
+            <Net>83.38</Net>
+            <Clinician>DHA-P-0050179</Clinician>
+            <PriorAuthorizationID>EA0038334923/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Blood count complete CBC automated Hgb Hct RBC WBC and platelet count and automated differential WBC count</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200110541</ID>
+            <Start>01/02/2025 13:26</Start>
+            <Type>3</Type>
+            <Code>82948</Code>
+            <Quantity>1.0</Quantity>
+            <Net>64.94</Net>
+            <Clinician>DHA-P-0050179</Clinician>
+            <PriorAuthorizationID>EA0038334923/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Glucose blood reagent strip</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200113801</ID>
+            <Start>01/02/2025 13:26</Start>
+            <Type>3</Type>
+            <Code>85610</Code>
+            <Quantity>1.0</Quantity>
+            <Net>104.44</Net>
+            <Clinician>DHA-P-0050179</Clinician>
+            <PriorAuthorizationID>EA0038334923/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Prothrombin time</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200113911</ID>
+            <Start>01/02/2025 13:26</Start>
+            <Type>3</Type>
+            <Code>85730</Code>
+            <Quantity>1.0</Quantity>
+            <Net>129.01</Net>
+            <Clinician>DHA-P-0050179</Clinician>
+            <PriorAuthorizationID>EA0038334923/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Thromboplastin time partial PTT plasma or whole blood</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200112911</ID>
+            <Start>01/02/2025 13:26</Start>
+            <Type>3</Type>
+            <Code>84702</Code>
+            <Quantity>1.0</Quantity>
+            <Net>172.03</Net>
+            <Clinician>DHA-P-0050179</Clinician>
+            <PriorAuthorizationID>EA0038334923/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Gonadotropin chorionic hCG quantitative</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 13:26</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>223.06</Net>
+            <Clinician>DHA-P-0050179</Clinician>
+            <PriorAuthorizationID>EA0038334923/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>98</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>68</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590012</ID>
+        <MemberID>I001-002-112994941-01</MemberID>
+        <PayerID>INS001</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1986-0282042-9</EmiratesIDNumber>
+        <Gross>510.00</Gross>
+        <PatientShare>51.00</PatientShare>
+        <Net>459.00</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00171478</PatientID>
+            <Start>01/02/2025 13:31</Start>
+            <End>01/02/2025 14:01</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>S86.001A</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>S93.411A</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>20011831</ID>
+            <Start>01/02/2025 13:31</Start>
+            <Type>3</Type>
+            <Code>73600</Code>
+            <Quantity>1.0</Quantity>
+            <Net>189.00</Net>
+            <Clinician>DHA-P-0027060</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>RADIOLOGIC EXAMINATIONANKLE 2 VIEWS</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 13:31</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>270.00</Net>
+            <Clinician>DHA-P-0027060</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>118</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>76</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CONSULTATION SPECIALIST</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590016</ID>
+        <MemberID>I022-002-119275960-01</MemberID>
+        <PayerID>INS022</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1976-1826117-2</EmiratesIDNumber>
+        <Gross>273.06</Gross>
+        <PatientShare>0.00</PatientShare>
+        <Net>273.06</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0242771</PatientID>
+            <Start>01/02/2025 14:26</Start>
+            <End>01/02/2025 14:56</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>M54.5</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M19.91</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M51.86</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M79.2</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E55.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M83.9</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 14:26</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>273.06</Net>
+            <Clinician>DHA-P-0027060</Clinician>
+            <PriorAuthorizationID>EA0038335178/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590021</ID>
+        <MemberID>I008-002-116706872-01</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1991-7043225-8</EmiratesIDNumber>
+        <Gross>273.06</Gross>
+        <PatientShare>0.00</PatientShare>
+        <Net>273.06</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0242784</PatientID>
+            <Start>01/02/2025 17:45</Start>
+            <End>01/02/2025 18:15</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>M54.17</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>G62.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M54.5</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M62.830</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 17:45</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>273.06</Net>
+            <Clinician>DHA-P-0136343</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>122</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>73</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590033</ID>
+        <MemberID>S015-002-113610667-01</MemberID>
+        <PayerID>SP0015</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1981-8742949-7</EmiratesIDNumber>
+        <Gross>433.97</Gross>
+        <PatientShare>50.00</PatientShare>
+        <Net>383.97</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0220561</PatientID>
+            <Start>01/02/2025 17:58</Start>
+            <End>01/02/2025 18:28</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>M25.571</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M13.0</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M06.4</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M10.00</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M24.271</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M12.271</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>M65.171</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>20011831</ID>
+            <Start>01/02/2025 17:58</Start>
+            <Type>3</Type>
+            <Code>73600</Code>
+            <Quantity>1.0</Quantity>
+            <Net>142.37</Net>
+            <Clinician>DHA-P-0136343</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Radiologic examination ankle 2 views</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 17:58</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>241.60</Net>
+            <Clinician>DHA-P-0136343</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>128</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>83</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590044</ID>
+        <MemberID>S015-002-120138555-01</MemberID>
+        <PayerID>SP0015</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-2016-8999417-2</EmiratesIDNumber>
+        <Gross>599.35</Gross>
+        <PatientShare>70.00</PatientShare>
+        <Net>529.35</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLJ0233310</PatientID>
+            <Start>01/02/2025 18:34</Start>
+            <End>01/02/2025 19:04</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>R50.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>J11.1</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>J02.9</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>J03.90</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R06.2</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>E55.9</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>200116971</ID>
+            <Start>01/02/2025 18:34</Start>
+            <Type>3</Type>
+            <Code>87276</Code>
+            <Quantity>1.0</Quantity>
+            <Net>53.67</Net>
+            <Clinician>DHA-P-0240739</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Infectious agent antigen detection by immunofluorescent technique influenza A virus</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200116961</ID>
+            <Start>01/02/2025 18:34</Start>
+            <Type>3</Type>
+            <Code>87275</Code>
+            <Quantity>1.0</Quantity>
+            <Net>65.12</Net>
+            <Clinician>DHA-P-0240739</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Infectious agent antigen detection by immunofluorescent technique influenza B virus</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200118341</ID>
+            <Start>01/02/2025 18:34</Start>
+            <Type>3</Type>
+            <Code>87880</Code>
+            <Quantity>1.0</Quantity>
+            <Net>72.16</Net>
+            <Clinician>DHA-P-0240739</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Infectious agent antigen detection by immunoassay with direct optical observation Streptococcus group A</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>200122811</ID>
+            <Start>01/02/2025 18:34</Start>
+            <Type>3</Type>
+            <Code>87070</Code>
+            <Quantity>1.0</Quantity>
+            <Net>119.95</Net>
+            <Clinician>DHA-P-0240739</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>CULTURE AND SENSITIVITY  THROAT SWAB</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 18:34</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>218.45</Net>
+            <Clinician>DHA-P-0240739</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590046</ID>
+        <MemberID>I139-002-116407230-01</MemberID>
+        <PayerID>INS139</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1978-7926802-3</EmiratesIDNumber>
+        <Gross>218.44</Gross>
+        <PatientShare>43.69</PatientShare>
+        <Net>174.75</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DL00036512</PatientID>
+            <Start>01/02/2025 18:49</Start>
+            <End>01/02/2025 19:19</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>L40.53</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>F06.31</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>L20.9</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300111</ID>
+            <Start>01/02/2025 18:49</Start>
+            <Type>8</Type>
+            <Code>9</Code>
+            <Quantity>1.0</Quantity>
+            <Net>174.75</Net>
+            <Clinician>DHA-P-10521721</Clinician>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPS</Code>
+                <Value>121</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Result</Type>
+                <Code>BPD</Code>
+                <Value>84</Value>
+                <ValueType>01/02/2025</ValueType>
+            </Observation>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation GP</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590040</ID>
+        <MemberID>0554-1501-D548-ABBF</MemberID>
+        <PayerID>INS008</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1996-1952190-1</EmiratesIDNumber>
+        <Gross>273.06</Gross>
+        <PatientShare>27.31</PatientShare>
+        <Net>245.75</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLF0003851</PatientID>
+            <Start>01/02/2025 19:38</Start>
+            <End>01/02/2025 20:08</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>O22.43</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>Z3A.30</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>O26.93</Code>
+        </Diagnosis>
+        <Diagnosis>
+            <Type>Secondary</Type>
+            <Code>R25.2</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300141</ID>
+            <Start>01/02/2025 19:38</Start>
+            <Type>8</Type>
+            <Code>10</Code>
+            <Quantity>1.0</Quantity>
+            <Net>245.75</Net>
+            <Clinician>DHA-P-0128573</Clinician>
+            <PriorAuthorizationID>EA0038345131/1</PriorAuthorizationID>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Consultation Specialist</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+
+    <Claim>
+        <ID>DLJOI1021590049</ID>
+        <MemberID>2E5F-AFCB-8C74-2393</MemberID>
+        <PayerID>SP0015</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1977-5639542-8</EmiratesIDNumber>
+        <Gross>56.71</Gross>
+        <PatientShare>6.24</PatientShare>
+        <Net>50.47</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>DLH0009194</PatientID>
+            <Start>01/02/2025 19:10</Start>
+            <End>01/02/2025 19:40</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Diagnosis>
+            <Type>Principal</Type>
+            <Code>E55.9</Code>
+        </Diagnosis>
+        <Activity>
+            <ID>300162641</ID>
+            <Start>01/02/2025 19:10</Start>
+            <Type>3</Type>
+            <Code>96372</Code>
+            <Quantity>1.0</Quantity>
+            <Net>24.97</Net>
+            <Clinician>DHA-P-0194013</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>Therapeutic prophylactic or diagnostic injection specify substance or drug subcutaneous or intramuscular</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+        <Activity>
+            <ID>3001148531</ID>
+            <Start>01/02/2025 19:10</Start>
+            <Type>5</Type>
+            <Code>3735-640409-1021</Code>
+            <Quantity>1.0</Quantity>
+            <Net>25.50</Net>
+            <Clinician>DHA-P-0194013</Clinician>
+            <Observation>
+                <Type>Text</Type>
+                <Code>Description</Code>
+                <Value>DIBASE 300000 IUML SOLUTION FOR INJECTION 1ML X 2 GLASS AMPOULE</Value>
+                <ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+</Claim.Submission>

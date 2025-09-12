@@ -1,0 +1,109 @@
+spring:
+  profiles: prod
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/claims}          # e.g. jdbc:postgresql://db:5432/claims
+    username: ${DB_USER:claims_user}
+    password: ${DB_PASSWORD:securepass}
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 8
+      auto-commit: false
+      connection-timeout: 15000
+      validation-timeout: 5000
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate.jdbc.batch_size: 200
+      hibernate.order_inserts: true
+      hibernate.order_updates: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  main:
+    allow-bean-definition-overriding: false
+  cache:
+    type: caffeine
+  caffeine:
+    spec: maximumSize=20000,expireAfterAccess=30m,recordStats
+
+logging:
+  pattern:
+    console: "%d{ISO8601} %-5level [%thread] %logger{36} - %msg%n"
+  level:
+    com.acme.claims: INFO
+    org.springframework.jdbc.core.JdbcTemplate: WARN
+    org.springframework.ws.client: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,info,metrics,prometheus,threaddump,env,loggers"
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+# ================== CLAIMS APP ==================
+claims:
+  ingestion:
+    # SOAP profile in prod – IngestionConfig ensures only a single fetcher/acker is active
+    profile: soap
+
+    scheduler:
+      fixedDelayString: "PT2M"            # poll every 2 minutes
+      initialDelayString: "PT0S"
+
+    # SOAP fetcher / acker config
+    soap:
+      endpoint: ${DHPO_SOAP_ENDPOINT}     # e.g. https://dhpo.example/soap
+      username: ${DHPO_SOAP_USER}
+      password: ${DHPO_SOAP_PASSWORD}
+      connect-timeout-ms: 5000
+      read-timeout-ms: 15000
+      # optional TLS trust/key settings can be added here
+
+    ack:
+      enabled: true                       # best-effort after success (per requirements)
+
+    executor:
+      core-pool-size: 6
+      max-pool-size: 12
+      queue-capacity: 1000
+
+  parser:
+    allowNonSchemaAttachments: false
+    maxAttachmentBytes: 10485760
+    failOnXsdError: true                  # stricter in prod
+
+  # ===== Refdata & Bootstrap =====
+  refdata:
+    # Start with true to auto-seed on first sightings; flip to false once dictionaries are governed
+    auto-insert: true
+  bootstrap:
+    enabled: false                        # prod CSV Bootstrap is typically OFF; run migrations instead
+    csv-path: "classpath:refdata/"
+
+# Optional: enable a real cache for ref lookups in prod (Caffeine)
+claims.security.ame:
+  enabled: true
+  keystore:
+    type: "JKS"                    # or "PKCS12" or "FILE"
+    path: "file:config/claims.jks" # or "file:config/claims.p12" or "file:config/ame.key"
+    alias: "claims-ame"
+    passwordEnv: "CLAIMS_AME_STORE_PASS"   # only store/pass are env-based
+  crypto:
+    kekRotationAllowed: true
+    gcmTagBits: 128
+    keyId : claims-ame.v1 #  used in enc_meta to mark which key encrypted the row

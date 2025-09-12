@@ -1,0 +1,54 @@
+# src/main/resources/application.yml (excerpt)
+spring:
+  profiles:
+    active: soap
+  task:
+    execution:
+      pool:
+        core-size: 8
+        max-size: 16
+
+claims:
+  soap:
+    endpoint: "https://qa.eclaimlink.ae/dhpo/ValidateTransactions.asmx"
+    # SOAP 1.1 default (SOAPAction is set). Keep switch if you ever need 1.2 later.
+    soap12: false
+    connectTimeoutMs: 15000
+    readTimeoutMs: 120000   # longer reads for Download
+    retry:
+      maxAttempts: 3        # 1 retry total
+      backoffMs: 500
+    poll:
+      fixedDelayMs: 4000    # 4s between delta polls per facility
+  fetch:
+    stageToDisk:
+      force: false          # global override
+      sizeThresholdBytes: 26214400  # 25 MB → disk
+      latencyThresholdMs: 8000      # >8s download → disk
+      readyDir: "data/ready"
+
+# env defaults (may be overridden by DB per facility)
+DHPO_DEFAULT_LOGIN: "env-user"
+DHPO_DEFAULT_PWD: "env-pass"
+
+dhpo:
+  client:
+    getNewEnabled: false
+    searchDaysBack: 100
+    retriesOnMinus4: 3
+    connectTimeoutMs: 6000
+    readTimeoutMs: 15000
+    downloadTimeoutMs: 120000
+    stageToDiskThresholdMb: 25
+
+claims.security.ame:
+  enabled: true
+  keystore:
+    type: "JKS"                    # or "PKCS12" or "FILE"
+    path: "file:config/claims.jks" # or "file:config/claims.p12" or "file:config/ame.key"
+    alias: "claims-ame"
+    passwordEnv: "CLAIMS_AME_STORE_PASS"   # only store/pass are env-based
+  crypto:
+    kekRotationAllowed: true
+    gcmTagBits: 128
+    keyId : claims-ame.v1 #  used in enc_meta to mark which key encrypted the row

@@ -1,0 +1,22 @@
+<Claim.Submission xsi:noNamespaceSchemaLocation="ClaimSubmission.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <Header>
+        <SenderID>FAC-001</SenderID><ReceiverID>TPA-XYZ</ReceiverID>
+        <TransactionDate>14/02/2025 15:25</TransactionDate><RecordCount>1</RecordCount><DispositionFlag>PRODUCTION</DispositionFlag>
+    </Header>
+    <Claim>
+        <ID>CLM-RS-OK</ID>
+        <PayerID>PAYER1</PayerID><ProviderID>FAC-001</ProviderID>
+        <EmiratesIDNumber>784-1979-5658724-6</EmiratesIDNumber>
+        <Gross>150.00</Gross><PatientShare>0.00</PatientShare><Net>150.00</Net>
+        <Diagnosis><Type>Principal</Type><Code>E78.5</Code></Diagnosis>
+        <Activity>
+            <ID>A-RS-1</ID><Start>14/02/2025 15:25</Start><Type>3</Type><Code>84443</Code>
+            <Quantity>1.0</Quantity><Net>150.00</Net><Clinician>DHA-P-0001</Clinician>
+        </Activity>
+        <Resubmission>
+            <Type>REPRICE</Type>
+            <Comment>Missed doc</Comment>
+            <Attachment>SGVsbG8gUmVzdWJtaXNzaW9uICE=</Attachment> <!-- "Hello Resubmission !" -->
+        </Resubmission>
+    </Claim>
+</Claim.Submission>

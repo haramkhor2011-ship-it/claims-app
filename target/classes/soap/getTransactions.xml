@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+               xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+    <soap:Body>
+        <SearchTransactions xmlns="http://www.eClaimLink.ae/">
+            <login>${login}</login>
+            <pwd>${password}</pwd>
+            <direction>${direction}</direction>
+            <callerLicense>${callerLicense}</callerLicense>
+            <ePartner>${ePartner}</ePartner>
+            <transactionID>${transactionId}</transactionID>
+            <TransactionStatus>${transactionStatus}</TransactionStatus>
+            <transactionFileName>${transactionFileName}</transactionFileName>
+            <transactionFromDate>${transactionFromDate}</transactionFromDate>
+            <transactionToDate>${transactionToDate}</transactionToDate>
+            <minRecordCount>1</minRecordCount>
+            <maxRecordCount>5</maxRecordCount>
+        </SearchTransactions>
+    </soap:Body>
+</soap:Envelope>

@@ -1,0 +1,20 @@
+<Remittance.Advice xsi:noNamespaceSchemaLocation="RemittanceAdvice.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <Header>
+        <SenderID>TPA-XYZ</SenderID><ReceiverID>FAC-001</ReceiverID>
+        <TransactionDate>24/02/2025 22:41</TransactionDate>
+        <RecordCount>1</RecordCount><DispositionFlag>PRODUCTION</DispositionFlag>
+    </Header>
+    <Claim>
+        <ID>R-OK-1</ID>
+        <IDPayer>PAY-1</IDPayer>
+        <ProviderID>FAC-001</ProviderID>
+        <PaymentReference>PR-001</PaymentReference>
+        <DateSettlement>21/02/2025 00:00</DateSettlement>
+        <Encounter><FacilityID>FAC-001</FacilityID></Encounter>
+        <Activity>
+            <ID>RA1</ID><Start>21/02/2025 00:00</Start><Type>3</Type><Code>85025</Code>
+            <Quantity>1</Quantity><Net>111.72</Net><Clinician>DHA-P-0001</Clinician>
+            <PaymentAmount>111.72</PaymentAmount>
+        </Activity>
+    </Claim>
+</Remittance.Advice>

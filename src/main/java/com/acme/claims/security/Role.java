@@ -1,0 +1,1 @@
+package com.acme.claims.security; public enum Role { ADMIN, STAFF, REVIEWER }

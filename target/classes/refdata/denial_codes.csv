@@ -1,0 +1,3 @@
+code,description,payer_code
+D001,Duplicate claim,INS025
+D002,Policy inactive,INS018

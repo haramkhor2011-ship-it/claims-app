@@ -1,0 +1,18 @@
+<Claim.Submission xsi:noNamespaceSchemaLocation="ClaimSubmission.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <Header>
+        <SenderID>FAC-001</SenderID><ReceiverID>TPA-XYZ</ReceiverID>
+        <TransactionDate>14/02/2025 15:25</TransactionDate><RecordCount>1</RecordCount><DispositionFlag>PRODUCTION</DispositionFlag>
+    </Header>
+    <Claim>
+        <ID>CLM-RS-EMPTY</ID>
+        <PayerID>PAYER1</PayerID><ProviderID>FAC-001</ProviderID>
+        <EmiratesIDNumber>784-1979-5658724-6</EmiratesIDNumber>
+        <Gross>135.00</Gross><PatientShare>0.00</PatientShare><Net>135.00</Net>
+        <Diagnosis><Type>Principal</Type><Code>I10</Code></Diagnosis>
+        <Activity>
+            <ID>A-RS-0</ID><Start>14/02/2025 15:25</Start><Type>3</Type><Code>86141</Code>
+            <Quantity>1.0</Quantity><Net>135.00</Net><Clinician>DHA-P-0001</Clinician>
+        </Activity>
+        <Resubmission></Resubmission> <!-- entirely empty: parser treats as absent -->
+    </Claim>
+</Claim.Submission>

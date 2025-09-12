@@ -1,0 +1,14 @@
+<Claim.Submission xsi:noNamespaceSchemaLocation="ClaimSubmission.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <Header>
+        <SenderID>FAC-001</SenderID><ReceiverID>TPA-XYZ</ReceiverID>
+        <TransactionDate>14/02/2025 15:25</TransactionDate><RecordCount>1</RecordCount><DispositionFlag>PRODUCTION</DispositionFlag>
+    </Header>
+    <Claim>
+        <ID>CLM-NO-ACT</ID>
+        <PayerID>PAYER1</PayerID><ProviderID>FAC-001</ProviderID>
+        <EmiratesIDNumber>784-1979-5658724-6</EmiratesIDNumber>
+        <Gross>100.00</Gross><PatientShare>0.00</PatientShare><Net>100.00</Net>
+        <Diagnosis><Type>Principal</Type><Code>R07.9</Code></Diagnosis>
+        <!-- No Activity -->
+    </Claim>
+</Claim.Submission>
