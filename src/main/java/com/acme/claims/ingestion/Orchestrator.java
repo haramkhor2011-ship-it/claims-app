@@ -1,7 +1,23 @@
-/*
- * SSOT NOTICE — Orchestrator
- * Flow: Fetcher → Queue → Executor → Pipeline → VerifyService → (optional ACK)
- * Fix: IngestionProperties is now a single bean (no @Component on the properties class).
+/**
+ * Orchestrator
+ *
+ * Runtime:
+ * - onReady(): starts the active Fetcher which produces WorkItem tokens.
+ * - Scheduled drain(): dispatches a small burst of WorkItems to the executor.
+ * - processOne(): runs Pipeline → Verify → optionally ACK.
+ *
+ * Backpressure:
+ * - queue.offer() failure pauses fetcher; drain() resumes when capacity is available.
+ *
+ * Concurrency:
+ * - Burst size bounded by parserWorkers; executor controls actual parallelism.
+ *
+ * Reliability:
+ * - RejectedExecution re-queues the item and pauses fetcher.
+ * - ACK true only after verification.
+ *
+ * Observability:
+ * - MDC(fileId) surrounds processing; per-file duration logged with slow-path detection.
  */
 package com.acme.claims.ingestion;
 
@@ -62,35 +78,56 @@ public class Orchestrator {
     private void enqueue(WorkItem wi) {
         if (!queue.offer(wi)) {
             log.debug("Queue full (size={}); pausing fetcher", queue.size());
-            fetcher.pause();
+            try { fetcher.pause(); } catch (Exception ignore) {}
         }
     }
 
     @Scheduled(initialDelayString = "0", fixedDelayString = "${claims.ingestion.poll.fixedDelayMs}")
     public void drain() {
         log.debug("Drain cycle start; queued={}", queue.size());
-        int burst = Math.max(1, props.getConcurrency().getParserWorkers());
+        int workers = Math.max(1, props.getConcurrency().getParserWorkers());
+        int capacityHint = Math.max(1, queue.size());
+        int burst = Math.min(workers, capacityHint);
         int submitted = 0;
-        while (submitted < burst) {
+        long deadlineNanos = System.nanoTime() + 2_000_000L; // ~2ms budget
+
+        while (submitted < burst && System.nanoTime() < deadlineNanos) {
             WorkItem wi = queue.poll();
             if (wi == null) break;
-            submitted++;
-            executor.execute(() -> processOne(wi));
+            try {
+                executor.execute(() -> processOne(wi));
+                submitted++;
+            } catch (java.util.concurrent.RejectedExecutionException rex) {
+                boolean requeued = queue.offer(wi);
+                log.warn("Executor saturated; requeued={}, queueSize={}", requeued, queue.size());
+                try { fetcher.pause(); } catch (Exception ignore) {}
+                break;
+            }
         }
-        if (queue.remainingCapacity() > 0) fetcher.resume();
+
+        if (queue.remainingCapacity() > (workers * 2)) {
+            try { fetcher.resume(); } catch (Exception ignore) {}
+        }
         log.debug("Drain cycle end; dispatched={}", submitted);
     }
 
     private void processOne(WorkItem wi) {
         boolean success = false;
-        try {
+        long t0 = System.nanoTime();
+        try (org.slf4j.MDC.MDCCloseable ignored = org.slf4j.MDC.putCloseable("fileId", wi.fileId())) {
             var result = pipeline.process(wi);
             boolean verified = verifyService.verifyFile(result.ingestionFileId(), wi.fileId());
             success = verified;
-            log.info("INGEST OK fileId={} rootType={} parsed[claims={},acts={}] persisted[claims={},acts={}] verified={}",
-                    wi.fileId(), result.rootType(), result.parsedClaims(), result.parsedActivities(),
-                    result.persistedClaims(), result.persistedActivities(), verified);
-
+            long ms = (System.nanoTime() - t0) / 1_000_000;
+            if (ms > 2000) {
+                log.info("INGEST SLOW fileId={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={}",
+                        wi.fileId(), ms, result.rootType(), result.parsedClaims(), result.parsedActivities(),
+                        result.persistedClaims(), result.persistedActivities(), verified);
+            } else {
+                log.info("INGEST OK fileId={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={}",
+                        wi.fileId(), ms, result.rootType(), result.parsedClaims(), result.parsedActivities(),
+                        result.persistedClaims(), result.persistedActivities(), verified);
+            }
         } catch (Exception ex) {
             log.error("INGEST FAIL fileId={} source={} : {}", wi.fileId(), wi.source(), ex.getMessage(), ex);
             success = false;
