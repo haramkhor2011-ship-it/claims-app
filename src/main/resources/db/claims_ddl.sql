@@ -611,6 +611,10 @@ from claims.ingestion_file_audit ifa
 group by 1
 order by 1 desc;
 
+-- View description: Hourly rollup of ingestion KPIs derived from ingestion_file_audit.
+-- Metrics include parsed/persisted counts for submissions and remittances and verification pass counts.
+comment on view claims.v_ingestion_kpis is 'Hourly rollup of ingestion KPIs; source: claims.ingestion_file_audit';
+
 -- ============================================================
 -- 13) Grants
 -- ============================================================

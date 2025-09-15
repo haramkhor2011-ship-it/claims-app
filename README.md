@@ -198,6 +198,13 @@ Fetcher → Queue → Parser → Batcher → Persist → Verify → ACK
 * `SoapFetcher` (profile: soap) → fetches XMLs from SOAP endpoints.
 * Only **one fetcher** is active at a time.
 
+Runtime optimizations (soap):
+
+- Facility polling uses structured concurrency with virtual threads for parallelism.
+- Per-facility download concurrency is bounded via a semaphore sized by `claims.soap.downloadConcurrency`.
+- Reentrancy guards prevent overlapping scheduler runs.
+- Facility credentials are decrypted once per batch and reused for all downloads.
+
 **Queue & Backpressure:**
 
 * A bounded queue holds `file_id` tokens.
@@ -219,6 +226,7 @@ Fetcher → Queue → Parser → Batcher → Persist → Verify → ACK
 * Applies batches via JPA/JDBC.
 * Idempotency enforced by DB unique indexes.
 * Conflicts are ignored (safe replays).
+* Early short-circuit in the pipeline skips validation/mapping/persist when a file is already projected.
 
 **Verify:**
 
