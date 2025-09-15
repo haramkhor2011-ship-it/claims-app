@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 
 # --- Configure allowed extensions & root-level files ---
-$includeExts  = @('.java','.xml','.xsd','.json','.yml','.yaml','.properties','.sql','.md','.txt')
+$includeExts  = @('.java','.xsd','.json','.yml','.yaml','.properties','.sql','.md')
 $includeNames = @('pom.xml') # add more like 'Dockerfile','.editorconfig' if you want
 
 # --- Anchor to script folder ---

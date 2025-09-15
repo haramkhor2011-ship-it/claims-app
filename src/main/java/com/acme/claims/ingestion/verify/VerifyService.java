@@ -28,14 +28,14 @@ public class VerifyService {
     }
 
     /** Run post-file verification; keep it quick and side-effect free. */
-    public boolean verifyFile(long ingestionFileId) {
+    public boolean verifyFile(long ingestionFileId, String xmlFileId) {
         try {
             // 1) Ensure at least one claim_event was projected for this file
             Integer ev = jdbc.queryForObject(
                     "select count(*) from claims.claim_event where ingestion_file_id = ?",
                     Integer.class, ingestionFileId);
             if (ev == null || ev <= 0) {
-                log.warn("Verify: no claim_event rows for ingestion_file_id={}", ingestionFileId);
+                log.warn("Verify: no claim_event rows for ingestion_file_id={}, fileId: {}", ingestionFileId, xmlFileId);
                 return false;
             }
 

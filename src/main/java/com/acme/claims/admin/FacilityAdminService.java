@@ -2,10 +2,13 @@ package com.acme.claims.admin;
 
 import com.acme.claims.security.ame.CredsCipherService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class FacilityAdminService {
@@ -13,18 +16,20 @@ public class FacilityAdminService {
     private final JdbcTemplate jdbc;
     private final CredsCipherService cipher;
 
+    @Transactional
     public void upsert(FacilityDto dto) {
         validate(dto);
         var c = cipher.encrypt(dto.facilityCode(), dto.login(), dto.password());
+        log.info("Addind new Facility : {}", dto.facilityCode());
         jdbc.update("""
                           insert into claims.facility_dhpo_config
-                            (facility_code, facility_name,dhpo_username_enc, dhpo_password_enc, enc_meta)
-                          values (?,?,?,?,?)
+                            (facility_code, facility_name,dhpo_username_enc, dhpo_password_enc, enc_meta_json)
+                          values (?,?,?,?,?::jsonb)
                           on conflict (facility_code) do update set
                             facility_name=excluded.facility_name,
                             dhpo_username_enc=excluded.dhpo_username_enc,
                             dhpo_password_enc=excluded.dhpo_password_enc,
-                            enc_meta=excluded.enc_meta
+                            enc_meta_json=excluded.enc_meta_json
                         """,
                 dto.facilityCode(), dto.facilityName(), c.loginCt(), c.pwdCt(), c.encMetaJson()
         );

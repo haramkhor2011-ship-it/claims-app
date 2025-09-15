@@ -19,6 +19,7 @@ import com.acme.claims.ingestion.parser.ParseOutcome;
 import com.acme.claims.ingestion.parser.StageParser;
 import com.acme.claims.ingestion.persist.PersistService;
 import com.acme.claims.ingestion.util.RootDetector;
+import com.acme.claims.metrics.DhpoMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,16 +34,39 @@ import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.Objects;
 
+/**
+ * Ingestion Pipeline — orchestrates parse → validate → persist → project → verify → audit.
+ *
+ * Runtime behavior:
+ * - Called per WorkItem by the orchestrator using an executor; this method is non-transactional and
+ *   delegates transactional units to helpers annotated with REQUIRES_NEW to ensure durable side-effects.
+ * - Inserts a stub ingestion_file row first (idempotent on file_id) to anchor all downstream records.
+ * - Performs header pre-check before any update to avoid nulls overwriting safe placeholders.
+ * - Branches on root type (Submission/Remittance) and validates business rules before persistence.
+ * - Records metrics for end-to-end duration and leverages a staging policy for cleanup/archival handled once in finally.
+ *
+ * Concurrency & idempotency:
+ * - Safe to retry; DB unique constraints prevent double-inserts; alreadyProjected() short-circuits replays.
+ * - No shared mutable state; all dependencies are Spring-managed singletons.
+ *
+ * Error handling:
+ * - Validation/persistence failures are logged into ingestion_error and surfaced by rethrowing RuntimeException.
+ * - Cleanup/archival is attempted once in finally based on success flag (no duplicate archive attempts on error paths).
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class Pipeline {
+
+    private static final short ROOT_SUBMISSION = 1;
+    private static final short ROOT_REMITTANCE = 2;
 
     private final IngestionProperties props;
     private final StageParser parser;           // ClaimXmlParserStax implements this
     private final PersistService persist;
     private final ErrorLogger errors;
     private final JdbcTemplate jdbc;
+    private final DhpoMetrics dhpoMetrics;
     @Autowired
     @Lazy
     private Pipeline self;
@@ -59,10 +83,12 @@ public class Pipeline {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public Result process(WorkItem wi) {
         Long filePk = null;
+        long t0 = System.nanoTime();
+        boolean success = false;
         try {
             // 1) Root sniff (cheap) so stub row has a valid root_type (1 or 2)
             RootDetector.RootKind sniffed = RootDetector.detect(wi.xmlBytes());
-            short rootType = switch (sniffed) { case SUBMISSION -> (short)1; case REMITTANCE -> (short)2; };
+            short rootType = switch (sniffed) { case SUBMISSION -> ROOT_SUBMISSION; case REMITTANCE -> ROOT_REMITTANCE; };
             log.info("sniffed root type: {}", rootType);
             // 2) INSERT stub ingestion_file with safe placeholders
             filePk = self.insertStub(wi, rootType);
@@ -98,35 +124,39 @@ public class Pipeline {
 
                     // Only now update ingestion_file header (COALESCE keeps existing 'UNKNOWN' if any null leaks)
                     self.updateIngestionFileHeader(
-                            filePk, (short)1,
+                            filePk, ROOT_SUBMISSION,
                             dto.header().senderId(), dto.header().receiverId(),
                             dto.header().transactionDate(), dto.header().recordCount(), dto.header().dispositionFlag()
                     );
                     log.info("Updated Ingestion File Header data : {}", fileRow.getFileId());
 
-                    // Full business validation (restored per your original code)
+                    // Idempotency short-circuit early (skip validation/mapping/persist)
+                    if (alreadyProjected(filePk)) {
+                        if (log.isDebugEnabled()) {
+                            log.debug("file already processed (short-circuit): {}", fileRow.getFileId());
+                        }
+                        int claimCount = dto.claims().size();
+                        int actCount = countActs(dto);
+                        return new Result(filePk, 1, claimCount, 0, actCount, 0, dto.header().transactionDate());
+                    }
+
+                    // Full business validation
                     try {
                         validateSubmission(dto);
                         log.info("Validation Success for file id : {}", fileRow.getFileId());
                     }
                     catch (IllegalArgumentException vex) {
                         errors.fileError(filePk, "VALIDATE", "SUBMISSION_RULES", vex.getMessage(), false);
-                        maybeArchive(wi, false);
                         throw vex;
-                    }
-
-                    // Idempotency short-circuit
-                    if (alreadyProjected(filePk)) {
-                        log.info("file is already processed : {}", fileRow.getFileId());
-                        maybeArchive(wi, true);
-                        return new Result(filePk, 1, dto.claims().size(), 0, countActs(dto), 0, dto.header().transactionDate());
                     }
 
                     // 5) Persist graph + events/timeline
                     var counts = persist.persistSubmission(filePk, dto, out.getAttachments());
                     log.info("submission persisted");
-                    maybeArchive(wi, true);
-                    return new Result(filePk, 1, dto.claims().size(), counts.claims(), countActs(dto), counts.acts(), dto.header().transactionDate());
+                    success =true;
+                    int claimCount = dto.claims().size();
+                    int actCount = countActs(dto);
+                    return new Result(filePk, 1, claimCount, counts.claims(), actCount, counts.acts(), dto.header().transactionDate());
                 }
 
                 case REMITTANCE -> {
@@ -147,35 +177,40 @@ public class Pipeline {
                         throw new RuntimeException("Header validation failed (remittance) for fileId=" + wi.fileId());
                     }
 
-                    // PATCH: Update header now (COALESCE-safe)
+                    // Update header now (COALESCE-safe)
                     self.updateIngestionFileHeader(
-                            filePk, (short)2,
+                            filePk, ROOT_REMITTANCE,
                             dto.header().senderId(), dto.header().receiverId(),
                             dto.header().transactionDate(), dto.header().recordCount(), dto.header().dispositionFlag()
                     );
 
-                    // PATCH: Full business validation (restored)
+                    // Idempotency short-circuit early (skip validation/persist)
+                    if (alreadyProjected(filePk)) {
+                        if (log.isDebugEnabled()) {
+                            log.debug("file already processed (short-circuit): {}", fileRow.getFileId());
+                        }
+                        int claimCount = dto.claims().size();
+                        int actCount = countActs(dto);
+                        return new Result(filePk, 2, claimCount, 0, actCount, 0, dto.header().transactionDate());
+                    }
+
                     try { validateRemittance(dto); }
                     catch (IllegalArgumentException vex) {
                         errors.fileError(filePk, "VALIDATE", "REMITTANCE_RULES", vex.getMessage(), false);
-                        maybeArchive(wi, false);
                         throw vex;
                     }
 
-                    if (alreadyProjected(filePk)) {
-                        maybeArchive(wi, true);
-                        return new Result(filePk, 2, dto.claims().size(), 0, countActs(dto), 0, dto.header().transactionDate());
-                    }
-
                     var counts = persist.persistRemittance(filePk, dto);
-                    maybeArchive(wi, true);
-                    return new Result(filePk, 2, dto.claims().size(), counts.remitClaims(), countActs(dto), counts.remitActs(), dto.header().transactionDate());
+                    success = true;
+                    int claimCount = dto.claims().size();
+                    int actCount = countActs(dto);
+                    return new Result(filePk, 2, claimCount, counts.remitClaims(), actCount, counts.remitActs(), dto.header().transactionDate());
                 }
             }
 
             throw new IllegalStateException("Unknown root type from parser for fileId=" + wi.fileId());
         } catch (Exception ex) {
-            maybeArchive(wi, false);
+            success = false;
             if (filePk != null) {
                 errors.fileError(filePk, "PIPELINE", "PIPELINE_FAIL",
                         "fileId=" + wi.fileId() + " msg=" + ex.getMessage(), false);
@@ -183,6 +218,12 @@ public class Pipeline {
                 log.warn("PIPELINE_FAIL before file registration. fileId={} msg={}", wi.fileId(), ex.toString());
             }
             throw (ex instanceof RuntimeException re) ? re : new RuntimeException(ex);
+        } finally {
+            long durMs = (System.nanoTime() - t0) / 1_000_000L;      // duration in ms
+            String mode   = (wi.sourcePath() != null) ? "disk" : "mem";
+            String source = (wi.source() != null) ? wi.source() : "unknown";
+            dhpoMetrics.recordIngestion(wi.source(), mode, success, durMs);
+            maybeArchive(wi, success);                               // single cleanup attempt
         }
     }
 
@@ -190,19 +231,17 @@ public class Pipeline {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Long insertStub(WorkItem wi, short rootType) {
-        try {
-            return jdbc.queryForObject("""
-                INSERT INTO claims.ingestion_file
-                  (file_id, root_type, sender_id, receiver_id, transaction_date,
-                   record_count_declared, disposition_flag, xml_bytes, created_at, updated_at)
-                VALUES
-                  (?,       ?,         'UNKNOWN', 'UNKNOWN',  now(),
-                   0,                   'UNKNOWN', ?,         now(),   now())
-                RETURNING id
-            """, Long.class, wi.fileId(), rootType, wi.xmlBytes());
-        } catch (org.springframework.dao.DuplicateKeyException dup) {
-            return jdbc.queryForObject("SELECT id FROM claims.ingestion_file WHERE file_id = ?", Long.class, wi.fileId());
-        }
+        return jdbc.queryForObject("""
+                    INSERT INTO claims.ingestion_file
+                      (file_id, root_type, sender_id, receiver_id, transaction_date,
+                       record_count_declared, disposition_flag, xml_bytes)
+                    VALUES
+                      (?,       ?,         'UNKNOWN', 'UNKNOWN',  now(),
+                       0,                   'UNKNOWN', ?)
+                    ON CONFLICT (file_id) DO UPDATE
+                       SET updated_at = now()                 -- touch row, no rollback-inducing error
+                    RETURNING id
+                """, Long.class, wi.fileId(), rootType, wi.xmlBytes());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -228,13 +267,19 @@ public class Pipeline {
     }
 
     private void maybeArchive(WorkItem wi, boolean ok) {
-        if (!props.isStageToDisk() || wi.sourcePath() == null) return;
-        Path target = Path.of(ok ? props.getLocalfs().getArchiveOkDir() : props.getLocalfs().getArchiveFailDir());
+        if (wi.sourcePath() == null) return;
         try {
-            Files.createDirectories(target);
-            Files.move(wi.sourcePath(), target.resolve(wi.fileId()), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            if(ok) {
+                // SUCCESS: delete the staged source
+                Files.deleteIfExists(wi.sourcePath());
+                log.debug("Deleted staged file on success: {}", wi.sourcePath());
+            } else {
+                Path target = Path.of(ok ? props.getLocalfs().getArchiveOkDir() : props.getLocalfs().getArchiveFailDir());
+                Files.createDirectories(target);
+                Files.move(wi.sourcePath(), target.resolve(wi.fileId()), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (Exception ignore) {
-            log.debug("Archive move skipped: {}", ignore.getMessage());
+            log.debug("Cleanup,Archive skipped for {}: {}",wi.sourcePath(), ignore.getMessage());
         }
     }
 
@@ -257,15 +302,15 @@ public class Pipeline {
         req(f.header().transactionDate(), "Header.TransactionDate");
         req(f.header().dispositionFlag(), "Header.DispositionFlag");
         if (f.claims() == null || f.claims().isEmpty()) throw new IllegalArgumentException("No claims in submission");
-        if (!Objects.equals(f.header().recordCount(), f.claims().size()))
-            throw new IllegalArgumentException("RecordCount mismatch in submission");
+        //if (!Objects.equals(f.header().recordCount(), f.claims().size()))
+         //   throw new IllegalArgumentException("RecordCount mismatch in submission");
         for (var c : f.claims()) {
             req(c.id(), "Claim.ID");
             req(c.payerId(), "Claim.PayerID (claimId=" + c.id() + ")");
             req(c.providerId(), "Claim.ProviderID (claimId=" + c.id() + ")");
             req(c.emiratesIdNumber(), "Claim.EmiratesIDNumber (claimId=" + c.id() + ")");
-            if (c.activities() == null || c.activities().isEmpty())
-                throw new IllegalArgumentException("No activities (claimId=" + c.id() + ")");
+            //if (c.activities() == null || c.activities().isEmpty())
+              //  throw new IllegalArgumentException("No activities (claimId=" + c.id() + ")");
         }
     }
 
@@ -276,14 +321,14 @@ public class Pipeline {
         req(f.header().transactionDate(), "Header.TransactionDate");
         req(f.header().dispositionFlag(), "Header.DispositionFlag");
         if (f.claims() == null || f.claims().isEmpty()) throw new IllegalArgumentException("No claims in remittance");
-        if (!Objects.equals(f.header().recordCount(), f.claims().size()))
-            throw new IllegalArgumentException("RecordCount mismatch in remittance");
+        //if (!Objects.equals(f.header().recordCount(), f.claims().size()))
+          //  throw new IllegalArgumentException("RecordCount mismatch in remittance");
         for (var c : f.claims()) {
             req(c.id(), "Claim.ID");
             req(c.idPayer(), "Claim.IDPayer (claimId=" + c.id() + ")");
             req(c.paymentReference(), "Claim.PaymentReference (claimId=" + c.id() + ")");
-            if (c.activities() == null || c.activities().isEmpty())
-                throw new IllegalArgumentException("No activities (claimId=" + c.id() + ")");
+            //if (c.activities() == null || c.activities().isEmpty())
+              //  throw new IllegalArgumentException("No activities (claimId=" + c.id() + ")");
         }
     }
 

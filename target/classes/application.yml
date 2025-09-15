@@ -27,7 +27,7 @@ management:
 
 logging:
   level:
-    com.acme.claims: DEBUG                     # orchestrator/fetcher/pipeline visibility
+    com.acme.claims: INFO                     # orchestrator/fetcher/pipeline visibility
     org.springframework.scheduling: INFO
     org.hibernate.SQL: INFO
     org.hibernate.orm.jdbc.bind: INFO

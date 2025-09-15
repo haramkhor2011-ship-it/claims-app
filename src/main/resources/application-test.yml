@@ -1,0 +1,58 @@
+spring:
+  # Prevent accidental DB auto-config when tests don't supply a datasource
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none  # matches base; tests/E2E keep schema management manual
+
+logging:
+  level:
+    com.acme.claims: DEBUG      # keep orchestrator/fetcher/pipeline visibility like base
+    org.springframework.scheduling: INFO
+    org.hibernate.SQL: INFO
+    org.hibernate.orm.jdbc.bind: INFO
+
+# Keep Flyway off in test as in base config
+flyway:
+  enabled: false
+
+# App profile-safe defaults used by ingestion+soap tests
+claims:
+  ingestion:
+    # Threading small & deterministic for tests; orchestrator uses this executor
+    executor:
+      core-pool-size: 2
+      max-pool-size: 4
+      queue-capacity: 32
+    poll:
+      fixedDelayMs: 200   # fast poll cadence for test profile
+    ack:
+      enabled: false      # tests flip this per-method via @TestPropertySource when needed
+  fetch:
+    stageToDisk:
+      force: false
+      sizeThresholdBytes: 26214400   # mirror soap profile default (25MB)
+      latencyThresholdMs: 8000
+      readyDir: "target/test-ready"  # safe temp location for tests
+  security:
+    ame:
+      enabled: false
+  soap:
+    # Do NOT hit real endpoints by default in tests.
+    endpoint: "http://localhost:0/soap"
+    soap12: false
+    connectTimeoutMs: 1500
+    readTimeoutMs: 3000
+    retry:
+      maxAttempts: 2
+      backoffMs: 200
+
+# For tests that rely on the generic baseUrl style (your E2E overrides this explicitly)
+dhpo:
+  soap:
+    baseUrl: "http://localhost:0/soap"

@@ -34,9 +34,11 @@ public class SoapGateway {
                 var out = new StringWriter();
                 var cb = (WebServiceMessageCallback) msg -> {
                     if (!Boolean.TRUE.equals(props.soap12()) && req.soapAction() != null && !req.soapAction().isBlank()) {
-                        ((SoapMessage) msg).setSoapAction(req.soapAction()); // SOAP 1.1 only
+                        ((SoapMessage) msg).setSoapAction("\""+req.soapAction() +"\""); // SOAP 1.1 only
+                        //msg.setProperty(org.springframework.ws.transport.TransportConstants.HEADER_CONTENT_TYPE, "text/xml; charset=utf-8");
                     }
                 };
+                log.info("SOAP call op={} action=\"{}\" soap12={}", req.operationName(), req.soapAction(), props.soap12());
                 wst.sendSourceAndReceiveToResult(new StringSource(req.envelopeXml()), cb, new StreamResult(out));
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 log.debug("SOAP {} ok in {}ms action={}", req.operationName(), ms, req.soapAction());

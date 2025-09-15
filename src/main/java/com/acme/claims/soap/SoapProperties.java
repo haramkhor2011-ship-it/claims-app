@@ -10,7 +10,9 @@ public record SoapProperties(
         Integer connectTimeoutMs,
         Integer readTimeoutMs,
         RetryProps retry,
-        PollProps poll
+        PollProps poll,
+        String transport,
+        Integer downloadConcurrency
 ) {
     public record RetryProps(Integer maxAttempts, Long backoffMs) {}
     public record PollProps(Integer fixedDelayMs) {}

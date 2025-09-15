@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Claim.Submission xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <Header>
+        <SenderID>DHA-F-0045446</SenderID>
+        <ReceiverID>INS017</ReceiverID>
+        <TransactionDate>20/08/2025 14:50</TransactionDate>
+        <RecordCount>1</RecordCount>
+        <DispositionFlag>PRODUCTION</DispositionFlag>
+    </Header>
+    <Claim>
+        <ID>CLM-123</ID>
+        <MemberID>M-1</MemberID>
+        <PayerID>INS017</PayerID>
+        <ProviderID>DHA-F-0045446</ProviderID>
+        <EmiratesIDNumber>784-1989-6377964-4</EmiratesIDNumber>
+        <Gross>100.00</Gross>
+        <PatientShare>0.00</PatientShare>
+        <Net>100.00</Net>
+        <Encounter>
+            <FacilityID>DHA-F-0045446</FacilityID>
+            <Type>1</Type>
+            <PatientID>P-1</PatientID>
+            <Start>11/08/2025 09:10</Start>
+            <End>11/08/2025 09:40</End>
+            <StartType>1</StartType>
+            <EndType>1</EndType>
+        </Encounter>
+        <Activity>
+            <ID>A-100</ID>
+            <Start>11/08/2025 09:10</Start>
+            <Type>3</Type>
+            <Code>86038</Code>
+            <Quantity>1.0</Quantity>
+            <Net>55.00</Net>
+            <Clinician>DHA-P-1</Clinician>
+            <Observation>
+                <Type>Text</Type><Code>Description</Code>
+                <Value>ANA</Value><ValueType>Other</ValueType>
+            </Observation>
+        </Activity>
+    </Claim>
+</Claim.Submission>

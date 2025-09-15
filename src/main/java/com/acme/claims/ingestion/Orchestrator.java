@@ -85,7 +85,7 @@ public class Orchestrator {
         boolean success = false;
         try {
             var result = pipeline.process(wi);
-            boolean verified = verifyService.verifyFile(result.ingestionFileId());
+            boolean verified = verifyService.verifyFile(result.ingestionFileId(), wi.fileId());
             success = verified;
             log.info("INGEST OK fileId={} rootType={} parsed[claims={},acts={}] persisted[claims={},acts={}] verified={}",
                     wi.fileId(), result.rootType(), result.parsedClaims(), result.parsedActivities(),
@@ -95,7 +95,7 @@ public class Orchestrator {
             log.error("INGEST FAIL fileId={} source={} : {}", wi.fileId(), wi.source(), ex.getMessage(), ex);
             success = false;
         } finally {
-            if (props.getAck().isEnabled() && acker != null) {
+            if (acker != null) {
                 try {
                     acker.maybeAck(wi.fileId(), success);
                 } catch (Exception ackEx) {

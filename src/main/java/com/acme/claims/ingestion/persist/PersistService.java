@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.Assert;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -240,7 +241,7 @@ public class PersistService {
                 errors.claimError(ingestionFileId, "PERSIST", c.id(),
                         "CLAIM_PERSIST_FAIL", claimEx.getMessage(), false);
                 // optionally log debug stack:
-                log.debug("claim persist failed claimId={} : ", c.id(), claimEx);
+                log.info(" Remittance claim persist failed claimId={} : ", c.id(), claimEx);
                 // continue with next claim
             }
         }
@@ -276,12 +277,19 @@ public class PersistService {
 
     private boolean areAllRemitActivitiesDenied(long remittanceClaimId) {
         // True when NO rows violate "must be denied or zero payment"
-        Integer cnt = jdbc.queryForObject("""
+        Integer total = jdbc.queryForObject("""
+                    select count(*) from claims.remittance_activity where remittance_claim_id = ?
+                """, Integer.class, remittanceClaimId);
+
+        Integer violations = jdbc.queryForObject("""
                     select count(*) from claims.remittance_activity
                      where remittance_claim_id = ?
                        and (denial_code is null or denial_code = '' or payment_amount <> 0)
                 """, Integer.class, remittanceClaimId);
-        return cnt != null && cnt == 0;
+
+        int t = (total == null ? 0 : total);
+        int v = (violations == null ? 0 : violations);
+        return t > 0 && v == 0;
     }
 
     /* ========================= HELPERS (UPserts & Inserts) ========================= */
@@ -301,15 +309,26 @@ public class PersistService {
     }
 
     private long upsertClaimKey(String claimIdBiz) {
-        // Single round-trip UPSERT that always returns the row's id:
-        // - INSERT new row
-        // - On conflict, "self-update" to force RETURNING of the existing row's id (no-op update)
-        // This avoids a second SELECT and removes race windows.
-        return jdbc.queryForObject("""
-                    insert into claims.claim_key(claim_id) values (?)
-                    on conflict (claim_id) do update set claim_id = excluded.claim_id
-                    returning id
-                """, Long.class, claimIdBiz);
+        Assert.hasText(claimIdBiz, "claimIdBiz must not be blank"); // fast guard
+
+        // Single round-trip, no UPDATE on conflict:
+        // 1) Try INSERT, capture id in CTE 'ins'
+        // 2) If nothing inserted (conflict), select existing id
+        final String sql = """
+                WITH ins AS (
+                  INSERT INTO claims.claim_key (claim_id)
+                  VALUES (?)
+                  ON CONFLICT (claim_id) DO NOTHING
+                  RETURNING id
+                )
+                SELECT id FROM ins
+                UNION ALL
+                SELECT id FROM claims.claim_key WHERE claim_id = ?
+                LIMIT 1
+                """;
+
+        // Returns the inserted id, or the existing id if conflict occurred
+        return jdbc.queryForObject(sql, Long.class, claimIdBiz, claimIdBiz);
     }
 
 
@@ -376,19 +395,29 @@ public class PersistService {
 
     private long insertClaimEvent(long claimKeyId, long ingestionFileId, OffsetDateTime time, short type,
                                   Long submissionId, Long remittanceId) {
-        jdbc.update("""
-                    insert into claims.claim_event(
-                      claim_key_id, ingestion_file_id, event_time, type, submission_id, remittance_id
-                    ) values (?,?,?,?,?,?)
-                    on conflict (claim_key_id, type, event_time) do nothing
-                """, claimKeyId, ingestionFileId, time, type, submissionId, remittanceId);
-
         return jdbc.queryForObject("""
-                    select id from claims.claim_event
-                     where claim_key_id=? and type=?
-                     order by event_time desc, id desc
-                     limit 1
-                """, Long.class, claimKeyId, type);
+                        WITH ins AS (
+                          INSERT INTO claims.claim_event(
+                            claim_key_id, ingestion_file_id, event_time, type, submission_id, remittance_id
+                          )
+                          VALUES (?,?,?,?,?,?)
+                          ON CONFLICT (claim_key_id, type, event_time) DO UPDATE
+                            SET ingestion_file_id = EXCLUDED.ingestion_file_id
+                          RETURNING id
+                        )
+                        SELECT id FROM ins
+                        UNION ALL
+                        SELECT id
+                          FROM claims.claim_event
+                         WHERE claim_key_id = ? AND type = ? AND event_time = ?
+                        LIMIT 1
+                        """,
+                Long.class,
+                // insert params
+                claimKeyId, ingestionFileId, time, type, submissionId, remittanceId,
+                // fallback (exact) params
+                claimKeyId, type, time
+        );
     }
 
     private void projectActivitiesToClaimEventFromSubmission(long eventId, Set<ActivityDTO> acts) {
@@ -413,7 +442,7 @@ public class PersistService {
                                 )
                                 select cea.id, ?, ?, ?, ?
                                   from claims.claim_event_activity cea
-                                 where cea.claim_event_id = ? and cea.activity_id_at_event = ?
+                                 where cea.claim_event_id = ? and cea.activity_id_at_event = ? on conflict do nothing
                             """, o.type(), o.code(), o.value(), o.valueType(), eventId, a.id());
                 }
             }

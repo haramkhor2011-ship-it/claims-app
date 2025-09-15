@@ -23,7 +23,7 @@ public class SoapAckerAdapter implements Acker {
     private final SetDownloadedHook setDownloadedHook;
     private final DhpoFileRegistry fileRegistry;
 
-    @Value("${claims.ack.enabled:false}")
+    @Value("${claims.ack.enabled:true}")
     private boolean ackEnabled;
 
     @Override

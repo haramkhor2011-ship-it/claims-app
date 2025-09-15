@@ -117,15 +117,15 @@ public class ClaimXmlParserStax implements StageParser {
     public ParseOutcome parse(IngestionFile file) throws Exception {
         Objects.requireNonNull(file, "IngestionFile");
         long fileId = Objects.requireNonNull(file.getId(), "ingestion_file.id required");
-        log.info("parse : {}", fileId);
+        log.info("parse : {}", file.getFileId());
 
         Resettable is = openInput(file);                 // supports stageToDisk=true
         Root root = sniffRoot(is);
         is.reset();
 
         List<ParseProblem> problems = new ArrayList<>();
-        boolean xsdFailed = !validateAgainstXsd(is, root, problems, fileId);
-        log.info("xsdFailed  : {}", xsdFailed);
+        boolean xsdFailed = !validateAgainstXsd(is, root, problems, file.getFileId(), fileId);
+        log.info("xsdFailed : {}, fileId: {}", xsdFailed, file.getFileId());
         is.reset();
         if (xsdFailed && failOnXsdError) {
             return new ParseOutcome(
@@ -133,7 +133,7 @@ public class ClaimXmlParserStax implements StageParser {
                     null, null, problems, List.of()
             );
         }
-        log.info("Going to Parse XML : {}", fileId);
+        log.info("Going to Parse XML fileId: {}", file.getFileId());
         return (root == Root.SUBMISSION)
                 ? parseSubmission(is, fileId, problems)
                 : parseRemittance(is, fileId, problems);
@@ -196,20 +196,22 @@ public class ClaimXmlParserStax implements StageParser {
      *
      * @return true when no XSD ERROR (i.e., either OK or tolerated Attachment case)
      */
-    private boolean validateAgainstXsd(Resettable is, Root root, List<ParseProblem> problems, long fileId) {
+    private boolean validateAgainstXsd(Resettable is, Root root, List<ParseProblem> problems, String fileIdXml, long fileId) {
         try {
             Validator v = (root == Root.SUBMISSION ? submissionSchema : remittanceSchema).newValidator();
             v.validate(new javax.xml.transform.stream.StreamSource(is));
             log.info("Validated xsd");
             return true;
         } catch (Exception e) {
-            log.info("Exception while validating XSD : {}", e);
+            log.info("Exception while validating XSD fileId: {}, Exc: {}",fileIdXml, e.getMessage());
             final String msg = (e.getMessage() == null) ? "XSD validation failed" : e.getMessage();
+            log.info("msg: {}", msg);
             // PATCH: Always tolerate undeclared <Attachment> under <Claim> and continue with WARNING.
             final boolean attachmentOnly = msg.contains("Attachment");
             final boolean commentsPresent = msg.contains("Comments");
             if (attachmentOnly || commentsPresent) {
                 // do not fail xsd validation if comments or attachment are present
+                log.error("Exception Caught But has either Comments or Attachment which is not available in XSD");
                 return true;
             }
             addProblem(problems, fileId, null, ParseProblem.Severity.ERROR,

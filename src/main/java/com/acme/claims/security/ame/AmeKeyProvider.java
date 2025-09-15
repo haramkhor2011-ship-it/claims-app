@@ -42,6 +42,7 @@ public class AmeKeyProvider {
     private void loadFromKeyStore(String ksType, String path, String alias, String passEnv) {
         try (InputStream in = resolve(path)) {
             var ks = KeyStore.getInstance(ksType == null ? "JKS" : ksType);
+            log.debug("CLAIMS_AME_STORE_PASS present? {}", System.getenv(props.keystore().passwordEnv()) != null);
             char[] pass = System.getenv(passEnv) != null ? System.getenv(passEnv).toCharArray() : new char[0];
             ks.load(in, pass);
             var sk = (KeyStore.SecretKeyEntry) ks.getEntry(alias, new KeyStore.PasswordProtection(pass));

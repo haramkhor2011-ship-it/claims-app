@@ -1,6 +1,8 @@
 package com.acme.claims.domain.model.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.OffsetDateTime;
 
@@ -38,11 +40,11 @@ public class FacilityDhpoConfig {
     @Column(name = "endpoint_url_for_erx", nullable = false)
     private String endpointUrlForErx = "https://dhpo.eclaimlink.ae/eRxValidateTransactions.asmx"; // TEXT NOT NULL DEFAULT ...
 
-    @Lob
+    @JdbcTypeCode(SqlTypes.BINARY)
     @Column(name = "dhpo_username_enc", nullable = false)
     private byte[] dhpoUsernameEnc;                  // BYTEA NOT NULL
 
-    @Lob
+    @JdbcTypeCode(SqlTypes.BINARY)
     @Column(name = "dhpo_password_enc", nullable = false)
     private byte[] dhpoPasswordEnc;                  // BYTEA NOT NULL
 

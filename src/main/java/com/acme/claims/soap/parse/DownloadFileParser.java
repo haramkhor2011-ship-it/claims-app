@@ -4,8 +4,6 @@ package com.acme.claims.soap.parse;
 import com.acme.claims.soap.util.Xmls;
 import org.w3c.dom.Document;
 
-import java.util.Base64;
-
 public class DownloadFileParser {
     public record Result(int code, String fileName, byte[] fileBytes, String errorMessage) {}
 
@@ -15,7 +13,9 @@ public class DownloadFileParser {
             int code = toInt(Xmls.gl(d, "DownloadTransactionFileResult"));
             String name = Xmls.gl(d, "fileName");
             String b64  = Xmls.gl(d, "file");
-            byte[] bytes = (b64==null||b64.isBlank()) ? new byte[0] : Base64.getDecoder().decode(b64);
+            byte[] bytes = (b64 == null || b64.isBlank())
+                    ? new byte[0]
+                    : java.util.Base64.getMimeDecoder().decode(b64);
             String err = Xmls.gl(d, "errorMessage");
             return new Result(code, name, bytes, err);
         } catch (Exception ex) {

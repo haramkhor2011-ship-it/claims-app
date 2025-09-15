@@ -1,8 +1,4 @@
 spring:
-  config:
-    activate:
-      on-profile: localfs
-
   datasource:
     url: jdbc:postgresql://localhost:5432/claims
     username: claims_user
@@ -60,9 +56,9 @@ claims:
 
     # Local filesystem fetcher config (only this fetcher is active under 'localfs')
     localfs:
-      readyDir: ${CLAIMS_LOCALFS_WATCH:C:\Users\kvikr\Downloads\claims-backend-full\target\incoming}
-      archiveOkDir: ${CLAIMS_LOCALFS_ARCHIVE:C:\Users\kvikr\Downloads\claims-backend-full\target\done}
-      archiveFailDir: ${CLAIMS_LOCALFS_ERROR:C:\Users\kvikr\Downloads\claims-backend-full\target\error}
+      readyDir: ${CLAIMS_LOCALFS_WATCH:data/ready}
+      archiveOkDir: ${CLAIMS_LOCALFS_ARCHIVE:data/archive/done}
+      archiveFailDir: ${CLAIMS_LOCALFS_ERROR:data/archive/error}
 
     # ACK policy (default OFF per requirements)
     ack:
