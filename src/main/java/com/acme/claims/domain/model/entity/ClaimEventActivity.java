@@ -33,6 +33,7 @@ public class ClaimEventActivity {
     @Column(name="patient_share_at_event", precision=14, scale=2) private BigDecimal patientShareAtEvent;
     @Column(name="payment_amount_at_event", precision=14, scale=2) private BigDecimal paymentAmountAtEvent;
     @Column(name="denial_code_at_event") private String denialCodeAtEvent;
+    @Column(name="tx_at", nullable=false) private OffsetDateTime txAt;
     @Column(name="created_at", nullable=false) private OffsetDateTime createdAt = OffsetDateTime.now();
     // getters/setters…
     public Long getId(){return id;} public void setId(Long id){this.id=id;}
@@ -54,5 +55,6 @@ public class ClaimEventActivity {
     public BigDecimal getPatientShareAtEvent(){return patientShareAtEvent;} public void setPatientShareAtEvent(BigDecimal v){this.patientShareAtEvent=v;}
     public BigDecimal getPaymentAmountAtEvent(){return paymentAmountAtEvent;} public void setPaymentAmountAtEvent(BigDecimal v){this.paymentAmountAtEvent=v;}
     public String getDenialCodeAtEvent(){return denialCodeAtEvent;} public void setDenialCodeAtEvent(String v){this.denialCodeAtEvent=v;}
+    public OffsetDateTime getTxAt(){return txAt;} public void setTxAt(OffsetDateTime v){this.txAt=v;}
     public OffsetDateTime getCreatedAt(){return createdAt;} public void setCreatedAt(OffsetDateTime v){this.createdAt=v;}
 }

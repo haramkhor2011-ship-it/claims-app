@@ -17,6 +17,7 @@ public class EventObservation {
     @Column(name="obs_code", nullable=false) private String obsCode;
     @Column(name="value_text") private String valueText;
     @Column(name="value_type") private String valueType;
+    @Column(name="tx_at", nullable=false) private OffsetDateTime txAt;
     @Column(name="created_at", nullable=false) private OffsetDateTime createdAt = OffsetDateTime.now();
     // getters/setters…
     public Long getId(){return id;} public void setId(Long id){this.id=id;}
@@ -26,5 +27,6 @@ public class EventObservation {
     public String getObsCode(){return obsCode;} public void setObsCode(String v){this.obsCode=v;}
     public String getValueText(){return valueText;} public void setValueText(String v){this.valueText=v;}
     public String getValueType(){return valueType;} public void setValueType(String v){this.valueType=v;}
+    public OffsetDateTime getTxAt(){return txAt;} public void setTxAt(OffsetDateTime v){this.txAt=v;}
     public OffsetDateTime getCreatedAt(){return createdAt;} public void setCreatedAt(OffsetDateTime v){this.createdAt=v;}
 }
