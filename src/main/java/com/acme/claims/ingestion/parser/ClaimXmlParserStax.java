@@ -244,7 +244,7 @@ public class ClaimXmlParserStax implements StageParser {
                         case "Header" -> header = readSubmissionHeader(r, problems, fileId);
                         case "Claim" -> {
                             claimCount++;
-                            var parsed = readSubmissionClaim(r, problems, fileId); // consumes until </Claim>
+                            ParsedSubmissionClaim parsed = readSubmissionClaim(r, problems, fileId); // consumes until </Claim>
                             claims.add(parsed.claim());
                             if (!parsed.attachments().isEmpty()) attachmentsOut.addAll(parsed.attachments());
                         }
@@ -320,7 +320,7 @@ public class ClaimXmlParserStax implements StageParser {
                         skipToEnd(r, "Diagnosis");
                     }
                     case "Activity" -> {
-                        var act = readSubmissionActivity(r, problems, fileId, activityIds, id);
+                        ActivityDTO act = readSubmissionActivity(r, problems, fileId, activityIds, id);
                         if (act != null) acts.add(act);
                     }
                     case "Resubmission" -> {

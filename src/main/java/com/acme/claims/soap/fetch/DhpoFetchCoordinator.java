@@ -5,6 +5,7 @@ import com.acme.claims.domain.model.entity.FacilityDhpoConfig;
 import com.acme.claims.domain.repo.FacilityDhpoConfigRepo;
 import com.acme.claims.ingestion.fetch.soap.DhpoFetchInbox;
 import com.acme.claims.security.ame.CredsCipherService;
+import com.acme.claims.security.ame.CredsCipherService.PlainCreds;
 import com.acme.claims.soap.SoapGateway;
 import com.acme.claims.soap.SoapProperties;
 import com.acme.claims.soap.config.DhpoClientProperties;
@@ -66,7 +67,7 @@ public class DhpoFetchCoordinator {
     }
 
     private void processDelta(FacilityDhpoConfig f) {
-        var plain = creds.decryptFor(f); // decrypt once per facility per call
+        PlainCreds plain = creds.decryptFor(f); // decrypt once per facility per call
         var req = GetNewTransactionsRequest.build(plain.login(), plain.pwd(), false /*soap1.1*/);
         var resp = gateway.call(req);
 
@@ -101,7 +102,7 @@ public class DhpoFetchCoordinator {
     }
 
     private void searchWindow(FacilityDhpoConfig f, int direction, int transactionId) {
-        var plain = creds.decryptFor(f);
+        PlainCreds plain = creds.decryptFor(f);
         LocalDateTime to = LocalDateTime.now();
         LocalDateTime from = to.minusDays(100);
 
@@ -127,7 +128,7 @@ public class DhpoFetchCoordinator {
 
     // ===== Download + dynamic staging =====
     private void downloadAndStage(FacilityDhpoConfig f, String fileId) {
-        var plain = creds.decryptFor(f);
+        PlainCreds plain = creds.decryptFor(f);
         long t0 = System.nanoTime();
         var req = DownloadTransactionFileRequest.build(plain.login(), plain.pwd(), fileId, false /*soap1.1*/);
         var resp = gateway.call(req);
