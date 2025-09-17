@@ -9,18 +9,17 @@ import com.acme.claims.security.ame.CredsCipherService;
 import com.acme.claims.soap.SoapProperties;
 import com.acme.claims.soap.config.DhpoClientProperties;
 import com.acme.claims.soap.db.ToggleRepo;
+import com.acme.claims.soap.fetch.exception.DhpoCredentialException;
+import com.acme.claims.soap.fetch.exception.DhpoFetchException;
+import com.acme.claims.soap.fetch.exception.DhpoSoapException;
+import com.acme.claims.soap.fetch.exception.DhpoStagingException;
 import com.acme.claims.soap.parse.DownloadFileParser;
 import com.acme.claims.soap.parse.ListFilesParser;
-import com.acme.claims.soap.crypto.DhpoCredentials;
 import com.acme.claims.soap.req.DownloadTransactionFileRequest;
 import com.acme.claims.soap.req.GetNewTransactionsRequest;
 import com.acme.claims.soap.req.SearchTransactionsRequest;
 import com.acme.claims.soap.transport.SoapCaller;
 import com.acme.claims.soap.util.XmlPayloads;
-import com.acme.claims.soap.fetch.exception.DhpoCredentialException;
-import com.acme.claims.soap.fetch.exception.DhpoFetchException;
-import com.acme.claims.soap.fetch.exception.DhpoSoapException;
-import com.acme.claims.soap.fetch.exception.DhpoStagingException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -158,7 +157,7 @@ public class DhpoFetchCoordinator {
         final Semaphore downloadSlots = new Semaphore(downloadConcurrency);
         
         // Decrypt credentials with proper error handling
-        DhpoCredentials plain;
+        CredsCipherService.PlainCreds plain;
         try {
             plain = creds.decryptFor(f);
         } catch (Exception e) {
@@ -168,7 +167,7 @@ public class DhpoFetchCoordinator {
         
         // Build and execute SOAP request with error handling
         var req = GetNewTransactionsRequest.build(plain.login(), plain.pwd(), false /*soap1.1*/);
-        var resp;
+        com.acme.claims.soap.SoapGateway.SoapResponse resp;
         try {
             resp = soapCaller.call(req);
         } catch (Exception e) {
@@ -177,7 +176,7 @@ public class DhpoFetchCoordinator {
         }
 
         // Parse response with error handling
-        var parsed;
+        ListFilesParser.Result parsed;
         try {
             parsed = listFilesParser.parse(resp.envelopeXml());
         } catch (Exception e) {
@@ -287,7 +286,7 @@ public class DhpoFetchCoordinator {
         List<Future<?>> futures = new ArrayList<>();
         
         // Decrypt credentials with proper error handling
-        DhpoCredentials plain;
+        CredsCipherService.PlainCreds plain;
         try {
             plain = creds.decryptFor(f);
         } catch (Exception e) {
@@ -308,7 +307,7 @@ public class DhpoFetchCoordinator {
         );
         
         // Execute SOAP call - retry logic is handled in HttpSoapCaller
-        var resp;
+        com.acme.claims.soap.SoapGateway.SoapResponse resp;
         try {
             resp = soapCaller.call(req);
         } catch (Exception e) {
@@ -317,7 +316,7 @@ public class DhpoFetchCoordinator {
         }
         
         // Parse response with error handling
-        var parsed;
+        ListFilesParser.Result parsed;
         try {
             parsed = listFilesParser.parse(resp.envelopeXml());
         } catch (Exception e) {
@@ -365,12 +364,12 @@ public class DhpoFetchCoordinator {
      * - Uses normalized UTF-8 XML bytes; rejects malformed payloads
      * - Records metrics and submits either path-based (DISK) or bytes-based (MEM) to the inbox
      */
-    private void downloadAndStage(FacilityDhpoConfig f, String fileId, DhpoCredentials plain) {
+    private void downloadAndStage(FacilityDhpoConfig f, String fileId, CredsCipherService.PlainCreds plain) {
         long t0 = System.nanoTime();
         var req = DownloadTransactionFileRequest.build(plain.login(), plain.pwd(), fileId, false /*soap1.1*/);
         
         // Execute SOAP call - retry logic is handled in HttpSoapCaller
-        var resp;
+        com.acme.claims.soap.SoapGateway.SoapResponse resp;
         try {
             resp = soapCaller.call(req);
         } catch (Exception e) {
@@ -381,7 +380,7 @@ public class DhpoFetchCoordinator {
         long dlMs = (System.nanoTime() - t0) / 1_000_000;
 
         // Parse response with error handling
-        var parsed;
+        DownloadFileParser.Result parsed;
         try {
             parsed = downloadFileParser.parse(resp.envelopeXml());
         } catch (Exception e) {
