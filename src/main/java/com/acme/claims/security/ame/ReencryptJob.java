@@ -9,6 +9,8 @@ import org.json.JSONObject;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import java.util.List;
+import com.acme.claims.security.ame.CredsCipherService.CipherCreds;
 
 @Slf4j
 @Component
@@ -26,7 +28,7 @@ public class ReencryptJob {
      * Re-encrypts all rows whose enc_meta_json.keyId != current keyId.
      */
     public int reencryptAllIfNeeded() {
-        var all = repo.findAll();
+        List<FacilityDhpoConfig> all = repo.findAll();
         int changed = 0;
         String targetKeyId = props.crypto().keyId();
 
@@ -38,7 +40,7 @@ public class ReencryptJob {
                 continue; // nothing to migrate
             }
 
-            var metaObj = safeMeta(meta);
+            JSONObject metaObj = safeMeta(meta);
             String rowKeyId = metaObj.optString("keyId", "");
             if (targetKeyId.equals(rowKeyId)) {
                 continue; // already on latest key
@@ -50,7 +52,7 @@ public class ReencryptJob {
                 String pwd   = cipher.decryptPassword(pwdCt,  meta, f.getFacilityCode());
 
                 // encrypt with current key/meta (split IVs)
-                var c = cipher.encrypt(f.getFacilityCode(), login, pwd);
+                CipherCreds c = cipher.encrypt(f.getFacilityCode(), login, pwd);
 
                 // persist using exact column names
                 int updated = jdbc.update("""

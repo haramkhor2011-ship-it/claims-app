@@ -84,7 +84,7 @@ public class Orchestrator {
     private void processOne(WorkItem wi) {
         boolean success = false;
         try {
-            var result = pipeline.process(wi);
+            var result = pipeline.process(wi); // Keep var - return type definition not found
             boolean verified = verifyService.verifyFile(result.ingestionFileId());
             success = verified;
             log.info("INGEST OK fileId={} rootType={} parsed[claims={},acts={}] persisted[claims={},acts={}] verified={}",

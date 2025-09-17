@@ -15,6 +15,10 @@ import com.acme.claims.soap.parse.ListFilesParser;
 import com.acme.claims.soap.req.DownloadTransactionFileRequest;
 import com.acme.claims.soap.req.GetNewTransactionsRequest;
 import com.acme.claims.soap.req.SearchTransactionsRequest;
+import com.acme.claims.soap.SoapGateway.SoapResponse;
+import com.acme.claims.soap.SoapGateway.SoapRequest;
+import com.acme.claims.soap.parse.ListFilesParser.Result;
+import com.acme.claims.soap.fetch.StagingService.Staged;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +29,7 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 @Slf4j
 @Component
@@ -56,8 +61,8 @@ public class DhpoFetchCoordinator {
         if (!toggles.isEnabled("dhpo.client.getNewEnabled")) {
             return;
         }
-        var list = facilities.findByActiveTrue();
-        for (var f : list) {
+        List<FacilityDhpoConfig> list = facilities.findByActiveTrue();
+        for (FacilityDhpoConfig f : list) {
             try {
                 processDelta(f);
             } catch (Exception e) {
@@ -68,10 +73,10 @@ public class DhpoFetchCoordinator {
 
     private void processDelta(FacilityDhpoConfig f) {
         PlainCreds plain = creds.decryptFor(f); // decrypt once per facility per call
-        var req = GetNewTransactionsRequest.build(plain.login(), plain.pwd(), false /*soap1.1*/);
-        var resp = gateway.call(req);
+        SoapRequest req = GetNewTransactionsRequest.build(plain.login(), plain.pwd(), false /*soap1.1*/);
+        SoapResponse resp = gateway.call(req);
 
-        var parsed = new ListFilesParser().parse(resp.envelopeXml());
+        Result parsed = new ListFilesParser().parse(resp.envelopeXml());
         if (!handleResultCode("GetNewTransactions", parsed.code(), parsed.errorMessage(), f.getFacilityCode())) return;
 
         if (parsed.files().isEmpty()) {
@@ -80,7 +85,7 @@ public class DhpoFetchCoordinator {
         }
         log.info("Facility {}: {} new items", f.getFacilityCode(), parsed.files().size());
 
-        for (var row : parsed.files()) {
+        for (ListFilesParser.FileRow row : parsed.files()) {
             // For GetNewTransactions DHPO typically returns isDownloaded=false; we download + stage all.
             downloadAndStage(f, row.fileId());
         }
@@ -89,8 +94,8 @@ public class DhpoFetchCoordinator {
     // ===== Backfill/ops search (toggle) =====
     @Scheduled(fixedDelayString = "${claims.soap.poll.fixedDelayMs:1800000}", initialDelay = 5000)
     public void pollSearch() {
-        var list = facilities.findByActiveTrue();
-        for (var f : list) {
+        List<FacilityDhpoConfig> list = facilities.findByActiveTrue();
+        for (FacilityDhpoConfig f : list) {
             try {
                 // Two searches per facility: submissions(sent=2, direction=1) & remittances(received=8, direction=2)
                 searchWindow(f, 1, 2);
@@ -106,15 +111,15 @@ public class DhpoFetchCoordinator {
         LocalDateTime to = LocalDateTime.now();
         LocalDateTime from = to.minusDays(100);
 
-        var req = SearchTransactionsRequest.build(
+        SoapRequest req = SearchTransactionsRequest.build(
                 plain.login(), plain.pwd(), direction,
                 f.getFacilityCode(), "",                            // callerLicense = facility_code, ePartner blank
                 transactionId, 1,                                   // TransactionStatus=1 (new/undownloaded)
                 FMT.format(from), FMT.format(to),
                 0, 500, false /*soap1.1*/
         );
-        var resp = gateway.call(req);
-        var parsed = new ListFilesParser().parse(resp.envelopeXml());
+        SoapResponse resp = gateway.call(req);
+        Result parsed = new ListFilesParser().parse(resp.envelopeXml());
         if (!handleResultCode("SearchTransactions", parsed.code(), parsed.errorMessage(), f.getFacilityCode())) return;
 
         long candidates = parsed.files().stream().filter(fr -> fr.isDownloaded()==null || Boolean.FALSE.equals(fr.isDownloaded())).count();
@@ -130,11 +135,11 @@ public class DhpoFetchCoordinator {
     private void downloadAndStage(FacilityDhpoConfig f, String fileId) {
         PlainCreds plain = creds.decryptFor(f);
         long t0 = System.nanoTime();
-        var req = DownloadTransactionFileRequest.build(plain.login(), plain.pwd(), fileId, false /*soap1.1*/);
-        var resp = gateway.call(req);
+        SoapRequest req = DownloadTransactionFileRequest.build(plain.login(), plain.pwd(), fileId, false /*soap1.1*/);
+        SoapResponse resp = gateway.call(req);
         long dlMs = (System.nanoTime() - t0) / 1_000_000;
 
-        var parsed = new DownloadFileParser().parse(resp.envelopeXml());
+        DownloadFileParser.Result parsed = new DownloadFileParser().parse(resp.envelopeXml());
         if (!handleResultCode("DownloadTransactionFile", parsed.code(), parsed.errorMessage(), f.getFacilityCode())) return;
 
         byte[] fileBytes = parsed.fileBytes();
@@ -143,9 +148,9 @@ public class DhpoFetchCoordinator {
             return;
         }
 
-        var pol = new StagingPolicy(forceDisk, sizeThreshold, latencyThreshold, readyDir);
+        StagingPolicy pol = new StagingPolicy(forceDisk, sizeThreshold, latencyThreshold, readyDir);
         try {
-            var staged = staging.decideAndStage(fileBytes, parsed.fileName(), dlMs, pol);
+            Staged staged = staging.decideAndStage(fileBytes, parsed.fileName(), dlMs, pol);
             log.info("Facility {} fileId {} staged as {} (name={})", f.getFacilityCode(), fileId, staged.mode(), staged.fileId());
             // Hand-off to parser/persist remains in your existing flow.
             fileRegistry.remember(fileId, f.getFacilityCode());

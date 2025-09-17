@@ -183,8 +183,8 @@ public class RefdataCsvLoader {
             return 0;
         }
 
-        try (var reader = new BufferedReader(new InputStreamReader(res.getInputStream(), StandardCharsets.UTF_8))) {
-            var format = CSVFormat.DEFAULT.builder()
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(res.getInputStream(), StandardCharsets.UTF_8))) {
+            CSVFormat format = CSVFormat.DEFAULT.builder()
                     .setHeader()
                     .setSkipHeaderRecord(true)
                     .setTrim(true)
@@ -192,8 +192,8 @@ public class RefdataCsvLoader {
                     .setDelimiter(props.getDelimiter())
                     .build();
 
-            try (var parser = new CSVParser(reader, format)) {
-                var headerMap = parser.getHeaderMap();
+            try (CSVParser parser = new CSVParser(reader, format)) {
+                Map<String, Integer> headerMap = parser.getHeaderMap();
                 validateHeaders(fileName, headerMap.keySet(), requiredHeaders);
 
                 // Collect all records (we apply JDBC batch ourselves)
@@ -220,7 +220,7 @@ public class RefdataCsvLoader {
         Set<String> missing = new LinkedHashSet<>(required);
         missing.removeAll(lowercase(actual));
         if (!missing.isEmpty()) {
-            var msg = "CSV " + fileName + " missing headers: " + missing;
+            String msg = "CSV " + fileName + " missing headers: " + missing;
             if (props.isStrict()) throw new IllegalStateException(msg);
             log.warn("{} (lenient mode: continuing, rows may be skipped)", msg);
         }

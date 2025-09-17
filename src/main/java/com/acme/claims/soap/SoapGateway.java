@@ -31,8 +31,8 @@ public class SoapGateway {
         while (attempt++ < max) {
             long t0 = System.nanoTime();
             try {
-                var out = new StringWriter();
-                var cb = (WebServiceMessageCallback) msg -> {
+                StringWriter out = new StringWriter();
+                WebServiceMessageCallback cb = (WebServiceMessageCallback) msg -> {
                     if (!Boolean.TRUE.equals(props.soap12()) && req.soapAction() != null && !req.soapAction().isBlank()) {
                         ((SoapMessage) msg).setSoapAction(req.soapAction()); // SOAP 1.1 only
                     }

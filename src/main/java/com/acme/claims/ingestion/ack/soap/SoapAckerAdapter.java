@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
+import java.util.Optional;
 
 /**
  * Best-effort ACK: delegates to your SOAP gateway hook (SetDownloaded/SetTransactionDownloaded).
@@ -38,12 +39,12 @@ public class SoapAckerAdapter implements Acker {
         }
         try {
             log.debug("[SOAP] ACK → SetDownloaded for fileId={}", fileId);
-            var facilityOpt = fileRegistry.facilityFor(fileId);
+            Optional<String> facilityOpt = fileRegistry.facilityFor(fileId);
             if (facilityOpt.isEmpty()) {
                 log.warn("[SOAP] ACK skipped: facility not found for fileId={}", fileId);
                 return;
             }
-            var facilityCode = facilityOpt.get();
+            String facilityCode = facilityOpt.get();
             log.debug("[SOAP] ACK → SetDownloaded facility={} fileId={}", facilityCode, fileId);
             // Method name per your class: maybeMarkDownloaded(facilityCode, fileId)
             setDownloadedHook.maybeMarkDownloaded(facilityCode, fileId);
