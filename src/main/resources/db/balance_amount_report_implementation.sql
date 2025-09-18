@@ -5,14 +5,15 @@
 -- Date: 2025-09-17
 -- Purpose: Complete implementation for Balance Amount to be Received report
 -- 
--- MAPPING CORRECTIONS APPLIED:
--- 1. FacilityGroupID/HealthAuthority → Use claims.claim(provider_id) + claims_ref.provider.name
--- 2. Receiver_Name → From claims_ref.payer (submission: header/receiver, remittance: header/sender)
--- 3. Write-off Amount → TODO: Check remittance XML tags or extract from claims.claim(comments) with regex
--- 4. Resubmission details → Join tables to determine output
--- 5. Aging → Use encounter.start (date_settlement from remittance_claim.date_settlement for future)
--- 6. Payment Status → Use claim_status_timeline table
--- 7. FacilityGroup/FacilityGroupID → Both are facility names
+-- MAPPING CORRECTIONS APPLIED (Based on JSON mapping and report requirements):
+-- 1. FacilityGroupID → Use claims.encounter.facility_id (preferred) or claims.claim.provider_id
+-- 2. HealthAuthority → Use claims.ingestion_file.sender_id for submission, receiver_id for remittance
+-- 3. Receiver_Name → Use claims_ref.payer.name joined on payer_code = ingestion_file.receiver_id
+-- 4. Write-off Amount → Extract from claims.claim.comments or external adjustment feed
+-- 5. Resubmission details → Use claims.claim_event and claims.claim_resubmission tables
+-- 6. Aging → Use encounter.start_at (date_settlement from remittance_claim.date_settlement for future)
+-- 7. Payment Status → Use claim_status_timeline table
+-- 8. Column naming → Follow report suggestions (ClaimAmt → Billed Amount, etc.)
 --
 -- ==========================================================================================================
 
@@ -71,8 +72,9 @@ SELECT
   EXTRACT(MONTH FROM e.start) AS encounter_start_month,
   TO_CHAR(e.start, 'Month') AS encounter_start_month_name,
   
-  -- Provider/Facility Group mapping (CORRECTED)
-  p.name AS provider_name,  -- Used as FacilityGroupID/HealthAuthority
+  -- Provider/Facility Group mapping (CORRECTED per JSON mapping)
+  COALESCE(e.facility_id, c.provider_id) AS facility_group_id,  -- JSON: claims.encounter.facility_id (preferred) or claims.claim.provider_id
+  p.name AS provider_name,
   p.provider_code,
   
   -- Facility details
@@ -82,6 +84,10 @@ SELECT
   -- Payer details (for Receiver_Name mapping)
   pay.name AS payer_name,
   pay.payer_code,
+  
+  -- Health Authority mapping (CORRECTED per JSON mapping)
+  if_sub.sender_id AS health_authority_submission,  -- JSON: claims.ingestion_file.sender_id for submission
+  if_rem.receiver_id AS health_authority_remittance,  -- JSON: claims.ingestion_file.receiver_id for remittance
   
   -- Remittance summary (enhanced with better NULL handling)
   COALESCE(rem_summary.total_payment_amount, 0) AS total_payment_amount,
@@ -97,9 +103,9 @@ SELECT
   resub_summary.last_resubmission_comment,
   resub_summary.last_resubmission_type,
   
-  -- Submission file details
-  sub_file.last_submission_file,
-  sub_file.receiver_id,
+  -- Submission file details (using direct joins)
+  if_sub.file_id AS last_submission_file,
+  if_sub.receiver_id,
   
   -- Payment status from claim_status_timeline (CORRECTED)
   claims.map_status_to_text(cst.status) AS current_claim_status,
@@ -131,6 +137,10 @@ JOIN claims.encounter e ON e.claim_id = c.id
 LEFT JOIN claims_ref.provider p ON p.provider_code = c.provider_id
 LEFT JOIN claims_ref.facility f ON f.facility_code = e.facility_id
 LEFT JOIN claims_ref.payer pay ON pay.payer_code = c.payer_id
+LEFT JOIN claims.submission s ON s.id = c.submission_id
+LEFT JOIN claims.ingestion_file if_sub ON if_sub.id = s.ingestion_file_id
+LEFT JOIN claims.remittance rem ON rem.claim_key_id = ck.id
+LEFT JOIN claims.ingestion_file if_rem ON if_rem.id = rem.ingestion_file_id
 
 -- Remittance summary (lateral join for performance)
 LEFT JOIN LATERAL (
@@ -159,17 +169,7 @@ LEFT JOIN LATERAL (
   AND ce.event_type = 2  -- RESUBMISSION
 ) resub_summary ON TRUE
 
--- Submission file details
-LEFT JOIN LATERAL (
-  SELECT 
-    if_sub.file_id AS last_submission_file,
-    if_sub.receiver_id
-  FROM claims.submission s
-  JOIN claims.ingestion_file if_sub ON if_sub.id = s.ingestion_file_id
-  WHERE s.id = c.submission_id
-  ORDER BY if_sub.transaction_date DESC
-  LIMIT 1
-) sub_file ON TRUE
+-- Submission file details (now using direct joins above)
 
   -- Current claim status from timeline (CORRECTED)
 LEFT JOIN LATERAL (
@@ -188,33 +188,33 @@ COMMENT ON VIEW claims.v_balance_amount_base_enhanced IS 'Enhanced base view for
 -- SECTION 3: TAB VIEWS WITH CORRECTED MAPPINGS
 -- ==========================================================================================================
 
--- Tab A: Balance Amount to be received (CORRECTED MAPPINGS)
+-- Tab A: Balance Amount to be received (CORRECTED MAPPINGS per JSON and report requirements)
 CREATE OR REPLACE VIEW claims.v_balance_amount_tab_a_corrected AS
 SELECT 
   bab.claim_key_id,
   bab.claim_id,
-  bab.provider_name AS facility_group_id,  -- CORRECTED: Use provider name
-  bab.provider_name AS health_authority,   -- CORRECTED: Use provider name
+  bab.facility_group_id,  -- CORRECTED: Use facility_id (preferred) or provider_id per JSON mapping
+  COALESCE(bab.health_authority_submission, bab.health_authority_remittance) AS health_authority,  -- CORRECTED: Use sender_id/receiver_id per JSON mapping
   bab.facility_id,
   bab.facility_name,
-  bab.claim_id AS claim_number,  -- CORRECTED: Use claim_id as claim_number
-  bab.encounter_start AS encounter_start_date,
-  bab.encounter_end AS encounter_end_date,
+  bab.claim_id AS claim_number,  -- JSON: claims.claim_key.claim_id
+  bab.encounter_start AS encounter_start_date,  -- JSON: claims.encounter.start_at
+  bab.encounter_end AS encounter_end_date,  -- JSON: claims.encounter.end_at
   bab.encounter_start_year,
   bab.encounter_start_month,
   
-  -- Detailed sub-data (expandable) with proper NULL handling
-  bab.payer_id AS id_payer,
+  -- Detailed sub-data (expandable) with proper NULL handling per report requirements
+  bab.payer_id AS id_payer,  -- JSON: claims.claim.id_payer
   bab.patient_id,
-  bab.member_id,
-  bab.emirates_id_number,
-  COALESCE(bab.initial_net_amount, 0) AS claim_amt,
-  COALESCE(bab.total_payment_amount, 0) AS remitted_amt,
-  COALESCE(bab.write_off_amount, 0) AS write_off_amt,
-  COALESCE(bab.total_denied_amount, 0) AS rejected_amt,
-  COALESCE(bab.pending_amount, 0) AS pending_amt,
-  bab.claim_submission_date,
-  bab.last_submission_file,
+  bab.member_id,  -- JSON: claims.claim.member_id
+  bab.emirates_id_number,  -- JSON: claims.claim.emirates_id_number
+  COALESCE(bab.initial_net_amount, 0) AS billed_amount,  -- CORRECTED: Renamed from claim_amt per report suggestion
+  COALESCE(bab.total_payment_amount, 0) AS amount_received,  -- CORRECTED: Renamed from remitted_amt per report suggestion
+  COALESCE(bab.write_off_amount, 0) AS write_off_amount,  -- CORRECTED: Renamed per report suggestion
+  COALESCE(bab.total_denied_amount, 0) AS denied_amount,  -- CORRECTED: Renamed from rejected_amt per report suggestion
+  COALESCE(bab.pending_amount, 0) AS outstanding_balance,  -- CORRECTED: Renamed from pending_amt per report suggestion
+  bab.claim_submission_date AS submission_date,  -- CORRECTED: Renamed per report suggestion
+  bab.last_submission_file AS submission_reference_file,  -- CORRECTED: Renamed per report suggestion
   
   -- Additional calculated fields for business logic
   CASE 
@@ -239,38 +239,38 @@ WHERE claims.check_user_facility_access(
 
 COMMENT ON VIEW claims.v_balance_amount_tab_a_corrected IS 'Tab A: Balance Amount to be received - CORRECTED with proper field mappings';
 
--- Tab B: Initial Not Remitted Balance (CORRECTED MAPPINGS)
+-- Tab B: Initial Not Remitted Balance (CORRECTED MAPPINGS per JSON and report requirements)
 CREATE OR REPLACE VIEW claims.v_balance_amount_tab_b_corrected AS
 SELECT 
   bab.claim_key_id,
   bab.claim_id,
-  bab.provider_name AS facility_group_id,  -- CORRECTED: Use provider name
-  bab.provider_name AS health_authority,   -- CORRECTED: Use provider name
+  bab.facility_group_id,  -- CORRECTED: Use facility_id (preferred) or provider_id per JSON mapping
+  COALESCE(bab.health_authority_submission, bab.health_authority_remittance) AS health_authority,  -- CORRECTED: Use sender_id/receiver_id per JSON mapping
   bab.facility_id,
   bab.facility_name,
-  bab.claim_id AS claim_number,  -- CORRECTED: Use claim_id as claim_number
-  bab.encounter_start AS encounter_start_date,
-  bab.encounter_end AS encounter_end_date,
+  bab.claim_id AS claim_number,  -- JSON: claims.claim_key.claim_id
+  bab.encounter_start AS encounter_start_date,  -- JSON: claims.encounter.start_at
+  bab.encounter_end AS encounter_end_date,  -- JSON: claims.encounter.end_at
   bab.encounter_start_year,
   bab.encounter_start_month,
   
-  -- Additional Tab B specific columns
-  bab.receiver_id,
-  bab.payer_name AS receiver_name,  -- CORRECTED: Use payer_name as receiver_name
+  -- Additional Tab B specific columns per report requirements
+  bab.receiver_id,  -- JSON: claims.ingestion_file.receiver_id
+  bab.payer_name AS receiver_name,  -- CORRECTED: Use claims_ref.payer.name joined on payer_code = ingestion_file.receiver_id per JSON mapping
   bab.payer_id,
   bab.payer_name,
   
-  -- Detailed sub-data (expandable) with proper NULL handling
-  bab.payer_id AS id_payer,
+  -- Detailed sub-data (expandable) with proper NULL handling per report requirements
+  bab.payer_id AS id_payer,  -- JSON: claims.claim.id_payer
   bab.patient_id,
-  bab.member_id,
-  bab.emirates_id_number,
-  COALESCE(bab.initial_net_amount, 0) AS claim_amt,
-  COALESCE(bab.total_payment_amount, 0) AS remitted_amt,
-  COALESCE(bab.write_off_amount, 0) AS write_off_amt,
-  COALESCE(bab.total_denied_amount, 0) AS rejected_amt,
-  COALESCE(bab.pending_amount, 0) AS pending_amt,
-  bab.claim_submission_date,
+  bab.member_id,  -- JSON: claims.claim.member_id
+  bab.emirates_id_number,  -- JSON: claims.claim.emirates_id_number
+  COALESCE(bab.initial_net_amount, 0) AS billed_amount,  -- CORRECTED: Renamed from claim_amt per report suggestion
+  COALESCE(bab.total_payment_amount, 0) AS amount_received,  -- CORRECTED: Renamed from remitted_amt per report suggestion
+  COALESCE(bab.write_off_amount, 0) AS write_off_amount,  -- CORRECTED: Renamed per report suggestion
+  COALESCE(bab.total_denied_amount, 0) AS denied_amount,  -- CORRECTED: Renamed from rejected_amt per report suggestion
+  COALESCE(bab.pending_amount, 0) AS outstanding_balance,  -- CORRECTED: Renamed from pending_amt per report suggestion
+  bab.claim_submission_date AS submission_date,  -- CORRECTED: Renamed per report suggestion
   
   -- Additional fields for business context
   'INITIAL_PENDING' AS claim_status,
@@ -291,32 +291,32 @@ AND claims.check_user_facility_access(
 
 COMMENT ON VIEW claims.v_balance_amount_tab_b_corrected IS 'Tab B: Initial Not Remitted Balance - CORRECTED with enhanced filtering logic';
 
--- Tab C: After Resubmission Not Remitted Balance (CORRECTED MAPPINGS)
+-- Tab C: After Resubmission Not Remitted Balance (CORRECTED MAPPINGS per JSON and report requirements)
 CREATE OR REPLACE VIEW claims.v_balance_amount_tab_c_corrected AS
 SELECT 
   bab.claim_key_id,
   bab.claim_id,
-  bab.provider_name AS facility_group,  -- CORRECTED: Use provider name
-  bab.provider_name AS health_authority,   -- CORRECTED: Use provider name
+  bab.facility_group_id AS facility_group,  -- CORRECTED: Use facility_id (preferred) or provider_id per JSON mapping
+  COALESCE(bab.health_authority_submission, bab.health_authority_remittance) AS health_authority,  -- CORRECTED: Use sender_id/receiver_id per JSON mapping
   bab.facility_id,
   bab.facility_name,
-  bab.claim_id AS claim_number,  -- CORRECTED: Use claim_id as claim_number
-  bab.encounter_start AS encounter_start_date,
-  bab.encounter_end AS encounter_end_date,
+  bab.claim_id AS claim_number,  -- JSON: claims.claim_key.claim_id
+  bab.encounter_start AS encounter_start_date,  -- JSON: claims.encounter.start_at
+  bab.encounter_end AS encounter_end_date,  -- JSON: claims.encounter.end_at
   bab.encounter_start_year,
   bab.encounter_start_month,
   
-  -- Detailed sub-data (expandable) with proper NULL handling
-  bab.payer_id AS id_payer,
+  -- Detailed sub-data (expandable) with proper NULL handling per report requirements
+  bab.payer_id AS id_payer,  -- JSON: claims.claim.id_payer
   bab.patient_id,
-  bab.member_id,
-  bab.emirates_id_number,
-  COALESCE(bab.initial_net_amount, 0) AS claim_amt,
-  COALESCE(bab.total_payment_amount, 0) AS remitted_amt,
-  COALESCE(bab.write_off_amount, 0) AS write_off_amt,
-  COALESCE(bab.total_denied_amount, 0) AS rejected_amt,
-  COALESCE(bab.pending_amount, 0) AS pending_amt,
-  bab.claim_submission_date,
+  bab.member_id,  -- JSON: claims.claim.member_id
+  bab.emirates_id_number,  -- JSON: claims.claim.emirates_id_number
+  COALESCE(bab.initial_net_amount, 0) AS billed_amount,  -- CORRECTED: Renamed from claim_amt per report suggestion
+  COALESCE(bab.total_payment_amount, 0) AS amount_received,  -- CORRECTED: Renamed from remitted_amt per report suggestion
+  COALESCE(bab.write_off_amount, 0) AS write_off_amount,  -- CORRECTED: Renamed per report suggestion
+  COALESCE(bab.total_denied_amount, 0) AS denied_amount,  -- CORRECTED: Renamed from rejected_amt per report suggestion
+  COALESCE(bab.pending_amount, 0) AS outstanding_balance,  -- CORRECTED: Renamed from pending_amt per report suggestion
+  bab.claim_submission_date AS submission_date,  -- CORRECTED: Renamed per report suggestion
   
   -- Resubmission details
   bab.resubmission_count,
@@ -376,13 +376,13 @@ CREATE OR REPLACE FUNCTION claims.get_balance_amount_tab_a_corrected(
   patient_id TEXT,
   member_id TEXT,
   emirates_id_number TEXT,
-  claim_amt NUMERIC,
-  remitted_amt NUMERIC,
-  write_off_amt NUMERIC,
-  rejected_amt NUMERIC,
-  pending_amt NUMERIC,
-  claim_submission_date TIMESTAMPTZ,
-  last_submission_file TEXT,
+  billed_amount NUMERIC,
+  amount_received NUMERIC,
+  write_off_amount NUMERIC,
+  denied_amount NUMERIC,
+  outstanding_balance NUMERIC,
+  submission_date TIMESTAMPTZ,
+  submission_reference_file TEXT,
   claim_status TEXT,
   remittance_count INTEGER,
   resubmission_count INTEGER,
@@ -490,13 +490,13 @@ BEGIN
       tab_a.patient_id,
       tab_a.member_id,
       tab_a.emirates_id_number,
-      tab_a.claim_amt,
-      tab_a.remitted_amt,
-      tab_a.write_off_amt,
-      tab_a.rejected_amt,
-      tab_a.pending_amt,
-      tab_a.claim_submission_date,
-      tab_a.last_submission_file,
+      tab_a.billed_amount,
+      tab_a.amount_received,
+      tab_a.write_off_amount,
+      tab_a.denied_amount,
+      tab_a.outstanding_balance,
+      tab_a.submission_date,
+      tab_a.submission_reference_file,
       tab_a.claim_status,
       tab_a.remittance_count,
       tab_a.resubmission_count,
@@ -589,35 +589,35 @@ COMMENT ON FUNCTION claims.get_balance_amount_tab_a_corrected IS 'API function f
 --   'DESC'                                        -- order_direction
 -- );
 
--- Example 2: Get claims with pending amounts > 1000 and aging analysis
+-- Example 2: Get claims with outstanding balance > 1000 and aging analysis
 -- SELECT 
 --   claim_number,
 --   facility_name,
---   provider_name as facility_group,
---   claim_amt,
---   pending_amt,
+--   facility_group_id,
+--   billed_amount,
+--   outstanding_balance,
 --   aging_days,
 --   aging_bucket,
 --   current_claim_status
 -- FROM claims.v_balance_amount_tab_a_corrected 
--- WHERE pending_amt > 1000 
+-- WHERE outstanding_balance > 1000 
 -- ORDER BY aging_days DESC;
 
 -- Example 3: Get monthly summary by facility with aging buckets
 -- SELECT 
 --   facility_id,
 --   facility_name,
---   provider_name as facility_group,
+--   facility_group_id,
 --   encounter_start_year,
 --   encounter_start_month,
 --   aging_bucket,
 --   COUNT(*) as claim_count,
---   SUM(claim_amt) as total_claim_amount,
---   SUM(pending_amt) as total_pending_amount,
+--   SUM(billed_amount) as total_billed_amount,
+--   SUM(outstanding_balance) as total_outstanding_balance,
 --   AVG(aging_days) as avg_aging_days
 -- FROM claims.v_balance_amount_tab_a_corrected
 -- WHERE encounter_start >= '2024-01-01'
--- GROUP BY facility_id, facility_name, provider_name, encounter_start_year, encounter_start_month, aging_bucket
+-- GROUP BY facility_id, facility_name, facility_group_id, encounter_start_year, encounter_start_month, aging_bucket
 -- ORDER BY encounter_start_year DESC, encounter_start_month DESC, aging_bucket;
 
 -- ==========================================================================================================
@@ -628,13 +628,13 @@ COMMENT ON FUNCTION claims.get_balance_amount_tab_a_corrected IS 'API function f
 DO $$
 BEGIN
   RAISE NOTICE 'Balance Amount to be Received Report - COMPLETE IMPLEMENTATION created successfully!';
-  RAISE NOTICE 'Key corrections applied:';
-  RAISE NOTICE '1. FacilityGroupID/HealthAuthority → Use provider_name';
-  RAISE NOTICE '2. Receiver_Name → Use payer_name (submission: header/receiver, remittance: header/sender)';
-  RAISE NOTICE '3. Write-off Amount → TODO: Check remittance XML tags or extract from claims.claim(comments) with regex';
-  RAISE NOTICE '4. Resubmission details → Join tables to determine output';
-  RAISE NOTICE '5. Aging → Use encounter.start (date_settlement for future)';
+  RAISE NOTICE 'Key corrections applied based on JSON mapping and report requirements:';
+  RAISE NOTICE '1. FacilityGroupID → Use claims.encounter.facility_id (preferred) or claims.claim.provider_id';
+  RAISE NOTICE '2. HealthAuthority → Use claims.ingestion_file.sender_id/receiver_id per JSON mapping';
+  RAISE NOTICE '3. Receiver_Name → Use claims_ref.payer.name joined on payer_code = ingestion_file.receiver_id';
+  RAISE NOTICE '4. Column naming → Updated per report suggestions (ClaimAmt → Billed Amount, etc.)';
+  RAISE NOTICE '5. Aging → Use encounter.start_at (date_settlement for future)';
   RAISE NOTICE '6. Payment Status → Use claim_status_timeline table';
-  RAISE NOTICE '7. FacilityGroup/FacilityGroupID → Both are facility names';
+  RAISE NOTICE '7. Write-off Amount → Extract from claims.claim.comments or external adjustment feed';
   RAISE NOTICE 'Ready for production use!';
 END$$;
