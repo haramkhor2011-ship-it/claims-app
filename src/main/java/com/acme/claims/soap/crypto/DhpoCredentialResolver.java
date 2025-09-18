@@ -20,7 +20,7 @@ public class DhpoCredentialResolver {
 
     public DhpoCredentials resolve(FacilityDhpoConfig f) {
         // enc_meta_json -> {kek_version, alg, iv, tagBits, keyId?}
-        var meta = new JSONObject(f.getEncMetaJson());
+        JSONObject meta = new JSONObject(f.getEncMetaJson());
         String ivB64 = meta.optString("iv", null);
         int tagBits = meta.optInt("tagBits", 128);
         String keyId  = meta.optString("kek_version", "v1");
@@ -32,8 +32,8 @@ public class DhpoCredentialResolver {
             return new DhpoCredentials(new String(f.getDhpoUsernameEnc()), new String(f.getDhpoPasswordEnc()));
         }
 
-        var userBlob = new AesGcmCrypto.Blob(Base64.getDecoder().decode(ivB64), f.getDhpoUsernameEnc(), tagBits, keyId);
-        var passBlob = new AesGcmCrypto.Blob(Base64.getDecoder().decode(ivB64), f.getDhpoPasswordEnc(), tagBits, keyId);
+        AesGcmCrypto.Blob userBlob = new AesGcmCrypto.Blob(Base64.getDecoder().decode(ivB64), f.getDhpoUsernameEnc(), tagBits, keyId);
+        AesGcmCrypto.Blob passBlob = new AesGcmCrypto.Blob(Base64.getDecoder().decode(ivB64), f.getDhpoPasswordEnc(), tagBits, keyId);
 
         String user = new String(AesGcmCrypto.decrypt(key, userBlob, facilityAad(f)));
         String pass = new String(AesGcmCrypto.decrypt(key, passBlob, facilityAad(f)));

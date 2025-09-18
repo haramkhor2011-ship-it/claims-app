@@ -215,8 +215,8 @@ public class PersistService {
                 projectActivitiesToClaimEventFromRemittance(ev, c.activities());
 
                 // Decide status from amounts & denials
-                var netRequested = fetchSubmissionNetRequested(claimKeyId);  // sum of submission activity.net
-                var paidAmount = fetchRemittancePaidAmount(rcId);          // sum of remit activity.payment_amount
+                BigDecimal netRequested = fetchSubmissionNetRequested(claimKeyId);  // sum of submission activity.net
+                BigDecimal paidAmount = fetchRemittancePaidAmount(rcId);          // sum of remit activity.payment_amount
                 boolean allDenied = areAllRemitActivitiesDenied(rcId);
 
                 short status;

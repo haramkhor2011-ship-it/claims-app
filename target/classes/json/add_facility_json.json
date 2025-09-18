@@ -1,0 +1,8 @@
+{
+  "facilityCode": "HOSP1",
+  "facilityName": "City Hospital",
+  "endpointUrl": "https://dhpo.eclaimlink.ae/ValidateTransactions.asmx",
+  "endpointUrlForErx": "https://dhpo.eclaimlink.ae/eRxValidateTransactions.asmx",
+  "login": "dhpo_user_hosp1",
+  "password": "S3cureP@ss!"
+}

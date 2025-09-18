@@ -41,3 +41,14 @@ dhpo:
     downloadTimeoutMs: 120000
     stageToDiskThresholdMb: 25
 
+claims.security.ame:
+  enabled: true
+  keystore:
+    type: "JKS"                    # or "PKCS12" or "FILE"
+    path: "file:config/claims.jks" # or "file:config/claims.p12" or "file:config/ame.key"
+    alias: "claims-ame"
+    passwordEnv: "CLAIMS_AME_STORE_PASS"   # only store/pass are env-based
+  crypto:
+    kekRotationAllowed: true
+    gcmTagBits: 128
+    keyId : claims-ame.v1 #  used in enc_meta to mark which key encrypted the row

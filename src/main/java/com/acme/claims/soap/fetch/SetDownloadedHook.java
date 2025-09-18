@@ -3,6 +3,7 @@ package com.acme.claims.soap.fetch;
 
 import com.acme.claims.domain.repo.FacilityDhpoConfigRepo;
 import com.acme.claims.security.ame.CredsCipherService;
+import com.acme.claims.security.ame.CredsCipherService.PlainCreds;
 import com.acme.claims.soap.SoapGateway;
 import com.acme.claims.soap.db.ToggleRepo;
 import com.acme.claims.soap.parse.SetDownloadedParser;
@@ -11,6 +12,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
+import java.util.Optional;
+import com.acme.claims.soap.SoapGateway.SoapRequest;
+import com.acme.claims.soap.SoapGateway.SoapResponse;
+import com.acme.claims.soap.parse.SetDownloadedParser.Result;
+import com.acme.claims.domain.model.entity.FacilityDhpoConfig;
 
 @Slf4j
 @Service
@@ -33,7 +39,7 @@ public class SetDownloadedHook {
             log.debug("SetDownloaded disabled; skipping for facility={} fileId={}", facilityCode, fileId);
             return;
         }
-        var f = facilities.findByActiveTrue().stream()
+        FacilityDhpoConfig f = facilities.findByActiveTrue().stream()
                 .filter(x -> x.getFacilityCode().equals(facilityCode)).findFirst()
                 .orElse(null);
         if (f == null) {
@@ -41,10 +47,10 @@ public class SetDownloadedHook {
             return;
         }
         try {
-            var plain = creds.decryptFor(f);
-            var req = SetTransactionDownloadedRequest.build(plain.login(), plain.pwd(), fileId, Boolean.FALSE);
-            var resp = gateway.call(req);
-            var parsed = new SetDownloadedParser().parse(resp.envelopeXml());
+            PlainCreds plain = creds.decryptFor(f);
+            SoapRequest req = SetTransactionDownloadedRequest.build(plain.login(), plain.pwd(), fileId, Boolean.FALSE);
+            SoapResponse resp = gateway.call(req);
+            Result parsed = new SetDownloadedParser().parse(resp.envelopeXml());
             if (parsed.code() > 0 || parsed.code() == 0) {
                 log.info("SetDownloaded OK facility={} fileId={} code={}", facilityCode, fileId, parsed.code());
             } else {

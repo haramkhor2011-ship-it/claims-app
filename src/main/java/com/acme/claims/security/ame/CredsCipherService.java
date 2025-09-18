@@ -54,7 +54,7 @@ public class CredsCipherService {
 
     /** Generic helper; prefers specific iv keyName, falls back to 'iv'. */
     private String decryptWithIvKey(byte[] ct, String encMetaJson, String facilityCode, String ivKeyName) {
-        var meta = parseMeta(encMetaJson);
+        JSONObject meta = parseMeta(encMetaJson);
         int tagBits = meta.optInt("gcmTagBits", props.crypto().gcmTagBits());
         String keyId = meta.optString("keyId", props.crypto().keyId());
 
@@ -63,7 +63,7 @@ public class CredsCipherService {
         if (isBlank(ivB64)) throw new IllegalStateException("Missing IV in enc_meta_json (" + ivKeyName + "/iv)");
 
         SecretKey key = keyProvider.getKey();
-        var blob = new AesGcmCrypto.Blob(Base64.getDecoder().decode(ivB64), ct, tagBits, keyId);
+        AesGcmCrypto.Blob blob = new AesGcmCrypto.Blob(Base64.getDecoder().decode(ivB64), ct, tagBits, keyId);
         byte[] pt = AesGcmCrypto.decrypt(key, blob, aad(facilityCode));
         return new String(pt, StandardCharsets.UTF_8);
     }
@@ -77,10 +77,10 @@ public class CredsCipherService {
         int tagBits = props.crypto().gcmTagBits();
         String keyId = props.crypto().keyId();
 
-        var ebLogin = AesGcmCrypto.encrypt(key, bytes(login), aad(facilityCode), tagBits, keyId);
-        var ebPwd   = AesGcmCrypto.encrypt(key, bytes(pwd),   aad(facilityCode), tagBits, keyId);
+        AesGcmCrypto.Blob ebLogin = AesGcmCrypto.encrypt(key, bytes(login), aad(facilityCode), tagBits, keyId);
+        AesGcmCrypto.Blob ebPwd   = AesGcmCrypto.encrypt(key, bytes(pwd),   aad(facilityCode), tagBits, keyId);
 
-        var meta = new JSONObject();
+        JSONObject meta = new JSONObject();
         meta.put("v", 1);
         meta.put("alg", "AES-256-GCM");
         meta.put("gcmTagBits", tagBits);

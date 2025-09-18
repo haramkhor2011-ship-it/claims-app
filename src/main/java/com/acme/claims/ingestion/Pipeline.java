@@ -10,7 +10,9 @@
 package com.acme.claims.ingestion;
 
 import com.acme.claims.domain.model.dto.RemittanceAdviceDTO;
+import com.acme.claims.domain.model.dto.RemittanceClaimDTO;
 import com.acme.claims.domain.model.dto.SubmissionDTO;
+import com.acme.claims.domain.model.dto.SubmissionClaimDTO;
 import com.acme.claims.domain.model.entity.IngestionFile;
 import com.acme.claims.ingestion.audit.ErrorLogger;
 import com.acme.claims.ingestion.config.IngestionProperties;
@@ -123,7 +125,7 @@ public class Pipeline {
                     }
 
                     // 5) Persist graph + events/timeline
-                    var counts = persist.persistSubmission(filePk, dto, out.getAttachments());
+                    var counts = persist.persistSubmission(filePk, dto, out.getAttachments()); // Return type not easily determined
                     log.info("submission persisted");
                     maybeArchive(wi, true);
                     return new Result(filePk, 1, dto.claims().size(), counts.claims(), countActs(dto), counts.acts(), dto.header().transactionDate());
@@ -167,7 +169,7 @@ public class Pipeline {
                         return new Result(filePk, 2, dto.claims().size(), 0, countActs(dto), 0, dto.header().transactionDate());
                     }
 
-                    var counts = persist.persistRemittance(filePk, dto);
+                    var counts = persist.persistRemittance(filePk, dto); // Return type not easily determined
                     maybeArchive(wi, true);
                     return new Result(filePk, 2, dto.claims().size(), counts.remitClaims(), countActs(dto), counts.remitActs(), dto.header().transactionDate());
                 }
@@ -259,7 +261,7 @@ public class Pipeline {
         if (f.claims() == null || f.claims().isEmpty()) throw new IllegalArgumentException("No claims in submission");
         if (!Objects.equals(f.header().recordCount(), f.claims().size()))
             throw new IllegalArgumentException("RecordCount mismatch in submission");
-        for (var c : f.claims()) {
+        for (SubmissionClaimDTO c : f.claims()) {
             req(c.id(), "Claim.ID");
             req(c.payerId(), "Claim.PayerID (claimId=" + c.id() + ")");
             req(c.providerId(), "Claim.ProviderID (claimId=" + c.id() + ")");
@@ -278,7 +280,7 @@ public class Pipeline {
         if (f.claims() == null || f.claims().isEmpty()) throw new IllegalArgumentException("No claims in remittance");
         if (!Objects.equals(f.header().recordCount(), f.claims().size()))
             throw new IllegalArgumentException("RecordCount mismatch in remittance");
-        for (var c : f.claims()) {
+        for (RemittanceClaimDTO c : f.claims()) {
             req(c.id(), "Claim.ID");
             req(c.idPayer(), "Claim.IDPayer (claimId=" + c.id() + ")");
             req(c.paymentReference(), "Claim.PaymentReference (claimId=" + c.id() + ")");

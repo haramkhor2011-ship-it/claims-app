@@ -47,7 +47,7 @@ public class StagingService {
         return n;
     }
     private static String sha256Name(byte[] bytes) throws Exception {
-        var md = MessageDigest.getInstance("SHA-256");
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
         md.update(bytes);
         return HexFormat.of().formatHex(md.digest()) + ".xml";
     }

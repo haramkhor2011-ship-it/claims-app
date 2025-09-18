@@ -1,6 +1,7 @@
 package com.acme.claims.admin;
 
 import com.acme.claims.security.ame.CredsCipherService;
+import com.acme.claims.security.ame.CredsCipherService.CipherCreds;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -15,7 +16,7 @@ public class FacilityAdminService {
 
     public void upsert(FacilityDto dto) {
         validate(dto);
-        var c = cipher.encrypt(dto.facilityCode(), dto.login(), dto.password());
+        CipherCreds c = cipher.encrypt(dto.facilityCode(), dto.login(), dto.password());
         jdbc.update("""
                           insert into claims.facility_dhpo_config
                             (facility_code, facility_name,dhpo_username_enc, dhpo_password_enc, enc_meta)
@@ -31,7 +32,7 @@ public class FacilityAdminService {
     }
 
     public FacilityView get(String facilityCode) {
-        var f = jdbc.query("""
+        FacilityView f = jdbc.query("""
                           select facility_code, facility_name from claims.facility_dhpo_config where facility_code=?
                         """, ps -> ps.setString(1, facilityCode),
                 rs -> rs.next() ? new FacilityView(
