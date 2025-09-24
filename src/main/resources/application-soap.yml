@@ -7,8 +7,15 @@ spring:
         max-size: 16
 
 claims:
+  ingestion:
+    concurrency:
+      parserWorkers: 16
+    queue:
+      capacity: 512
+    poll:
+      fixedDelayMs: 1000
   soap:
-    downloadConcurrency: 8
+    downloadConcurrency: 16
     transport: http
     endpoint: "https://dhpo.eclaimlink.ae/validateTransactions.asmx"
     # SOAP 1.1 default (SOAPAction is set). Keep switch if you ever need 1.2 later.
@@ -19,7 +26,7 @@ claims:
       maxAttempts: 3        # 1 retry total
       backoffMs: 500
     poll:
-      fixedDelayMs: 1800000    # 4s between delta polls per facility
+      fixedDelayMs: 1800000    # 30 min between delta polls per facility
   fetch:
     stageToDisk:
       force: false          # global override

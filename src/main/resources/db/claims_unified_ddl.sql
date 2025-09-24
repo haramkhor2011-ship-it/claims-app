@@ -283,7 +283,8 @@ CREATE TABLE IF NOT EXISTS claims_ref.encounter_end_type (
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.ingestion_file (
   id                     BIGSERIAL PRIMARY KEY,
-  file_id                TEXT NOT NULL,                                        -- External idempotency key
+  file_id                TEXT NOT NULL,  
+  file_name              TEXT NOT NULL,                                       -- External idempotency key
   root_type              SMALLINT NOT NULL CHECK (root_type IN (1,2)),        -- 1=Submission, 2=Remittance
   -- XSD Header (common to both schemas)
   sender_id              TEXT NOT NULL,
@@ -296,7 +297,7 @@ CREATE TABLE IF NOT EXISTS claims.ingestion_file (
   -- Audit fields
   created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT uq_ingestion_file UNIQUE (file_id)
+  CONSTRAINT uq_ingestion_file UNIQUE (file_id, file_name)
 );
 
 COMMENT ON TABLE claims.ingestion_file IS 'SSOT: Raw XML + XSD Header; duplicate files rejected by unique(file_id)';
@@ -311,6 +312,27 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_file_transaction_date ON claims.ingesti
 CREATE TRIGGER trg_ingestion_file_updated_at
   BEFORE UPDATE ON claims.ingestion_file
   FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
+
+-- Ingestion error tracking  
+CREATE TABLE IF NOT EXISTS claims.ingestion_error (
+  id                 BIGSERIAL PRIMARY KEY,
+  ingestion_file_id  BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE CASCADE,
+  stage              TEXT NOT NULL,
+  object_type        TEXT,
+  object_key         TEXT,
+  error_code         TEXT,
+  error_message      TEXT NOT NULL,
+  stack_excerpt      TEXT,
+  retryable          BOOLEAN NOT NULL DEFAULT FALSE,
+  occurred_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE claims.ingestion_error IS 'Error tracking during file ingestion';
+
+CREATE INDEX IF NOT EXISTS idx_ingestion_error_file ON claims.ingestion_error(ingestion_file_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_error_stage ON claims.ingestion_error(stage);
+CREATE INDEX IF NOT EXISTS idx_ingestion_error_time ON claims.ingestion_error(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_ingestion_error_retryable ON claims.ingestion_error(retryable);
 
 -- ----------------------------------------------------------------------------------------------------------
 -- 6.2 CANONICAL CLAIM KEY
@@ -339,7 +361,8 @@ CREATE TABLE IF NOT EXISTS claims.submission (
   id                 BIGSERIAL PRIMARY KEY,
   ingestion_file_id  BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE RESTRICT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  tx_at              TIMESTAMPTZ NOT NULL
 );
 
 COMMENT ON TABLE claims.submission IS 'Submission grouping (one per ingestion file)';
@@ -365,9 +388,13 @@ CREATE TABLE IF NOT EXISTS claims.claim (
   patient_share      NUMERIC(14,2) NOT NULL CHECK (patient_share >= 0),
   net                NUMERIC(14,2) NOT NULL CHECK (net >= 0),
   comments           TEXT,                                                 -- Store comments if found
+  -- Reference data foreign keys
+  payer_ref_id       BIGINT,
+  provider_ref_id    BIGINT,
   -- Audit fields
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  tx_at              TIMESTAMPTZ NOT NULL,                                 -- Transaction timestamp
   -- Idempotency constraints
   CONSTRAINT uq_claim_per_key UNIQUE (claim_key_id),                       -- One claim per key globally
   CONSTRAINT uq_claim_submission_claimkey UNIQUE (submission_id, claim_key_id)
@@ -393,12 +420,13 @@ CREATE TABLE IF NOT EXISTS claims.encounter (
   facility_id           TEXT NOT NULL,
   type                  TEXT NOT NULL,
   patient_id            TEXT NOT NULL,
-  start                 TIMESTAMPTZ NOT NULL,
-  end                   TIMESTAMPTZ,
+  start_at              TIMESTAMPTZ NOT NULL,
+  end_at                TIMESTAMPTZ,
   start_type            TEXT,
   end_type              TEXT,
   transfer_source       TEXT,
   transfer_destination  TEXT,
+  facility_ref_id       BIGINT,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -408,7 +436,7 @@ COMMENT ON TABLE claims.encounter IS 'Encounter details for submission claims';
 CREATE INDEX IF NOT EXISTS idx_encounter_claim ON claims.encounter(claim_id);
 CREATE INDEX IF NOT EXISTS idx_encounter_facility ON claims.encounter(facility_id);
 CREATE INDEX IF NOT EXISTS idx_encounter_patient ON claims.encounter(patient_id);
-CREATE INDEX IF NOT EXISTS idx_encounter_start ON claims.encounter(start);
+CREATE INDEX IF NOT EXISTS idx_encounter_start ON claims.encounter(start_at);
 
 CREATE TRIGGER trg_encounter_updated_at
   BEFORE UPDATE ON claims.encounter
@@ -416,19 +444,20 @@ CREATE TRIGGER trg_encounter_updated_at
 
 -- Diagnosis (submission)
 CREATE TABLE IF NOT EXISTS claims.diagnosis (
-  id          BIGSERIAL PRIMARY KEY,
-  claim_id    BIGINT NOT NULL REFERENCES claims.claim(id) ON DELETE CASCADE,
-  type        TEXT NOT NULL,
-  code        TEXT NOT NULL,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                    BIGSERIAL PRIMARY KEY,
+  claim_id              BIGINT NOT NULL REFERENCES claims.claim(id) ON DELETE CASCADE,
+  diag_type             TEXT NOT NULL,
+  code                  TEXT NOT NULL,
+  diagnosis_code_ref_id BIGINT,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 COMMENT ON TABLE claims.diagnosis IS 'Diagnosis codes for submission claims';
 
 CREATE INDEX IF NOT EXISTS idx_diagnosis_claim ON claims.diagnosis(claim_id);
 CREATE INDEX IF NOT EXISTS idx_diagnosis_code ON claims.diagnosis(code);
-CREATE INDEX IF NOT EXISTS idx_diagnosis_type ON claims.diagnosis(type);
+CREATE INDEX IF NOT EXISTS idx_diagnosis_type ON claims.diagnosis(diag_type);
 
 CREATE TRIGGER trg_diagnosis_updated_at
   BEFORE UPDATE ON claims.diagnosis
@@ -439,13 +468,15 @@ CREATE TABLE IF NOT EXISTS claims.activity (
   id                    BIGSERIAL PRIMARY KEY,
   claim_id              BIGINT NOT NULL REFERENCES claims.claim(id) ON DELETE CASCADE,
   activity_id           TEXT NOT NULL,
-  start                 TIMESTAMPTZ NOT NULL,
+  start_at              TIMESTAMPTZ NOT NULL,
   type                  TEXT NOT NULL,
   code                  TEXT NOT NULL,
   quantity              NUMERIC(14,2) NOT NULL CHECK (quantity >= 0),
   net                   NUMERIC(14,2) NOT NULL CHECK (net >= 0),
   clinician             TEXT NOT NULL,
   prior_authorization_id TEXT,
+  clinician_ref_id      BIGINT,
+  activity_code_ref_id  BIGINT,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_activity_claim_id UNIQUE (claim_id, activity_id)
@@ -456,7 +487,7 @@ COMMENT ON TABLE claims.activity IS 'Activities for submission claims';
 CREATE INDEX IF NOT EXISTS idx_activity_claim ON claims.activity(claim_id);
 CREATE INDEX IF NOT EXISTS idx_activity_code ON claims.activity(code);
 CREATE INDEX IF NOT EXISTS idx_activity_clinician ON claims.activity(clinician);
-CREATE INDEX IF NOT EXISTS idx_activity_start ON claims.activity(start);
+CREATE INDEX IF NOT EXISTS idx_activity_start ON claims.activity(start_at);
 
 CREATE TRIGGER trg_activity_updated_at
   BEFORE UPDATE ON claims.activity
@@ -466,9 +497,9 @@ CREATE TRIGGER trg_activity_updated_at
 CREATE TABLE IF NOT EXISTS claims.observation (
   id          BIGSERIAL PRIMARY KEY,
   activity_id BIGINT NOT NULL REFERENCES claims.activity(id) ON DELETE CASCADE,
-  type        TEXT NOT NULL,
-  code        TEXT NOT NULL,
-  value       TEXT,
+  obs_type    TEXT NOT NULL,
+  obs_code    TEXT NOT NULL,
+  value_text  TEXT,
   value_type  TEXT,
   file_bytes  BYTEA,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -478,8 +509,8 @@ CREATE TABLE IF NOT EXISTS claims.observation (
 COMMENT ON TABLE claims.observation IS 'Observations for submission activities';
 
 CREATE INDEX IF NOT EXISTS idx_observation_activity ON claims.observation(activity_id);
-CREATE INDEX IF NOT EXISTS idx_observation_type ON claims.observation(type);
-CREATE INDEX IF NOT EXISTS idx_observation_code ON claims.observation(code);
+CREATE INDEX IF NOT EXISTS idx_observation_type ON claims.observation(obs_type);
+CREATE INDEX IF NOT EXISTS idx_observation_code ON claims.observation(obs_code);
 
 CREATE TRIGGER trg_observation_updated_at
   BEFORE UPDATE ON claims.observation
@@ -534,7 +565,8 @@ CREATE TABLE IF NOT EXISTS claims.remittance (
   id                 BIGSERIAL PRIMARY KEY,
   ingestion_file_id  BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE RESTRICT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  tx_at              TIMESTAMPTZ NOT NULL
 );
 
 COMMENT ON TABLE claims.remittance IS 'Remittance grouping (one per ingestion file)';
@@ -556,6 +588,9 @@ CREATE TABLE IF NOT EXISTS claims.remittance_claim (
   payment_reference TEXT NOT NULL,
   date_settlement   TIMESTAMPTZ,
   facility_id       TEXT,
+  denial_code_ref_id BIGINT,
+  payer_ref_id      BIGINT,
+  provider_ref_id   BIGINT,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_remittance_claim_key UNIQUE (remittance_id, claim_key_id)
@@ -577,12 +612,12 @@ CREATE TABLE IF NOT EXISTS claims.remittance_activity (
   id                BIGSERIAL PRIMARY KEY,
   remittance_claim_id BIGINT NOT NULL REFERENCES claims.remittance_claim(id) ON DELETE CASCADE,
   activity_id       TEXT NOT NULL,
-  start             TIMESTAMPTZ NOT NULL,
+  start_at          TIMESTAMPTZ NOT NULL,
   type              TEXT NOT NULL,
   code              TEXT NOT NULL,
   quantity          NUMERIC(14,2) NOT NULL CHECK (quantity >= 0),
   net               NUMERIC(14,2) NOT NULL CHECK (net >= 0),
-  list              NUMERIC(14,2),
+  list_price        NUMERIC(14,2),
   clinician         TEXT NOT NULL,
   prior_authorization_id TEXT,
   gross             NUMERIC(14,2),
@@ -634,30 +669,30 @@ CREATE TRIGGER trg_attachment_updated_at
 -- 6.6 EVENT TRACKING AND AUDIT
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.claim_event (
-  id             BIGSERIAL PRIMARY KEY,
-  claim_key_id   BIGINT NOT NULL REFERENCES claims.claim_key(id) ON DELETE RESTRICT,
-  event_type     claims.claim_event_type NOT NULL,
-  submission_id  BIGINT REFERENCES claims.submission(id) ON DELETE SET NULL,
-  remittance_id  BIGINT REFERENCES claims.remittance(id) ON DELETE SET NULL,
-  event_time     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  event_data     JSONB,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                 BIGSERIAL PRIMARY KEY,
+  claim_key_id       BIGINT NOT NULL REFERENCES claims.claim_key(id) ON DELETE RESTRICT,
+  ingestion_file_id  BIGINT REFERENCES claims.ingestion_file(id) ON DELETE SET NULL,
+  event_time         TIMESTAMPTZ NOT NULL,
+  type               SMALLINT NOT NULL,
+  submission_id      BIGINT REFERENCES claims.submission(id) ON DELETE SET NULL,
+  remittance_id      BIGINT REFERENCES claims.remittance(id) ON DELETE SET NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 COMMENT ON TABLE claims.claim_event IS 'Event tracking for claims (submission, resubmission, remittance)';
 
 CREATE INDEX IF NOT EXISTS idx_claim_event_key ON claims.claim_event(claim_key_id);
-CREATE INDEX IF NOT EXISTS idx_claim_event_type ON claims.claim_event(event_type);
+CREATE INDEX IF NOT EXISTS idx_claim_event_type ON claims.claim_event(type);
 CREATE INDEX IF NOT EXISTS idx_claim_event_time ON claims.claim_event(event_time);
 CREATE INDEX IF NOT EXISTS idx_claim_event_created ON claims.claim_event(created_at);
 
 -- Claim resubmission (1:1 with RESUBMISSION event)
 CREATE TABLE IF NOT EXISTS claims.claim_resubmission (
   id                 BIGSERIAL PRIMARY KEY,
-  claim_event_id     BIGINT NOT NULL UNIQUE REFERENCES claims.claim_event(id) ON DELETE CASCADE,
-  resubmission_id    TEXT NOT NULL,
-  original_claim_id  TEXT NOT NULL,
-  reason             TEXT,
+  claim_event_id     BIGINT NOT NULL REFERENCES claims.claim_event(id) ON DELETE CASCADE,
+  resubmission_type  TEXT NOT NULL,
+  comment            TEXT NOT NULL,
+  attachment         BYTEA,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -673,17 +708,24 @@ CREATE TRIGGER trg_claim_resubmission_updated_at
 
 -- Activity snapshots at event time
 CREATE TABLE IF NOT EXISTS claims.claim_event_activity (
-  id                     BIGSERIAL PRIMARY KEY,
-  claim_event_id         BIGINT NOT NULL REFERENCES claims.claim_event(id) ON DELETE CASCADE,
-  activity_id_at_event   TEXT NOT NULL,
-  start                  TIMESTAMPTZ NOT NULL,
-  type                   TEXT NOT NULL,
-  code                   TEXT NOT NULL,
-  quantity               NUMERIC(14,2) NOT NULL CHECK (quantity >= 0),
-  net                    NUMERIC(14,2) NOT NULL CHECK (net >= 0),
-  clinician              TEXT NOT NULL,
-  prior_authorization_id TEXT,
-  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                               BIGSERIAL PRIMARY KEY,
+  claim_event_id                   BIGINT NOT NULL REFERENCES claims.claim_event(id) ON DELETE CASCADE,
+  activity_id_ref                  BIGINT REFERENCES claims.activity(id) ON DELETE SET NULL,
+  remittance_activity_id_ref       BIGINT REFERENCES claims.remittance_activity(id) ON DELETE SET NULL,
+  activity_id_at_event             TEXT NOT NULL,
+  start_at_event                   TIMESTAMPTZ NOT NULL,
+  type_at_event                    TEXT NOT NULL,
+  code_at_event                    TEXT NOT NULL,
+  quantity_at_event                NUMERIC(14,2) NOT NULL CHECK (quantity_at_event >= 0),
+  net_at_event                     NUMERIC(14,2) NOT NULL CHECK (net_at_event >= 0),
+  clinician_at_event               TEXT NOT NULL,
+  prior_authorization_id_at_event  TEXT,
+  list_price_at_event              NUMERIC(14,2),
+  gross_at_event                   NUMERIC(14,2),
+  patient_share_at_event           NUMERIC(14,2),
+  payment_amount_at_event          NUMERIC(14,2),
+  denial_code_at_event             TEXT,
+  created_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 COMMENT ON TABLE claims.claim_event_activity IS 'Activity snapshots at the time of claim events';
@@ -697,7 +739,7 @@ CREATE TABLE IF NOT EXISTS claims.event_observation (
   claim_event_activity_id    BIGINT NOT NULL REFERENCES claims.claim_event_activity(id) ON DELETE CASCADE,
   obs_type                   TEXT NOT NULL,
   obs_code                   TEXT NOT NULL,
-  value                      TEXT,
+  value_text                 TEXT,
   value_type                 TEXT,
   file_bytes                 BYTEA,                                          -- For FILE type observations
   created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -844,6 +886,63 @@ COMMENT ON TABLE claims.verification_result IS 'Individual verification rule res
 
 CREATE INDEX IF NOT EXISTS idx_ver_result_run ON claims.verification_result(verification_run_id, rule_id);
 
+-- ----------------------------------------------------------------------------------------------------------
+-- 6.7 CLAIM ATTACHMENTS AND CONTRACTS
+-- ----------------------------------------------------------------------------------------------------------
+
+-- Claim attachments
+CREATE TABLE IF NOT EXISTS claims.claim_attachment (
+  id              BIGSERIAL PRIMARY KEY,
+  claim_key_id    BIGINT NOT NULL REFERENCES claims.claim_key(id) ON DELETE CASCADE,
+  claim_event_id  BIGINT NOT NULL REFERENCES claims.claim_event(id) ON DELETE CASCADE,
+  file_name       TEXT,
+  mime_type       TEXT,
+  data_base64     BYTEA NOT NULL,
+  data_length     INTEGER,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE claims.claim_attachment IS 'File attachments for claims';
+
+CREATE INDEX IF NOT EXISTS idx_claim_attachment_key ON claims.claim_attachment(claim_key_id);
+CREATE INDEX IF NOT EXISTS idx_claim_attachment_event ON claims.claim_attachment(claim_event_id);
+
+-- Claim contracts
+CREATE TABLE IF NOT EXISTS claims.claim_contract (
+  id              BIGSERIAL PRIMARY KEY,
+  claim_id        BIGINT NOT NULL REFERENCES claims.claim(id) ON DELETE CASCADE,
+  package_name    TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE claims.claim_contract IS 'Contract package information for claims';
+
+CREATE INDEX IF NOT EXISTS idx_claim_contract_claim ON claims.claim_contract(claim_id);
+
+CREATE TRIGGER trg_claim_contract_updated_at
+  BEFORE UPDATE ON claims.claim_contract
+  FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
+
+-- Code discovery audit
+CREATE TABLE IF NOT EXISTS claims.code_discovery_audit (
+  id                  BIGSERIAL PRIMARY KEY,
+  discovered_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  source_table        TEXT NOT NULL,
+  code                TEXT NOT NULL,
+  code_system         TEXT,
+  discovered_by       TEXT NOT NULL DEFAULT 'SYSTEM',
+  ingestion_file_id   BIGINT REFERENCES claims.ingestion_file(id) ON DELETE SET NULL,
+  claim_external_id   TEXT,
+  details             JSONB NOT NULL DEFAULT '{}'
+);
+
+COMMENT ON TABLE claims.code_discovery_audit IS 'Audit trail for newly discovered codes during ingestion';
+
+CREATE INDEX IF NOT EXISTS idx_code_discovery_source ON claims.code_discovery_audit(source_table, code);
+CREATE INDEX IF NOT EXISTS idx_code_discovery_file ON claims.code_discovery_audit(ingestion_file_id);
+CREATE INDEX IF NOT EXISTS idx_code_discovery_time ON claims.code_discovery_audit(discovered_at);
+
 -- ==========================================================================================================
 -- SECTION 8: DHPO INTEGRATION CONFIGURATION
 -- ==========================================================================================================
@@ -874,6 +973,160 @@ COMMENT ON COLUMN claims.facility_dhpo_config.enc_meta_json IS 'Encryption metad
 
 CREATE INDEX IF NOT EXISTS idx_dhpo_config_facility ON claims.facility_dhpo_config(facility_code);
 CREATE INDEX IF NOT EXISTS idx_dhpo_config_active ON claims.facility_dhpo_config(active);
+
+-- Integration feature toggles
+CREATE TABLE IF NOT EXISTS claims.integration_toggle (
+  code       TEXT PRIMARY KEY,
+  enabled    BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE claims.integration_toggle IS 'Feature toggles for system integrations';
+
+CREATE INDEX IF NOT EXISTS idx_integration_toggle_enabled ON claims.integration_toggle(enabled);
+
+-- ----------------------------------------------------------------------------------------------------------
+-- 8.2 INGESTION PROCESSING TABLES
+-- ----------------------------------------------------------------------------------------------------------
+
+-- Ingestion run tracking
+CREATE TABLE IF NOT EXISTS claims.ingestion_run (
+  id                    BIGSERIAL PRIMARY KEY,
+  started_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ended_at              TIMESTAMPTZ,
+  profile               TEXT NOT NULL,
+  fetcher_name          TEXT NOT NULL,
+  acker_name            TEXT,
+  poll_reason           TEXT,
+  files_discovered      INTEGER NOT NULL DEFAULT 0,
+  files_pulled          INTEGER NOT NULL DEFAULT 0,
+  files_processed_ok    INTEGER NOT NULL DEFAULT 0,
+  files_failed          INTEGER NOT NULL DEFAULT 0,
+  files_already         INTEGER NOT NULL DEFAULT 0,
+  acks_sent             INTEGER NOT NULL DEFAULT 0
+);
+
+COMMENT ON TABLE claims.ingestion_run IS 'Tracking table for ingestion batch runs';
+
+CREATE INDEX IF NOT EXISTS idx_ingestion_run_started ON claims.ingestion_run(started_at);
+CREATE INDEX IF NOT EXISTS idx_ingestion_run_profile ON claims.ingestion_run(profile);
+
+-- Ingestion file audit
+CREATE TABLE IF NOT EXISTS claims.ingestion_file_audit (
+  id                            BIGSERIAL PRIMARY KEY,
+  ingestion_run_id              BIGINT NOT NULL REFERENCES claims.ingestion_run(id) ON DELETE CASCADE,
+  ingestion_file_id             BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE CASCADE,
+  status                        SMALLINT NOT NULL,
+  reason                        TEXT,
+  error_class                   TEXT,
+  error_message                 TEXT,
+  validation_ok                 BOOLEAN NOT NULL DEFAULT FALSE,
+  header_sender_id              TEXT NOT NULL,
+  header_receiver_id            TEXT NOT NULL,
+  header_transaction_date       TIMESTAMPTZ NOT NULL,
+  header_record_count           INTEGER NOT NULL,
+  header_disposition_flag       TEXT NOT NULL,
+  parsed_claims                 INTEGER DEFAULT 0,
+  parsed_encounters             INTEGER DEFAULT 0,
+  parsed_diagnoses              INTEGER DEFAULT 0,
+  parsed_activities             INTEGER DEFAULT 0,
+  parsed_observations           INTEGER DEFAULT 0,
+  persisted_claims              INTEGER DEFAULT 0,
+  persisted_encounters          INTEGER DEFAULT 0,
+  persisted_diagnoses           INTEGER DEFAULT 0,
+  persisted_activities          INTEGER DEFAULT 0,
+  persisted_observations        INTEGER DEFAULT 0,
+  parsed_remit_claims           INTEGER DEFAULT 0,
+  parsed_remit_activities       INTEGER DEFAULT 0,
+  persisted_remit_claims        INTEGER DEFAULT 0
+);
+
+COMMENT ON TABLE claims.ingestion_file_audit IS 'Detailed audit trail for each ingested file';
+
+CREATE INDEX IF NOT EXISTS idx_ingestion_audit_run ON claims.ingestion_file_audit(ingestion_run_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_audit_file ON claims.ingestion_file_audit(ingestion_file_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_audit_status ON claims.ingestion_file_audit(status);
+
+-- ----------------------------------------------------------------------------------------------------------
+-- 8.3 VERIFICATION SYSTEM TABLES
+-- ----------------------------------------------------------------------------------------------------------
+
+-- Verification rules
+CREATE TABLE IF NOT EXISTS claims.verification_rule (
+  id           BIGSERIAL PRIMARY KEY,
+  code         TEXT NOT NULL,
+  description  TEXT NOT NULL,
+  severity     SMALLINT NOT NULL,
+  sql_text     TEXT NOT NULL,
+  active       BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE claims.verification_rule IS 'Rules for data verification and validation';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_rule_code ON claims.verification_rule(code);
+CREATE INDEX IF NOT EXISTS idx_verification_rule_active ON claims.verification_rule(active);
+
+-- Verification runs
+CREATE TABLE IF NOT EXISTS claims.verification_run (
+  id                  BIGSERIAL PRIMARY KEY,
+  ingestion_file_id   BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE CASCADE,
+  started_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ended_at            TIMESTAMPTZ,
+  passed              BOOLEAN,
+  failed_rules        INTEGER NOT NULL DEFAULT 0
+);
+
+COMMENT ON TABLE claims.verification_run IS 'Verification run instances';
+
+CREATE INDEX IF NOT EXISTS idx_verification_run_file ON claims.verification_run(ingestion_file_id);
+CREATE INDEX IF NOT EXISTS idx_verification_run_started ON claims.verification_run(started_at);
+
+-- Verification results
+CREATE TABLE IF NOT EXISTS claims.verification_result (
+  id                    BIGSERIAL PRIMARY KEY,
+  verification_run_id   BIGINT NOT NULL REFERENCES claims.verification_run(id) ON DELETE CASCADE,
+  rule_id               BIGINT NOT NULL REFERENCES claims.verification_rule(id) ON DELETE CASCADE,
+  ok                    BOOLEAN NOT NULL,
+  rows_affected         BIGINT,
+  sample_json           JSONB,
+  message               TEXT,
+  executed_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE claims.verification_result IS 'Individual verification rule results';
+
+CREATE INDEX IF NOT EXISTS idx_verification_result_run ON claims.verification_result(verification_run_id);
+CREATE INDEX IF NOT EXISTS idx_verification_result_rule ON claims.verification_result(rule_id);
+CREATE INDEX IF NOT EXISTS idx_verification_result_ok ON claims.verification_result(ok);
+
+-- ----------------------------------------------------------------------------------------------------------
+-- 8.4 INGESTION KPI VIEW
+-- ----------------------------------------------------------------------------------------------------------
+
+-- Ingestion KPIs view
+CREATE OR REPLACE VIEW claims.v_ingestion_kpis AS
+SELECT 
+  date_trunc('hour', ifa.header_transaction_date) AS hour_bucket,
+  COUNT(*) AS files_total,
+  COUNT(*) FILTER (WHERE ifa.status = 1) AS files_ok,
+  COUNT(*) FILTER (WHERE ifa.status = 2) AS files_fail,
+  COUNT(*) FILTER (WHERE ifa.status = 3) AS files_already,
+  COALESCE(SUM(ifa.parsed_claims), 0) AS parsed_claims,
+  COALESCE(SUM(ifa.persisted_claims), 0) AS persisted_claims,
+  COALESCE(SUM(ifa.parsed_activities), 0) AS parsed_activities,
+  COALESCE(SUM(ifa.persisted_activities), 0) AS persisted_activities,
+  COALESCE(SUM(ifa.parsed_remit_claims), 0) AS parsed_remit_claims,
+  COALESCE(SUM(ifa.persisted_remit_claims), 0) AS persisted_remit_claims,
+  COALESCE(SUM(ifa.parsed_remit_activities), 0) AS parsed_remit_activities,
+  0 AS persisted_remit_activities,  -- Missing from audit table
+  COUNT(*) FILTER (WHERE vr.passed = TRUE) AS files_verified
+FROM claims.ingestion_file_audit ifa
+LEFT JOIN claims.verification_run vr ON vr.ingestion_file_id = ifa.ingestion_file_id
+GROUP BY date_trunc('hour', ifa.header_transaction_date)
+ORDER BY hour_bucket DESC;
+
+COMMENT ON VIEW claims.v_ingestion_kpis IS 'Hourly KPI metrics for ingestion processing';
 
 CREATE TRIGGER trg_dhpo_config_updated_at
   BEFORE UPDATE ON claims.facility_dhpo_config
@@ -1071,6 +1324,55 @@ CREATE INDEX IF NOT EXISTS idx_claim_event_activity_tx_at_code ON claims.claim_e
 CREATE INDEX IF NOT EXISTS idx_event_observation_tx_at_type ON claims.event_observation(tx_at, obs_type);
 
 -- ==========================================================================================================
+-- SECTION 8.5: REFERENCE DATA FOREIGN KEY CONSTRAINTS
+-- ==========================================================================================================
+
+-- Add foreign key constraints for reference data relationships
+DO $$
+BEGIN
+  -- Claim reference data FKs
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_claim_payer_ref') THEN
+    ALTER TABLE claims.claim ADD CONSTRAINT fk_claim_payer_ref FOREIGN KEY (payer_ref_id) REFERENCES claims_ref.payer(id);
+  END IF;
+  
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_claim_provider_ref') THEN
+    ALTER TABLE claims.claim ADD CONSTRAINT fk_claim_provider_ref FOREIGN KEY (provider_ref_id) REFERENCES claims_ref.provider(id);
+  END IF;
+  
+  -- Encounter reference data FKs
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_encounter_facility_ref') THEN
+    ALTER TABLE claims.encounter ADD CONSTRAINT fk_encounter_facility_ref FOREIGN KEY (facility_ref_id) REFERENCES claims_ref.facility(id);
+  END IF;
+  
+  -- Activity reference data FKs
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_activity_clinician_ref') THEN
+    ALTER TABLE claims.activity ADD CONSTRAINT fk_activity_clinician_ref FOREIGN KEY (clinician_ref_id) REFERENCES claims_ref.clinician(id);
+  END IF;
+  
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_activity_code_ref') THEN
+    ALTER TABLE claims.activity ADD CONSTRAINT fk_activity_code_ref FOREIGN KEY (activity_code_ref_id) REFERENCES claims_ref.activity_code(id);
+  END IF;
+  
+  -- Diagnosis reference data FKs
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_diagnosis_code_ref') THEN
+    ALTER TABLE claims.diagnosis ADD CONSTRAINT fk_diagnosis_code_ref FOREIGN KEY (diagnosis_code_ref_id) REFERENCES claims_ref.diagnosis_code(id);
+  END IF;
+  
+  -- Remittance claim reference data FKs
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_remittance_denial_ref') THEN
+    ALTER TABLE claims.remittance_claim ADD CONSTRAINT fk_remittance_denial_ref FOREIGN KEY (denial_code_ref_id) REFERENCES claims_ref.denial_code(id);
+  END IF;
+  
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_remittance_payer_ref') THEN
+    ALTER TABLE claims.remittance_claim ADD CONSTRAINT fk_remittance_payer_ref FOREIGN KEY (payer_ref_id) REFERENCES claims_ref.payer(id);
+  END IF;
+  
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_remittance_provider_ref') THEN
+    ALTER TABLE claims.remittance_claim ADD CONSTRAINT fk_remittance_provider_ref FOREIGN KEY (provider_ref_id) REFERENCES claims_ref.provider(id);
+  END IF;
+END$$;
+
+-- ==========================================================================================================
 -- SECTION 9: PERMISSIONS AND GRANTS
 -- ==========================================================================================================
 
@@ -1123,21 +1425,27 @@ INSERT INTO claims_ref.encounter_type(type_code, description) VALUES
   ('INPATIENT', 'Inpatient encounter'),
   ('OUTPATIENT', 'Outpatient encounter'),
   ('EMERGENCY', 'Emergency encounter'),
-  ('AMBULATORY', 'Ambulatory encounter')
-ON CONFLICT (type_code) DO UPDATE SET description = EXCLUDED.description;
-
--- Seed encounter start/end types
-INSERT INTO claims_ref.encounter_start_type(type_code, description) VALUES
+  ('AMBULATORY', 'Ambulatory encounter'),
   ('ADMISSION', 'Patient admission'),
   ('ARRIVAL', 'Patient arrival'),
-  ('REGISTRATION', 'Patient registration')
-ON CONFLICT (type_code) DO UPDATE SET description = EXCLUDED.description;
-
-INSERT INTO claims_ref.encounter_end_type(type_code, description) VALUES
+  ('REGISTRATION', 'Patient registration'),
   ('DISCHARGE', 'Patient discharge'),
   ('DEPARTURE', 'Patient departure'),
   ('COMPLETION', 'Service completion')
 ON CONFLICT (type_code) DO UPDATE SET description = EXCLUDED.description;
+
+-- Seed encounter start/end types
+--INSERT INTO claims_ref.encounter_start_type(type_code, description) VALUES
+--  ('ADMISSION', 'Patient admission'),
+--  ('ARRIVAL', 'Patient arrival'),
+--  ('REGISTRATION', 'Patient registration')
+--ON CONFLICT (type_code) DO UPDATE SET description = EXCLUDED.description;
+
+--INSERT INTO claims_ref.encounter_end_type(type_code, description) VALUES
+  --('DISCHARGE', 'Patient discharge'),
+  --('DEPARTURE', 'Patient departure'),
+  --('COMPLETION', 'Service completion')
+--ON CONFLICT (type_code) DO UPDATE SET description = EXCLUDED.description;
 
 -- ==========================================================================================================
 -- SECTION 11: PERFORMANCE OPTIMIZATIONS
@@ -1153,6 +1461,17 @@ CREATE INDEX IF NOT EXISTS idx_facility_active ON claims_ref.facility(facility_c
 CREATE INDEX IF NOT EXISTS idx_payer_active ON claims_ref.payer(payer_code) WHERE status = 'ACTIVE';
 CREATE INDEX IF NOT EXISTS idx_provider_active ON claims_ref.provider(provider_code) WHERE status = 'ACTIVE';
 CREATE INDEX IF NOT EXISTS idx_clinician_active ON claims_ref.clinician(clinician_code) WHERE status = 'ACTIVE';
+
+-- Indexes for reference data foreign keys
+CREATE INDEX IF NOT EXISTS idx_claim_payer_ref ON claims.claim(payer_ref_id);
+CREATE INDEX IF NOT EXISTS idx_claim_provider_ref ON claims.claim(provider_ref_id);
+CREATE INDEX IF NOT EXISTS idx_encounter_facility_ref ON claims.encounter(facility_ref_id);
+CREATE INDEX IF NOT EXISTS idx_activity_clinician_ref ON claims.activity(clinician_ref_id);
+CREATE INDEX IF NOT EXISTS idx_activity_code_ref ON claims.activity(activity_code_ref_id);
+CREATE INDEX IF NOT EXISTS idx_diagnosis_code_ref ON claims.diagnosis(diagnosis_code_ref_id);
+CREATE INDEX IF NOT EXISTS idx_remittance_denial_ref ON claims.remittance_claim(denial_code_ref_id);
+CREATE INDEX IF NOT EXISTS idx_remittance_payer_ref ON claims.remittance_claim(payer_ref_id);
+CREATE INDEX IF NOT EXISTS idx_remittance_provider_ref ON claims.remittance_claim(provider_ref_id);
 
 -- ==========================================================================================================
 -- END OF UNIFIED DDL

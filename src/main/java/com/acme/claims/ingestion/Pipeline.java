@@ -85,6 +85,8 @@ public class Pipeline {
         Long filePk = null;
         long t0 = System.nanoTime();
         boolean success = false;
+        log.info("PIPELINE_START fileId={} fileName={} source={} size={}", 
+            wi.fileId(), wi.fileName(), wi.source(), wi.xmlBytes().length);
         try {
             // 1) Root sniff (cheap) so stub row has a valid root_type (1 or 2)
             RootDetector.RootKind sniffed = RootDetector.detect(wi.xmlBytes());
@@ -96,10 +98,14 @@ public class Pipeline {
             fileRow.setId(filePk);
             fileRow.setFileId(wi.fileId());
             fileRow.setXmlBytes(wi.xmlBytes());
+            fileRow.setFileName(wi.fileName());
             // 3) Parse (XSD → StAX). Parser writes parse errors using ingestion_file_id=filePk
             log.info("going to parse our ingestion file : {}", filePk);
             ParseOutcome out = parser.parse(fileRow);
-            log.info("successfully parsed our ingestion file : {}", filePk);
+            log.info("PIPELINE_PARSE_COMPLETE fileId={} fileName={} ingestionFileId={} rootType={} claims={} activities={}", 
+                wi.fileId(), wi.fileName(), filePk, out.getRootType(), 
+                out.getSubmission() != null ? out.getSubmission().claims().size() : 0,
+                out.getRemittance() != null ? out.getRemittance().claims().size() : 0);
 
             // 4) Branch by actual root (authoritative)
             switch (out.getRootType()) {
@@ -115,12 +121,16 @@ public class Pipeline {
                             || dto.claims() == null
                             || dto.header().recordCount() <= 0
                             || dto.header().recordCount() != (dto.claims() == null ? 0 : dto.claims().size())) {
-                        log.info("Header Pre-Check Failed : {}", fileRow.getFileId());
+                                log.error("PIPELINE_VALIDATION_FAILED fileId={} fileName={} ingestionFileId={} reason=HEADER_PRECHECK", 
+                                wi.fileId(), wi.fileName(), filePk);
                         errors.fileError(filePk, "VALIDATE", "MISSING_HEADER_FIELDS",
                                 "Header required fields missing or RecordCount mismatch; file rejected.", false);
                         maybeArchive(wi, false);
                         throw new RuntimeException("Header validation failed (submission) for fileId=" + wi.fileId());
                     }
+                    log.info("PIPELINE_VALIDATION_SUCCESS fileId={} fileName={} ingestionFileId={} senderId={} receiverId={} recordCount={}", 
+        wi.fileId(), wi.fileName(), filePk, dto.header().senderId(), 
+        dto.header().receiverId(), dto.header().recordCount());
 
                     // Only now update ingestion_file header (COALESCE keeps existing 'UNKNOWN' if any null leaks)
                     self.updateIngestionFileHeader(
@@ -233,15 +243,15 @@ public class Pipeline {
     public Long insertStub(WorkItem wi, short rootType) {
         return jdbc.queryForObject("""
                     INSERT INTO claims.ingestion_file
-                      (file_id, root_type, sender_id, receiver_id, transaction_date,
+                      (file_id, file_name,root_type, sender_id, receiver_id, transaction_date,
                        record_count_declared, disposition_flag, xml_bytes)
                     VALUES
-                      (?,       ?,         'UNKNOWN', 'UNKNOWN',  now(),
+                      (?,     ?,  ?,         'UNKNOWN', 'UNKNOWN',  now(),
                        0,                   'UNKNOWN', ?)
                     ON CONFLICT (file_id) DO UPDATE
                        SET updated_at = now()                 -- touch row, no rollback-inducing error
                     RETURNING id
-                """, Long.class, wi.fileId(), rootType, wi.xmlBytes());
+                """, Long.class, wi.fileId(), wi.fileName(), rootType, wi.xmlBytes());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

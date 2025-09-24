@@ -16,16 +16,25 @@ public class DhpoFetchInbox {
     private final BlockingQueue<WorkItem> queue = new LinkedBlockingQueue<>(1024);
 
     /** Generic submit allowing explicit source/sourcePath. */
-    public void submit(String fileId, byte[] xmlBytes, Path sourcePath, String source) {
-        queue.offer(new WorkItem(fileId, xmlBytes, sourcePath, source));
+    public void submit(String fileId, byte[] xmlBytes, Path sourcePath, String source, String fileName) {
+        queue.offer(new WorkItem(fileId, xmlBytes, sourcePath, source, fileName));
     }
 
     /** Convenience for SOAP (sourcePath=null, source="soap"). */
-    public void submitSoap(String fileId, byte[] xmlBytes) {
-        submit(fileId, xmlBytes, null, "soap");
+    public void submitSoap(String fileId, byte[] xmlBytes, String fileName) {
+        submit(fileId, xmlBytes, null, "soap", fileName);
     }
 
     WorkItem takeInterruptibly() throws InterruptedException {
         return queue.take();
+    }
+
+    public int size() {
+        return queue.size();
+    }
+
+    // ADD this method to expose remaining capacity
+    public int remainingCapacity() {
+        return queue.remainingCapacity();
     }
 }

@@ -16,5 +16,6 @@ public record WorkItem(
         String fileId,   // business-stable id for the file; used to upsert ingestion_file and for ACK
         byte[] xmlBytes, // raw XML payload; parser reads from this directly (StAX over InputStream)
         Path sourcePath, // non-null only when coming from LocalFS and we plan to archive/move
-        String source    // "localfs" or "soap" for tagging in logs/metrics
+        String source,
+        String fileName    // "localfs" or "soap" for tagging in logs/metrics
 ) {}

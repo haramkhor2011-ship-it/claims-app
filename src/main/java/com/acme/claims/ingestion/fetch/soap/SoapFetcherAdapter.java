@@ -8,8 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -25,23 +23,28 @@ public class SoapFetcherAdapter implements Fetcher {
 
     private final DhpoFetchInbox inbox; // coordinator pushes into this
     private final AtomicBoolean paused = new AtomicBoolean(false);
-    private final ExecutorService loop = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "soap-fetch-loop");
-        t.setDaemon(true);
-        return t;
-    });
+//    private final ExecutorService loop = Executors.newSingleThreadExecutor(r -> {
+//        Thread t = new Thread(r, "soap-fetch-loop");
+//        t.setDaemon(true);
+//        return t;
+//    });
 
     @Override
     public void start(Consumer<WorkItem> onReady) {
-        log.debug("[SOAP] Fetcher adapter starting");
-        loop.submit(() -> {
+        Thread.ofVirtual().start(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    if (paused.get()) { Thread.sleep(200); continue; } // cheap pause
-                    WorkItem wi = inbox.takeInterruptibly();          // blocks until item arrives
-                    onReady.accept(wi);                                // push downstream
+                    if (paused.get()) {
+                        Thread.sleep(200);
+                        continue;
+                    }
+                    WorkItem wi = inbox.takeInterruptibly();
+                    log.info("SOAP_FETCHER_DEQUEUED fileId={} fileName={} source={} queueSize={}", 
+                        wi.fileId(), wi.fileName(), wi.source(), inbox.size());
+                    onReady.accept(wi);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
+                    break;
                 } catch (Throwable t) {
                     log.warn("[SOAP] Fetcher loop error: {}", t.toString());
                 }

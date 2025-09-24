@@ -73,15 +73,15 @@ SELECT
   c.net AS initial_net_amount,
   c.tx_at AS claim_submission_date,
   
-  -- Encounter details (CORRECTED: start_at -> start, end_at -> end)
+  -- Encounter details (CORRECTED: start_at -> start_at, end_at -> end_at)
   e.facility_id,
   e.type AS encounter_type,
   e.patient_id,
-  e.start AS encounter_start,                    -- CORRECTED
-  e.end AS encounter_end,                        -- CORRECTED
-  EXTRACT(YEAR FROM e.start) AS encounter_start_year,
-  EXTRACT(MONTH FROM e.start) AS encounter_start_month,
-  TO_CHAR(e.start, 'Month') AS encounter_start_month_name,
+  e.start_at AS encounter_start,                    -- CORRECTED
+  e.end_at AS encounter_end,                        -- CORRECTED
+  EXTRACT(YEAR FROM e.start_at) AS encounter_start_year,
+  EXTRACT(MONTH FROM e.start_at) AS encounter_start_month,
+  TO_CHAR(e.start_at, 'Month') AS encounter_start_month_name,
   
   -- Remittance summary (enhanced with better NULL handling)
   COALESCE(rem_summary.total_payment_amount, 0) AS total_payment_amount,

@@ -17,6 +17,36 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * Service responsible for persisting claims data into the database.
+ * 
+ * <p>This service handles two main data flows:
+ * <ul>
+ *   <li><strong>Submission Path:</strong> Persists claim submissions with activities, diagnoses, and encounters</li>
+ *   <li><strong>Remittance Path:</strong> Persists remittance advice data and updates claim statuses</li>
+ * </ul>
+ * 
+ * <p>The service ensures data integrity by:
+ * <ul>
+ *   <li>Validating required fields before persistence</li>
+ *   <li>Resolving reference data codes to foreign key IDs</li>
+ *   <li>Handling duplicate submissions gracefully</li>
+ *   <li>Maintaining audit trails for all operations</li>
+ *   <li>Using transactional boundaries to ensure consistency</li>
+ * </ul>
+ * 
+ * <p>Key features:
+ * <ul>
+ *   <li>Idempotent operations using ON CONFLICT clauses</li>
+ *   <li>Automatic reference data resolution and insertion</li>
+ *   <li>Comprehensive error logging and validation</li>
+ *   <li>Status timeline tracking for claims</li>
+ *   <li>Support for attachments and resubmissions</li>
+ * </ul>
+ * 
+ * @author Claims Team
+ * @since 1.0
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -29,7 +59,15 @@ public class PersistService {
     /* ========================= SUBMISSION PATH ========================= */
 
     /**
-     * Back-compat overload if a caller doesn’t pass attachments.
+     * Persists a submission file without attachments.
+     * 
+     * <p>This is a convenience method that delegates to the main persistence method
+     * with an empty list of attachments.
+     * 
+     * @param ingestionFileId the ID of the ingestion file being processed
+     * @param file the parsed submission data
+     * @return counts of persisted entities
+     * @see #persistSubmission(long, SubmissionDTO, List)
      */
     @Transactional
     public PersistCounts persistSubmission(long ingestionFileId, SubmissionDTO file) {
@@ -37,8 +75,34 @@ public class PersistService {
     }
 
     /**
-     * Persist a parsed submission file (with optional attachments collected by the parser).
-     * Guards ensure we never violate NOT NULL/UNIQUES. Bad rows are logged+skipped, not thrown.
+     * Persists a parsed submission file with optional attachments.
+     * 
+     * <p>This method processes a complete claim submission including:
+     * <ul>
+     *   <li>Claim header information</li>
+     *   <li>Activities with observations</li>
+     *   <li>Diagnoses</li>
+     *   <li>Encounters</li>
+     *   <li>Resubmissions (if present)</li>
+     *   <li>Attachments (if provided)</li>
+     * </ul>
+     * 
+     * <p>The method ensures data integrity by:
+     * <ul>
+     *   <li>Validating required fields before persistence</li>
+     *   <li>Resolving reference data codes to database IDs</li>
+     *   <li>Handling duplicate submissions appropriately</li>
+     *   <li>Logging errors for invalid data without failing the entire batch</li>
+     * </ul>
+     * 
+     * <p>All operations are performed within a single transaction to ensure consistency.
+     * If any individual claim fails, it is logged and skipped, allowing other claims to proceed.
+     * 
+     * @param ingestionFileId the ID of the ingestion file being processed
+     * @param file the parsed submission data containing claims and metadata
+     * @param attachments optional list of attachments associated with the submission
+     * @return PersistCounts containing the number of entities persisted
+     * @throws IllegalArgumentException if required parameters are null or invalid
      */
     @Transactional
     public PersistCounts persistSubmission(long ingestionFileId, SubmissionDTO file, List<ParseOutcome.AttachmentRecord> attachments) {
@@ -81,6 +145,10 @@ public class PersistService {
 
                 final long claimId = upsertClaim(claimKeyId, submissionId, c, payerRefId, providerRefId); // PATCH: new params
 
+                // Contract (optional)
+                if (c.contract() != null) {
+                    upsertContract(claimId, c.contract());
+                }
 
                 // Encounter (optional, but has NOT NULL cols in DDL)
                 if (c.encounter() != null && encounterHasRequired(ingestionFileId, claimIdBiz, c.encounter())) {
@@ -172,6 +240,35 @@ public class PersistService {
 
     /* ========================= REMITTANCE PATH ========================= */
 
+    /**
+     * Persists remittance advice data and updates claim statuses.
+     * 
+     * <p>This method processes remittance advice files which contain payment information
+     * and denial codes for previously submitted claims. It performs the following operations:
+     * <ul>
+     *   <li>Creates remittance records linked to the ingestion file</li>
+     *   <li>Updates or creates remittance claim records</li>
+     *   <li>Processes remittance activities with payment amounts and denial codes</li>
+     *   <li>Resolves reference data for payers, providers, and denial codes</li>
+     *   <li>Calculates and updates claim statuses based on payment amounts</li>
+     *   <li>Creates claim events and status timeline entries</li>
+     * </ul>
+     * 
+     * <p>Status determination logic:
+     * <ul>
+     *   <li><strong>PAID (3):</strong> Payment amount equals net requested amount</li>
+     *   <li><strong>PARTIALLY_PAID (4):</strong> Payment amount is less than net requested</li>
+     *   <li><strong>REJECTED (5):</strong> No payment and all activities are denied</li>
+     * </ul>
+     * 
+     * <p>All operations are performed within a single transaction. Individual claim failures
+     * are logged and skipped to allow processing of other claims in the batch.
+     * 
+     * @param ingestionFileId the ID of the ingestion file being processed
+     * @param file the parsed remittance advice data
+     * @return PersistCounts containing the number of remittance entities persisted
+     * @throws IllegalArgumentException if required parameters are null or invalid
+     */
     @Transactional
     public PersistCounts persistRemittance(long ingestionFileId, RemittanceAdviceDTO file) {
         final Long remittanceId = jdbc.queryForObject(
@@ -254,10 +351,22 @@ public class PersistService {
         return new PersistCounts(0, 0, 0, 0, rClaims, rActs);
     }
 
+    /**
+     * Null-safe BigDecimal utility method.
+     * 
+     * @param v the BigDecimal value to check
+     * @return the original value if not null, otherwise BigDecimal.ZERO
+     */
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
     }
 
+    /**
+     * Fetches the total net amount requested for a claim from submission activities.
+     * 
+     * @param claimKeyId the claim key ID to query
+     * @return the sum of net amounts from all submission activities, or 0.0 if none found
+     */
     private BigDecimal fetchSubmissionNetRequested(long claimKeyId) {
         return jdbc.queryForObject("""
                     select coalesce(sum(a.net), 0.0)
@@ -267,6 +376,12 @@ public class PersistService {
                 """, BigDecimal.class, claimKeyId);
     }
 
+    /**
+     * Fetches the total payment amount for a remittance claim.
+     * 
+     * @param remittanceClaimId the remittance claim ID to query
+     * @return the sum of payment amounts from all remittance activities, or 0.0 if none found
+     */
     private BigDecimal fetchRemittancePaidAmount(long remittanceClaimId) {
         return jdbc.queryForObject("""
                     select coalesce(sum(ra.payment_amount), 0.0)
@@ -275,6 +390,20 @@ public class PersistService {
                 """, BigDecimal.class, remittanceClaimId);
     }
 
+    /**
+     * Determines if all remittance activities for a claim are denied.
+     * 
+     * <p>An activity is considered denied if it has a denial code and zero payment amount.
+     * This method returns true only if:
+     * <ul>
+     *   <li>There is at least one remittance activity for the claim</li>
+     *   <li>All activities have a non-null, non-empty denial code</li>
+     *   <li>All activities have zero payment amount</li>
+     * </ul>
+     * 
+     * @param remittanceClaimId the remittance claim ID to check
+     * @return true if all activities are denied, false otherwise
+     */
     private boolean areAllRemitActivitiesDenied(long remittanceClaimId) {
         // True when NO rows violate "must be denied or zero payment"
         Integer total = jdbc.queryForObject("""
@@ -294,6 +423,16 @@ public class PersistService {
 
     /* ========================= HELPERS (UPserts & Inserts) ========================= */
 
+    /**
+     * Checks if a claim has already been submitted (has a submission event).
+     * 
+     * <p>This method determines if a claim with the given business ID has
+     * already been submitted by checking for the existence of a claim event
+     * with type 1 (SUBMITTED).
+     * 
+     * @param claimIdBiz the business claim ID to check
+     * @return true if the claim has already been submitted, false otherwise
+     */
     private boolean isAlreadySubmitted(String claimIdBiz) {
         Long ck = jdbc.query(
                 "select id from claims.claim_key where claim_id=?",
@@ -308,6 +447,20 @@ public class PersistService {
         return n > 0;
     }
 
+    /**
+     * Creates or retrieves a claim key record for the given business claim ID.
+     * 
+     * <p>This method performs an idempotent upsert operation using PostgreSQL's
+     * ON CONFLICT clause. It will either insert a new claim key record or
+     * return the ID of an existing one.
+     * 
+     * <p>The operation uses a single database round-trip with a CTE (Common Table Expression)
+     * to handle the insert-or-select logic efficiently.
+     * 
+     * @param claimIdBiz the business claim ID to upsert
+     * @return the database ID of the claim key record
+     * @throws IllegalArgumentException if claimIdBiz is null or blank
+     */
     private long upsertClaimKey(String claimIdBiz) {
         Assert.hasText(claimIdBiz, "claimIdBiz must not be blank"); // fast guard
 
@@ -356,7 +509,6 @@ public class PersistService {
                               claim_id, facility_id, type, patient_id, start_at, end_at, start_type, end_type, transfer_source, transfer_destination,
                               facility_ref_id                                              -- PATCH
                             ) values (?,?,?,?,?,?,?,?,?,?,?)
-                            on conflict do nothing
                         """, claimId, e.facilityId(), e.type(), e.patientId(), e.start(), e.end(),
                 e.startType(), e.endType(), e.transferSource(), e.transferDestination(),
                 facilityRefId                                               // PATCH
@@ -369,6 +521,26 @@ public class PersistService {
                     values (?, ?, ?, ?)
                     on conflict do nothing
                 """, claimId, d.type(), d.code(), diagnosisCodeRefId); // PATCH
+    }
+
+    /**
+     * Persist contract information for a claim.
+     * 
+     * @param claimId the database ID of the claim
+     * @param contract the contract DTO containing package information
+     */
+    private void upsertContract(long claimId, ContractDTO contract) {
+        if (contract == null || contract.packageName() == null) {
+            return; // Skip if no contract data
+        }
+        
+        jdbc.update("""
+                    insert into claims.claim_contract(claim_id, package_name)
+                    values (?, ?)
+                    on conflict (claim_id) do update set
+                        package_name = EXCLUDED.package_name,
+                        updated_at = NOW()
+                """, claimId, contract.packageName());
     }
 
     private long upsertActivity(long claimId, ActivityDTO a, Long clinicianRefId, Long activityCodeRefId) { // PATCH
@@ -389,7 +561,6 @@ public class PersistService {
         jdbc.update("""
                     insert into claims.observation(activity_id, obs_type, obs_code, value_text, value_type, file_bytes)
                     values (?,?,?,?,?,?)
-                    on conflict do nothing
                 """, actId, o.type(), o.code(), o.value(), o.valueType(), o.fileBytes());
     }
 
@@ -423,14 +594,20 @@ public class PersistService {
     private void projectActivitiesToClaimEventFromSubmission(long eventId, Set<ActivityDTO> acts) {
         if (acts == null) return;
         for (ActivityDTO a : acts) {
+            // First, get the activity_id_ref from the actual activity record
+            Long activityIdRef = jdbc.queryForObject(
+                "SELECT a.id FROM claims.activity a JOIN claims.claim c ON a.claim_id = c.id JOIN claims.claim_event ce ON c.claim_key_id = ce.claim_key_id WHERE a.activity_id = ? AND ce.id = ?",
+                Long.class, a.id(), eventId
+            );
+            
             jdbc.update("""
                                 insert into claims.claim_event_activity(
-                                  claim_event_id, activity_id_at_event, start_at_event, type_at_event, code_at_event,
+                                  claim_event_id, activity_id_ref, activity_id_at_event, start_at_event, type_at_event, code_at_event,
                                   quantity_at_event, net_at_event, clinician_at_event, prior_authorization_id_at_event,
                                   list_price_at_event, gross_at_event, patient_share_at_event, payment_amount_at_event, denial_code_at_event
-                                ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                                 on conflict (claim_event_id, activity_id_at_event) do nothing
-                            """, eventId, a.id(), a.start(), a.type(), a.code(),
+                            """, eventId, activityIdRef, a.id(), a.start(), a.type(), a.code(),
                     a.quantity(), a.net(), a.clinician(), a.priorAuthorizationId(),
                     null, null, null, null, null);
 
@@ -438,12 +615,12 @@ public class PersistService {
                 for (ObservationDTO o : a.observations()) {
                     jdbc.update("""
                                 insert into claims.event_observation(
-                                  claim_event_activity_id, obs_type, obs_code, value_text, value_type
+                                  claim_event_activity_id, obs_type, obs_code, value_text, value_type, file_bytes
                                 )
-                                select cea.id, ?, ?, ?, ?
+                                select cea.id, ?, ?, ?, ?, ?
                                   from claims.claim_event_activity cea
                                  where cea.claim_event_id = ? and cea.activity_id_at_event = ? on conflict do nothing
-                            """, o.type(), o.code(), o.value(), o.valueType(), eventId, a.id());
+                            """, o.type(), o.code(), o.value(), o.valueType(), o.fileBytes(), eventId, a.id());
                 }
             }
         }
@@ -452,14 +629,20 @@ public class PersistService {
     private void projectActivitiesToClaimEventFromRemittance(long eventId, List<RemittanceActivityDTO> acts) {
         if (acts == null) return;
         for (RemittanceActivityDTO a : acts) {
+            // First, get the remittance_activity_id_ref from the actual remittance activity record
+            Long remittanceActivityIdRef = jdbc.queryForObject(
+                "SELECT id FROM claims.remittance_activity WHERE activity_id = ? AND remittance_claim_id = (SELECT rc.id FROM claims.remittance_claim rc JOIN claims.claim_event ce ON rc.claim_key_id = ce.claim_key_id WHERE ce.id = ?)",
+                Long.class, a.id(), eventId
+            );
+            
             jdbc.update("""
                                 insert into claims.claim_event_activity(
-                                  claim_event_id, activity_id_at_event, start_at_event, type_at_event, code_at_event,
+                                  claim_event_id, remittance_activity_id_ref, activity_id_at_event, start_at_event, type_at_event, code_at_event,
                                   quantity_at_event, net_at_event, clinician_at_event, prior_authorization_id_at_event,
                                   list_price_at_event, gross_at_event, patient_share_at_event, payment_amount_at_event, denial_code_at_event
-                                ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                                 on conflict (claim_event_id, activity_id_at_event) do nothing
-                            """, eventId, a.id(), a.start(), a.type(), a.code(),
+                            """, eventId, remittanceActivityIdRef, a.id(), a.start(), a.type(), a.code(),
                     a.quantity(), a.net(), a.clinician(), a.priorAuthorizationId(),
                     a.listPrice(), a.gross(), a.patientShare(), a.paymentAmount(), a.denialCode());
         }
@@ -479,7 +662,6 @@ public class PersistService {
                     insert into claims.claim_status_timeline(
                       claim_key_id, status, status_time, claim_event_id
                     ) values (?,?,?,?)
-                    on conflict do nothing
                 """, claimKeyId, status, time, eventId);
     }
 
@@ -530,21 +712,50 @@ public class PersistService {
                     insert into claims.claim_attachment(
                       claim_key_id, claim_event_id, file_name, mime_type, data_base64, data_length, created_at
                     ) values (?,?,?,?,?,?, now())
-                    on conflict (claim_key_id, claim_event_id, coalesce(file_name,'')) do nothing
+                    on conflict do nothing
                 """, claimKeyId, claimEventId, fileName, mimeType, bytes, size);
     }
 
     /* ========================= VALIDATION GUARDS ========================= */
     // PATCH: all guards below only check fields you already use in inserts. They log & return false; caller skips row.
 
+    /**
+     * Utility method to check if a string is null or blank.
+     * 
+     * @param s the string to check
+     * @return true if the string is null or blank, false otherwise
+     */
     private static boolean isBlank(String s) {
         return s == null || s.isBlank();
     }
 
+    /**
+     * Utility method to check if an object is null.
+     * 
+     * @param o the object to check
+     * @return true if the object is null, false otherwise
+     */
     private static boolean isNull(Object o) {
         return o == null;
     }
 
+    /**
+     * Validates that a submission claim has all required fields.
+     * 
+     * <p>Required fields for a claim are:
+     * <ul>
+     *   <li>Claim ID</li>
+     *   <li>Payer ID</li>
+     *   <li>Provider ID</li>
+     *   <li>Emirates ID Number</li>
+     * </ul>
+     * 
+     * <p>If validation fails, an error is logged and the claim will be skipped.
+     * 
+     * @param ingestionFileId the ID of the ingestion file for error logging
+     * @param c the claim DTO to validate
+     * @return true if all required fields are present, false otherwise
+     */
     private boolean claimHasRequired(long ingestionFileId, SubmissionClaimDTO c) {
         boolean ok =
                 !isBlank(c.id()) &&
@@ -559,6 +770,25 @@ public class PersistService {
         return ok;
     }
 
+    /**
+     * Validates that an encounter has all required fields.
+     * 
+     * <p>Required fields for an encounter are:
+     * <ul>
+     *   <li>Patient ID</li>
+     *   <li>Facility ID</li>
+     *   <li>Type</li>
+     *   <li>Start date/time</li>
+     * </ul>
+     * 
+     * <p>If the encounter is null, validation passes (encounters are optional).
+     * If validation fails, an error is logged and the encounter will be skipped.
+     * 
+     * @param ingestionFileId the ID of the ingestion file for error logging
+     * @param claimIdBiz the business claim ID for error logging
+     * @param e the encounter DTO to validate
+     * @return true if all required fields are present or encounter is null, false otherwise
+     */
     private boolean encounterHasRequired(long ingestionFileId, String claimIdBiz, EncounterDTO e) {
         if (e == null) return true;
         boolean ok =
@@ -574,6 +804,22 @@ public class PersistService {
         return ok;
     }
 
+    /**
+     * Validates that a diagnosis has all required fields.
+     * 
+     * <p>Required fields for a diagnosis are:
+     * <ul>
+     *   <li>Type</li>
+     *   <li>Code</li>
+     * </ul>
+     * 
+     * <p>If validation fails, an error is logged and the diagnosis will be skipped.
+     * 
+     * @param ingestionFileId the ID of the ingestion file for error logging
+     * @param claimIdBiz the business claim ID for error logging
+     * @param d the diagnosis DTO to validate
+     * @return true if all required fields are present, false otherwise
+     */
     private boolean diagnosisHasRequired(long ingestionFileId, String claimIdBiz, DiagnosisDTO d) {
         boolean ok = !isBlank(d.type()) && !isBlank(d.code());
         if (!ok) {
@@ -584,6 +830,27 @@ public class PersistService {
         return ok;
     }
 
+    /**
+     * Validates that an activity has all required fields.
+     * 
+     * <p>Required fields for an activity are:
+     * <ul>
+     *   <li>Activity ID</li>
+     *   <li>Start date/time</li>
+     *   <li>Type</li>
+     *   <li>Code</li>
+     *   <li>Quantity</li>
+     *   <li>Net amount</li>
+     *   <li>Clinician</li>
+     * </ul>
+     * 
+     * <p>If validation fails, an error is logged and the activity will be skipped.
+     * 
+     * @param ingestionFileId the ID of the ingestion file for error logging
+     * @param claimIdBiz the business claim ID for error logging
+     * @param a the activity DTO to validate
+     * @return true if all required fields are present, false otherwise
+     */
     private boolean activityHasRequired(long ingestionFileId, String claimIdBiz, ActivityDTO a) {
         boolean ok =
                 !isBlank(a.id()) &&
@@ -601,6 +868,23 @@ public class PersistService {
         return ok;
     }
 
+    /**
+     * Validates that a remittance claim has all required fields.
+     * 
+     * <p>Required fields for a remittance claim are:
+     * <ul>
+     *   <li>Claim ID</li>
+     *   <li>Payer ID</li>
+     *   <li>Provider ID</li>
+     *   <li>Payment Reference</li>
+     * </ul>
+     * 
+     * <p>If validation fails, an error is logged and the remittance claim will be skipped.
+     * 
+     * @param ingestionFileId the ID of the ingestion file for error logging
+     * @param c the remittance claim DTO to validate
+     * @return true if all required fields are present, false otherwise
+     */
     private boolean remitClaimHasRequired(long ingestionFileId, RemittanceClaimDTO c) {
         boolean ok =
                 !isBlank(c.id()) &&
@@ -615,6 +899,26 @@ public class PersistService {
         return ok;
     }
 
+    /**
+     * Validates that a remittance activity has all required fields.
+     * 
+     * <p>Required fields for a remittance activity are:
+     * <ul>
+     *   <li>Activity ID</li>
+     *   <li>Start date/time</li>
+     *   <li>Type</li>
+     *   <li>Code</li>
+     *   <li>Quantity</li>
+     *   <li>Net amount</li>
+     * </ul>
+     * 
+     * <p>If validation fails, an error is logged and the remittance activity will be skipped.
+     * 
+     * @param ingestionFileId the ID of the ingestion file for error logging
+     * @param claimIdBiz the business claim ID for error logging
+     * @param a the remittance activity DTO to validate
+     * @return true if all required fields are present, false otherwise
+     */
     private boolean remitActivityHasRequired(long ingestionFileId, String claimIdBiz, RemittanceActivityDTO a) {
         boolean ok =
                 !isBlank(a.id()) &&
@@ -633,6 +937,20 @@ public class PersistService {
 
     /* ========================= COUNTS ========================= */
 
+    /**
+     * Record containing counts of persisted entities for reporting purposes.
+     * 
+     * <p>This record tracks the number of various entities that were successfully
+     * persisted during a batch operation, allowing callers to understand the
+     * scope and success of the persistence operation.
+     * 
+     * @param claims number of claims persisted in submission operations
+     * @param acts number of activities persisted in submission operations
+     * @param obs number of observations persisted in submission operations
+     * @param dxs number of diagnoses persisted in submission operations
+     * @param remitClaims number of remittance claims persisted
+     * @param remitActs number of remittance activities persisted
+     */
     public record PersistCounts(int claims, int acts, int obs, int dxs, int remitClaims, int remitActs) {
     }
 }

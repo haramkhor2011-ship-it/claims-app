@@ -40,6 +40,8 @@ public class IngestionFile {
     private OffsetDateTime createdAt = OffsetDateTime.now();
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt = OffsetDateTime.now();
+    @Column(name = "file_name", nullable = false)
+    private String fileName;
 
     // getters/setters…
     public Long getId() {
@@ -128,5 +130,13 @@ public class IngestionFile {
 
     public void setUpdatedAt(OffsetDateTime v) {
         this.updatedAt = v;
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
+
+    public void setFileName(String v) {
+        this.fileName = v;
     }
 }

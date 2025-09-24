@@ -97,7 +97,7 @@ claims:
     # Start with true to auto-seed on first sightings; flip to false once dictionaries are governed
     auto-insert: true
   bootstrap:
-    enabled: false                        # prod CSV Bootstrap is typically OFF; run migrations instead
+    enabled: true                        # prod CSV Bootstrap is typically OFF; run migrations instead
     csv-path: "classpath:refdata/"
 
 # Optional: enable a real cache for ref lookups in prod (Caffeine)

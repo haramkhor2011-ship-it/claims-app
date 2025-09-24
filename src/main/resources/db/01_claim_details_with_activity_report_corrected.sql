@@ -50,8 +50,8 @@ SELECT
     e.id AS event_id,
     e.event_type,
     e.status AS event_status,
-    e.start AS event_start,  -- CORRECTED: was start_at
-    e.end AS event_end,      -- CORRECTED: was end_at
+    e.start_at AS event_start,  -- CORRECTED: was start_at
+    e.end_at AS event_end,      -- CORRECTED: was end_at
     e.description AS event_description,
     e.created_at AS event_created_at,
     

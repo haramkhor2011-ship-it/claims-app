@@ -77,8 +77,12 @@ public class Orchestrator {
 
     private void enqueue(WorkItem wi) {
         if (!queue.offer(wi)) {
-            log.debug("Queue full (size={}); pausing fetcher", queue.size());
+            log.warn("ORCHESTRATOR_QUEUE_FULL fileId={} fileName={} queueSize={} capacity={}", 
+                wi.fileId(), wi.fileName(), queue.size(), queue.remainingCapacity());
             try { fetcher.pause(); } catch (Exception ignore) {}
+        } else {
+            log.info("ORCHESTRATOR_ENQUEUED fileId={} fileName={} source={} queueSize={}", 
+                wi.fileId(), wi.fileName(), wi.source(), queue.size());
         }
     }
 
@@ -90,6 +94,9 @@ public class Orchestrator {
         int burst = Math.min(workers, capacityHint);
         int submitted = 0;
         long deadlineNanos = System.nanoTime() + 2_000_000L; // ~2ms budget
+        // Add more detailed logging in Orchestrator
+        log.info("QUEUE STATUS: size={}, remaining={}, workers={}",
+                queue.size(), queue.remainingCapacity(), workers);
 
         while (submitted < burst && System.nanoTime() < deadlineNanos) {
             WorkItem wi = queue.poll();
@@ -114,29 +121,37 @@ public class Orchestrator {
     private void processOne(WorkItem wi) {
         boolean success = false;
         long t0 = System.nanoTime();
-        try (org.slf4j.MDC.MDCCloseable ignored = org.slf4j.MDC.putCloseable("fileId", wi.fileId())) {
+        try (org.slf4j.MDC.MDCCloseable ignored = org.slf4j.MDC.putCloseable("fileId", wi.fileId());
+         org.slf4j.MDC.MDCCloseable ignored2 = org.slf4j.MDC.putCloseable("fileName", wi.fileName());
+         org.slf4j.MDC.MDCCloseable ignored3 = org.slf4j.MDC.putCloseable("source", wi.source())) {
+            log.info("ORCHESTRATOR_PROCESS_START fileId={} fileName={} source={}", 
+            wi.fileId(), wi.fileName(), wi.source());
             var result = pipeline.process(wi);
             boolean verified = verifyService.verifyFile(result.ingestionFileId(), wi.fileId());
             success = verified;
             long ms = (System.nanoTime() - t0) / 1_000_000;
             if (ms > 2000) {
-                log.info("INGEST SLOW fileId={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={}",
-                        wi.fileId(), ms, result.rootType(), result.parsedClaims(), result.parsedActivities(),
-                        result.persistedClaims(), result.persistedActivities(), verified);
+                log.warn("ORCHESTRATOR_PROCESS_SLOW fileId={} fileName={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={}", 
+                    wi.fileId(), wi.fileName(), ms, result.rootType(), result.parsedClaims(), result.parsedActivities(),
+                    result.persistedClaims(), result.persistedActivities(), verified);
             } else {
-                log.info("INGEST OK fileId={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={}",
-                        wi.fileId(), ms, result.rootType(), result.parsedClaims(), result.parsedActivities(),
-                        result.persistedClaims(), result.persistedActivities(), verified);
+                log.info("ORCHESTRATOR_PROCESS_OK fileId={} fileName={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={}", 
+                    wi.fileId(), wi.fileName(), ms, result.rootType(), result.parsedClaims(), result.parsedActivities(),
+                    result.persistedClaims(), result.persistedActivities(), verified);
             }
         } catch (Exception ex) {
-            log.error("INGEST FAIL fileId={} source={} : {}", wi.fileId(), wi.source(), ex.getMessage(), ex);
+            log.error("ORCHESTRATOR_PROCESS_FAIL fileId={} fileName={} source={} : {}", 
+                wi.fileId(), wi.fileName(), wi.source(), ex.getMessage(), ex);
             success = false;
         } finally {
             if (acker != null) {
                 try {
                     acker.maybeAck(wi.fileId(), success);
+                    log.info("ORCHESTRATOR_ACK_ATTEMPTED fileId={} fileName={} success={}", 
+                        wi.fileId(), wi.fileName(), success);
                 } catch (Exception ackEx) {
-                    log.warn("ACK(success) failed fileId={}: {}", wi.fileId(), ackEx.getMessage());
+                    log.warn("ORCHESTRATOR_ACK_FAILED fileId={} fileName={} : {}", 
+                        wi.fileId(), wi.fileName(), ackEx.getMessage());
                 }
             }
         }

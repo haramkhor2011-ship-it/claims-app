@@ -77,7 +77,7 @@ public class LocalFsFetcher implements Fetcher {
         try {
             byte[] bytes = Files.readAllBytes(file);      // in-memory parse by pipeline
             String fileId = file.getFileName().toString();// stable id for idempotency/audit
-            onReady.accept(new WorkItem(fileId, bytes, file, "localfs"));
+            onReady.accept(new WorkItem(fileId, bytes, file, "localfs", file.getFileName().toString()));
         } catch (Exception e) {
             log.warn("Unreadable file {}: {}", file, e.toString());
         }

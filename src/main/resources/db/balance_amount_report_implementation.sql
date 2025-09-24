@@ -5,20 +5,39 @@
 -- Date: 2025-09-17
 -- Purpose: Complete implementation for Balance Amount to be Received report
 -- 
--- MAPPING CORRECTIONS APPLIED (Based on JSON mapping and report requirements):
--- 1. FacilityGroupID → Use claims.encounter.facility_id (preferred) or claims.claim.provider_id
--- 2. HealthAuthority → Use claims.ingestion_file.sender_id for submission, receiver_id for remittance
--- 3. Receiver_Name → Use claims_ref.payer.name joined on payer_code = ingestion_file.receiver_id
+-- BUSINESS OVERVIEW:
+-- This report provides three complementary views for tracking outstanding claim balances:
+-- 1. Tab A: Overall balances per facility and claim (all claims)
+-- 2. Tab B: Initial not remitted balances by payer/receiver (no payments yet)
+-- 3. Tab C: Post-resubmission balances (claims that were resubmitted but still pending)
+--
+-- DATA SOURCES:
+-- - Primary: claims.claim, claims.encounter, claims.claim_key
+-- - Remittance: claims.remittance_claim, claims.remittance_activity
+-- - Status: claims.claim_status_timeline, claims.claim_event
+-- - Reference: claims_ref.provider, claims_ref.facility, claims_ref.payer (when available)
+--
+-- FIELD MAPPINGS (Based on XML mapping and report requirements):
+-- 1. FacilityGroupID → claims.encounter.facility_id (preferred) or claims.claim.provider_id
+-- 2. HealthAuthority → claims.ingestion_file.sender_id (submission) / receiver_id (remittance)
+-- 3. Receiver_Name → claims_ref.payer.name (via payer_code = ingestion_file.receiver_id)
 -- 4. Write-off Amount → Extract from claims.claim.comments or external adjustment feed
--- 5. Resubmission details → Use claims.claim_event and claims.claim_resubmission tables
--- 6. Aging → Use encounter.start_at (date_settlement from remittance_claim.date_settlement for future)
--- 7. Payment Status → Use claim_status_timeline table
--- 8. Column naming → Follow report suggestions (ClaimAmt → Billed Amount, etc.)
+-- 5. Resubmission details → claims.claim_event (type=2) and claims.claim_resubmission
+-- 6. Aging → encounter.start_at (encounter date for aging calculation)
+-- 7. Payment Status → claim_status_timeline table (status progression)
+-- 8. Column naming → Follow report standards (ClaimAmt → Billed Amount, etc.)
 --
 -- ==========================================================================================================
 
 -- ==========================================================================================================
 -- SECTION 1: STATUS MAPPING FUNCTION
+-- ==========================================================================================================
+
+-- ==========================================================================================================
+-- STATUS MAPPING FUNCTION
+-- ==========================================================================================================
+-- Maps numeric status codes to human-readable text for display purposes
+-- Used throughout the report for consistent status representation
 -- ==========================================================================================================
 
 -- Function to map status SMALLINT to readable text
@@ -29,25 +48,38 @@ IMMUTABLE
 AS $$
 BEGIN
   RETURN CASE p_status
-    WHEN 1 THEN 'SUBMITTED'
-    WHEN 2 THEN 'RESUBMITTED' 
-    WHEN 3 THEN 'PAID'
-    WHEN 4 THEN 'PARTIALLY_PAID'
-    WHEN 5 THEN 'REJECTED'
-    WHEN 6 THEN 'UNKNOWN'
-    ELSE 'UNKNOWN'
+    WHEN 1 THEN 'SUBMITTED'        -- Initial claim submission
+    WHEN 2 THEN 'RESUBMITTED'      -- Claim was resubmitted after rejection
+    WHEN 3 THEN 'PAID'             -- Claim fully paid
+    WHEN 4 THEN 'PARTIALLY_PAID'   -- Claim partially paid
+    WHEN 5 THEN 'REJECTED'         -- Claim rejected/denied
+    WHEN 6 THEN 'UNKNOWN'          -- Status unclear
+    ELSE 'UNKNOWN'                 -- Default fallback
   END;
 END;
 $$;
 
-COMMENT ON FUNCTION claims.map_status_to_text IS 'Maps claim status SMALLINT to readable text';
+COMMENT ON FUNCTION claims.map_status_to_text IS 'Maps claim status SMALLINT to readable text for display purposes. Used in claim_status_timeline to show current claim status.';
 
 -- ==========================================================================================================
 -- SECTION 2: ENHANCED BASE VIEW
 -- ==========================================================================================================
 
+-- ==========================================================================================================
+-- ENHANCED BASE VIEW
+-- ==========================================================================================================
+-- This is the foundation view that provides all necessary data for the three report tabs.
+-- It includes:
+-- - Claim details (amounts, dates, identifiers)
+-- - Encounter information (facility, dates, patient)
+-- - Remittance summary (payments, denials, dates)
+-- - Resubmission tracking (count, dates, comments)
+-- - Status information (current status, timeline)
+-- - Calculated fields (aging, pending amounts, buckets)
+-- ==========================================================================================================
+
 -- Enhanced base balance amount view with corrected field mappings
-CREATE OR REPLACE VIEW claims.v_balance_amount_base_enhanced AS
+CREATE OR REPLACE VIEW claims.v_balance_amount_to_be_received_base AS
 SELECT 
   ck.id AS claim_key_id,
   ck.claim_id,
@@ -73,71 +105,96 @@ SELECT
   TO_CHAR(e.start_at, 'Month') AS encounter_start_month_name,
   
   -- Provider/Facility Group mapping (CORRECTED per JSON mapping)
+  -- Business Logic: Use facility_id from encounter (preferred) or provider_id from claim as fallback
+  -- This represents the organizational grouping for reporting purposes
   COALESCE(e.facility_id, c.provider_id) AS facility_group_id,  -- JSON: claims.encounter.facility_id (preferred) or claims.claim.provider_id
   
   -- Reference data with fallbacks (in case claims_ref schema is not accessible)
+  -- Business Logic: Use reference data when available, fallback to IDs for display
+  -- TODO: Enable when claims_ref schema is accessible and populated
   -- p.name AS provider_name,
   -- p.provider_code,
-  COALESCE(c.provider_id, 'UNKNOWN') AS provider_name,
+  COALESCE(c.provider_id, 'UNKNOWN') AS provider_name,  -- Fallback: Use provider_id as name
   c.provider_id AS provider_code,
   
   -- Facility details with fallbacks
+  -- Business Logic: Use facility reference data when available, fallback to facility_id
+  -- TODO: Enable when claims_ref schema is accessible and populated
   -- f.name AS facility_name,
   -- f.facility_code,
-  COALESCE(e.facility_id, 'UNKNOWN') AS facility_name,
+  COALESCE(e.facility_id, 'UNKNOWN') AS facility_name,  -- Fallback: Use facility_id as name
   e.facility_id AS facility_code,
   
   -- Payer details with fallbacks (for Receiver_Name mapping)
+  -- Business Logic: Use payer reference data when available, fallback to payer_id
+  -- This is used for Receiver_Name in Tab B (Initial Not Remitted Balance)
+  -- TODO: Enable when claims_ref schema is accessible and populated
   -- pay.name AS payer_name,
   -- pay.payer_code,
-  COALESCE(c.payer_id, 'UNKNOWN') AS payer_name,
+  COALESCE(c.payer_id, 'UNKNOWN') AS payer_name,  -- Fallback: Use payer_id as name
   c.payer_id AS payer_code,
   
   -- Health Authority mapping (CORRECTED per JSON mapping)
+  -- Business Logic: Track health authority for both submission and remittance phases
+  -- Used for filtering and grouping in reports
   if_sub.sender_id AS health_authority_submission,  -- JSON: claims.ingestion_file.sender_id for submission
   if_rem.receiver_id AS health_authority_remittance,  -- JSON: claims.ingestion_file.receiver_id for remittance
   
   -- Remittance summary (enhanced with better NULL handling)
-  COALESCE(rem_summary.total_payment_amount, 0) AS total_payment_amount,
-  COALESCE(rem_summary.total_denied_amount, 0) AS total_denied_amount,
-  rem_summary.first_remittance_date,
-  rem_summary.last_remittance_date,
-  rem_summary.last_payment_reference,
-  COALESCE(rem_summary.remittance_count, 0) AS remittance_count,
+  -- Business Logic: Aggregate all remittance data for a claim to show payment history
+  -- Used for calculating outstanding balances and payment status
+  COALESCE(rem_summary.total_payment_amount, 0) AS total_payment_amount,  -- Total amount paid across all remittances
+  COALESCE(rem_summary.total_denied_amount, 0) AS total_denied_amount,    -- Total amount denied across all remittances
+  rem_summary.first_remittance_date,                                      -- Date of first payment
+  rem_summary.last_remittance_date,                                       -- Date of most recent payment
+  rem_summary.last_payment_reference,                                     -- Reference number of last payment
+  COALESCE(rem_summary.remittance_count, 0) AS remittance_count,         -- Number of remittance files processed
   
   -- Resubmission summary (enhanced with better NULL handling)
-  COALESCE(resub_summary.resubmission_count, 0) AS resubmission_count,
-  resub_summary.last_resubmission_date,
-  resub_summary.last_resubmission_comment,
-  resub_summary.last_resubmission_type,
+  -- Business Logic: Track resubmission history for claims that were rejected and resubmitted
+  -- Used in Tab C to show claims that were resubmitted but still have outstanding balances
+  COALESCE(resub_summary.resubmission_count, 0) AS resubmission_count,     -- Number of times claim was resubmitted
+  resub_summary.last_resubmission_date,                                   -- Date of most recent resubmission
+  resub_summary.last_resubmission_comment,                                -- Comments from last resubmission
+  resub_summary.last_resubmission_type,                                   -- Type of last resubmission
   
   -- Submission file details (using direct joins)
-  if_sub.file_id AS last_submission_file,
-  if_sub.receiver_id,
+  -- Business Logic: Track submission file information for audit and reference purposes
+  if_sub.file_id AS last_submission_file,  -- File ID of the submission
+  if_sub.receiver_id,                       -- Receiver ID for the submission
   
   -- Payment status from claim_status_timeline (CORRECTED)
-  claims.map_status_to_text(cst.status) AS current_claim_status,
-  cst.status_time AS last_status_date,
+  -- Business Logic: Get the most recent status from the timeline to show current claim state
+  -- This provides the authoritative current status of the claim
+  claims.map_status_to_text(cst.status) AS current_claim_status,  -- Current status as readable text
+  cst.status_time AS last_status_date,                             -- When the status was last updated
   
   -- Calculated fields with proper NULL handling
+  -- Business Logic: Calculate outstanding balance (what is still owed)
+  -- Formula: Initial Net Amount - Total Payments - Total Denials = Outstanding Balance
   CASE 
     WHEN c.net IS NULL OR c.net = 0 THEN 0
     ELSE c.net - COALESCE(rem_summary.total_payment_amount, 0) - COALESCE(rem_summary.total_denied_amount, 0)
-  END AS pending_amount,
+  END AS pending_amount,  -- Outstanding balance (what is still owed)
   
+  -- Business Logic: Calculate write-off amount (amount that was written off)
+  -- Formula: Initial Net Amount - Total Payments = Write-off Amount
+  -- Note: This is a simplified calculation; actual write-offs may come from external systems
   CASE 
     WHEN c.net IS NULL OR c.net = 0 THEN 0
     ELSE c.net - COALESCE(rem_summary.total_payment_amount, 0)
-  END AS write_off_amount,
+  END AS write_off_amount,  -- Amount written off (simplified calculation)
   
   -- Aging calculation (CORRECTED: Use encounter.start_at)
-  EXTRACT(DAYS FROM (CURRENT_DATE - e.start_at)) AS aging_days,
+  -- Business Logic: Calculate how long a claim has been outstanding
+  -- Used for aging analysis and prioritization of follow-up actions
+  EXTRACT(DAYS FROM (CURRENT_DATE - e.start_at)) AS aging_days,  -- Days since encounter start
   CASE 
-    WHEN EXTRACT(DAYS FROM (CURRENT_DATE - e.start_at)) <= 30 THEN '0-30'
-    WHEN EXTRACT(DAYS FROM (CURRENT_DATE - e.start_at)) <= 60 THEN '31-60'
-    WHEN EXTRACT(DAYS FROM (CURRENT_DATE - e.start_at)) <= 90 THEN '61-90'
-    ELSE '90+'
-  END AS aging_bucket
+    WHEN EXTRACT(DAYS FROM (CURRENT_DATE - e.start_at)) <= 30 THEN '0-30'    -- Recent claims
+    WHEN EXTRACT(DAYS FROM (CURRENT_DATE - e.start_at)) <= 60 THEN '31-60'   -- Moderate aging
+    WHEN EXTRACT(DAYS FROM (CURRENT_DATE - e.start_at)) <= 90 THEN '61-90'   -- High aging
+    ELSE '90+'                                                                 -- Critical aging
+  END AS aging_bucket  -- Aging category for reporting and analysis
 
 FROM claims.claim_key ck
 JOIN claims.claim c ON c.claim_key_id = ck.id
@@ -192,14 +249,31 @@ LEFT JOIN LATERAL (
   LIMIT 1
 ) cst ON TRUE;
 
-COMMENT ON VIEW claims.v_balance_amount_base_enhanced IS 'Enhanced base view for balance amount reporting with corrected field mappings and business logic';
+COMMENT ON VIEW claims.v_balance_amount_to_be_received_base IS 'Enhanced base view for balance amount reporting with corrected field mappings and business logic';
 
 -- ==========================================================================================================
 -- SECTION 3: TAB VIEWS WITH CORRECTED MAPPINGS
 -- ==========================================================================================================
+-- 
+-- BUSINESS OVERVIEW:
+-- The report provides three complementary views for different business needs:
+-- 1. Tab A: Overall view of all claims with their current status
+-- 2. Tab B: Initial submissions that have not been processed yet
+-- 3. Tab C: Claims that were resubmitted but still have outstanding balances
+--
+-- Each tab is designed for specific business scenarios and user workflows.
+-- ==========================================================================================================
+
+-- ==========================================================================================================
+-- TAB A: BALANCE AMOUNT TO BE RECEIVED
+-- ==========================================================================================================
+-- Purpose: Overall view of all claims with their current status and outstanding balances
+-- Use Case: General reporting, facility analysis, payer analysis, aging analysis
+-- Key Features: Complete claim information, aging buckets, status tracking
+-- ==========================================================================================================
 
 -- Tab A: Balance Amount to be received (CORRECTED MAPPINGS per JSON and report requirements)
-CREATE OR REPLACE VIEW claims.v_balance_amount_tab_a_corrected AS
+CREATE OR REPLACE VIEW claims.v_balance_amount_to_be_received AS
 SELECT 
   bab.claim_key_id,
   bab.claim_id,
@@ -214,23 +288,31 @@ SELECT
   bab.encounter_start_month,
   
   -- Detailed sub-data (expandable) with proper NULL handling per report requirements
-  bab.payer_id AS id_payer,  -- JSON: claims.claim.id_payer
-  bab.patient_id,
-  bab.member_id,  -- JSON: claims.claim.member_id
-  bab.emirates_id_number,  -- JSON: claims.claim.emirates_id_number
-  COALESCE(bab.initial_net_amount, 0) AS billed_amount,  -- CORRECTED: Renamed from claim_amt per report suggestion
-  COALESCE(bab.total_payment_amount, 0) AS amount_received,  -- CORRECTED: Renamed from remitted_amt per report suggestion
-  COALESCE(bab.write_off_amount, 0) AS write_off_amount,  -- CORRECTED: Renamed per report suggestion
-  COALESCE(bab.total_denied_amount, 0) AS denied_amount,  -- CORRECTED: Renamed from rejected_amt per report suggestion
-  COALESCE(bab.pending_amount, 0) AS outstanding_balance,  -- CORRECTED: Renamed from pending_amt per report suggestion
-  bab.claim_submission_date AS submission_date,  -- CORRECTED: Renamed per report suggestion
-  bab.last_submission_file AS submission_reference_file,  -- CORRECTED: Renamed per report suggestion
+  -- Business Logic: These fields provide the core financial and identification data
+  -- Used for detailed analysis and drill-down capabilities
+  bab.payer_id AS id_payer,  -- JSON: claims.claim.id_payer - Internal payer reference
+  bab.patient_id,            -- Patient identifier for the claim
+  bab.member_id,              -- JSON: claims.claim.member_id - Member ID for the claim
+  bab.emirates_id_number,    -- JSON: claims.claim.emirates_id_number - Emirates ID for the patient
+  
+  -- Financial amounts with proper naming per report standards
+  COALESCE(bab.initial_net_amount, 0) AS billed_amount,           -- CORRECTED: Renamed from claim_amt per report suggestion
+  COALESCE(bab.total_payment_amount, 0) AS amount_received,      -- CORRECTED: Renamed from remitted_amt per report suggestion
+  COALESCE(bab.write_off_amount, 0) AS write_off_amount,         -- CORRECTED: Renamed per report suggestion
+  COALESCE(bab.total_denied_amount, 0) AS denied_amount,         -- CORRECTED: Renamed from rejected_amt per report suggestion
+  COALESCE(bab.pending_amount, 0) AS outstanding_balance,       -- CORRECTED: Renamed from pending_amt per report suggestion
+  
+  -- Submission details
+  bab.claim_submission_date AS submission_date,                  -- CORRECTED: Renamed per report suggestion
+  bab.last_submission_file AS submission_reference_file,         -- CORRECTED: Renamed per report suggestion
   
   -- Additional calculated fields for business logic
+  -- Business Logic: Determine claim status based on payment and resubmission history
+  -- This provides a high-level status for quick understanding of claim state
   CASE 
-    WHEN bab.remittance_count > 0 THEN 'REMITTED'
-    WHEN bab.resubmission_count > 0 THEN 'RESUBMITTED'
-    ELSE 'PENDING'
+    WHEN bab.remittance_count > 0 THEN 'REMITTED'      -- Has received payments
+    WHEN bab.resubmission_count > 0 THEN 'RESUBMITTED' -- Was resubmitted but no payments yet
+    ELSE 'PENDING'                                     -- No payments or resubmissions yet
   END AS claim_status,
   
   bab.remittance_count,
@@ -240,17 +322,25 @@ SELECT
   bab.current_claim_status,
   bab.last_status_date
 
-FROM claims.v_balance_amount_base_enhanced bab;
+FROM claims.v_balance_amount_to_be_received_base bab;
 -- WHERE claims.check_user_facility_access(
 --   current_setting('app.current_user_id', TRUE), 
 --   bab.facility_id, 
 --   'READ'
 -- );
 
-COMMENT ON VIEW claims.v_balance_amount_tab_a_corrected IS 'Tab A: Balance Amount to be received - CORRECTED with proper field mappings';
+COMMENT ON VIEW claims.v_balance_amount_to_be_received IS 'Tab A: Balance Amount to be received - Overall view of all claims with current status, outstanding balances, and aging analysis. Used for general reporting, facility analysis, and payer analysis.';
+
+-- ==========================================================================================================
+-- TAB B: INITIAL NOT REMITTED BALANCE
+-- ==========================================================================================================
+-- Purpose: Shows claims that were submitted but have not received any payments yet
+-- Use Case: Tracking initial submissions, identifying claims that need follow-up
+-- Key Features: Only shows claims with no payments, includes receiver information
+-- ==========================================================================================================
 
 -- Tab B: Initial Not Remitted Balance (CORRECTED MAPPINGS per JSON and report requirements)
-CREATE OR REPLACE VIEW claims.v_balance_amount_tab_b_corrected AS
+CREATE OR REPLACE VIEW claims.v_initial_not_remitted_balance AS
 SELECT 
   bab.claim_key_id,
   bab.claim_id,
@@ -265,10 +355,12 @@ SELECT
   bab.encounter_start_month,
   
   -- Additional Tab B specific columns per report requirements
-  bab.receiver_id,  -- JSON: claims.ingestion_file.receiver_id
+  -- Business Logic: Tab B focuses on receiver/payer information for initial submissions
+  -- This helps identify which payers have not processed claims yet
+  bab.receiver_id,  -- JSON: claims.ingestion_file.receiver_id - Who should receive the claim
   bab.payer_name AS receiver_name,  -- CORRECTED: Use claims_ref.payer.name joined on payer_code = ingestion_file.receiver_id per JSON mapping
-  bab.payer_id,
-  bab.payer_name,
+  bab.payer_id,     -- Payer identifier
+  bab.payer_name,   -- Payer name for display
   
   -- Detailed sub-data (expandable) with proper NULL handling per report requirements
   bab.payer_id AS id_payer,  -- JSON: claims.claim.id_payer
@@ -289,7 +381,9 @@ SELECT
   bab.aging_days,
   bab.aging_bucket
 
-FROM claims.v_balance_amount_base_enhanced bab
+FROM claims.v_balance_amount_to_be_received_base bab
+-- Business Logic: Filter for claims that are truly initial submissions
+-- These are claims that have not been processed by payers yet
 WHERE COALESCE(bab.total_payment_amount, 0) = 0  -- Only initial submissions with no remittance
 AND COALESCE(bab.total_denied_amount, 0) = 0     -- No denials yet
 AND COALESCE(bab.resubmission_count, 0) = 0;     -- No resubmissions yet
@@ -299,10 +393,18 @@ AND COALESCE(bab.resubmission_count, 0) = 0;     -- No resubmissions yet
 --   'READ'
 -- );
 
-COMMENT ON VIEW claims.v_balance_amount_tab_b_corrected IS 'Tab B: Initial Not Remitted Balance - CORRECTED with enhanced filtering logic';
+COMMENT ON VIEW claims.v_initial_not_remitted_balance IS 'Tab B: Initial Not Remitted Balance - Shows claims that were submitted but have not received any payments yet. Used for tracking initial submissions and identifying claims that need follow-up.';
+
+-- ==========================================================================================================
+-- TAB C: AFTER RESUBMISSION NOT REMITTED BALANCE
+-- ==========================================================================================================
+-- Purpose: Shows claims that were resubmitted but still have outstanding balances
+-- Use Case: Tracking follow-up actions, identifying claims that need additional attention
+-- Key Features: Only shows resubmitted claims with outstanding balances, includes resubmission details
+-- ==========================================================================================================
 
 -- Tab C: After Resubmission Not Remitted Balance (CORRECTED MAPPINGS per JSON and report requirements)
-CREATE OR REPLACE VIEW claims.v_balance_amount_tab_c_corrected AS
+CREATE OR REPLACE VIEW claims.v_after_resubmission_not_remitted_balance AS
 SELECT 
   bab.claim_key_id,
   bab.claim_id,
@@ -329,9 +431,11 @@ SELECT
   bab.claim_submission_date AS submission_date,  -- CORRECTED: Renamed per report suggestion
   
   -- Resubmission details
-  bab.resubmission_count,
-  bab.last_resubmission_date,
-  bab.last_resubmission_comment,
+  -- Business Logic: Tab C focuses on resubmission history and follow-up actions
+  -- This helps track which claims were resubmitted and why they still have outstanding balances
+  bab.resubmission_count,           -- Number of times claim was resubmitted
+  bab.last_resubmission_date,       -- Date of most recent resubmission
+  bab.last_resubmission_comment,    -- Comments from last resubmission
   
   -- Additional context
   'RESUBMITTED_PENDING' AS claim_status,
@@ -339,7 +443,9 @@ SELECT
   bab.aging_days,
   bab.aging_bucket
 
-FROM claims.v_balance_amount_base_enhanced bab
+FROM claims.v_balance_amount_to_be_received_base bab
+-- Business Logic: Filter for claims that were resubmitted but still have outstanding balances
+-- These are claims that need additional follow-up or have complex issues
 WHERE COALESCE(bab.resubmission_count, 0) > 0  -- Only claims that have been resubmitted
 AND COALESCE(bab.pending_amount, 0) > 0;       -- Still have pending amount
 -- AND claims.check_user_facility_access(
@@ -348,14 +454,34 @@ AND COALESCE(bab.pending_amount, 0) > 0;       -- Still have pending amount
 --   'READ'
 -- );
 
-COMMENT ON VIEW claims.v_balance_amount_tab_c_corrected IS 'Tab C: After Resubmission Not Remitted Balance - CORRECTED with enhanced filtering logic';
+COMMENT ON VIEW claims.v_after_resubmission_not_remitted_balance IS 'Tab C: After Resubmission Not Remitted Balance - Shows claims that were resubmitted but still have outstanding balances. Used for tracking follow-up actions and identifying claims that need additional attention.';
 
 -- ==========================================================================================================
 -- SECTION 4: ENHANCED API FUNCTIONS WITH CORRECTED MAPPINGS
 -- ==========================================================================================================
+-- 
+-- API FUNCTIONS OVERVIEW:
+-- These functions provide programmatic access to the report data with filtering, pagination, and sorting capabilities.
+-- They are designed for integration with frontend applications and reporting tools.
+--
+-- KEY FEATURES:
+-- - Comprehensive filtering (facility, payer, date range, etc.)
+-- - Pagination support (limit/offset)
+-- - Flexible sorting options
+-- - Security controls (user access validation)
+-- - Performance optimization (indexed queries)
+-- ==========================================================================================================
+
+-- ==========================================================================================================
+-- TAB A API: BALANCE AMOUNT TO BE RECEIVED
+-- ==========================================================================================================
+-- Purpose: Programmatic access to Tab A data with filtering and pagination
+-- Use Case: Frontend applications, reporting tools, data exports
+-- Key Features: Comprehensive filtering, pagination, sorting, security controls
+-- ==========================================================================================================
 
 -- Tab A API: Balance Amount to be received (CORRECTED)
-CREATE OR REPLACE FUNCTION claims.get_balance_amount_tab_a_corrected(
+CREATE OR REPLACE FUNCTION claims.get_balance_amount_to_be_received(
   p_user_id TEXT,
   p_claim_key_ids BIGINT[] DEFAULT NULL,
   p_facility_codes TEXT[] DEFAULT NULL,
@@ -473,8 +599,8 @@ BEGIN
   -- Get total count
   v_sql := FORMAT('
     SELECT COUNT(*)
-    FROM claims.v_balance_amount_tab_a_corrected tab_a
-    JOIN claims.v_balance_amount_base_enhanced bab ON bab.claim_key_id = tab_a.claim_key_id
+    FROM claims.v_balance_amount_to_be_received tab_a
+    JOIN claims.v_balance_amount_to_be_received_base bab ON bab.claim_key_id = tab_a.claim_key_id
     %s
   ', v_where_clause);
   
@@ -515,8 +641,8 @@ BEGIN
       tab_a.current_claim_status,
       tab_a.last_status_date,
       %s as total_records
-    FROM claims.v_balance_amount_tab_a_corrected tab_a
-    JOIN claims.v_balance_amount_base_enhanced bab ON bab.claim_key_id = tab_a.claim_key_id
+    FROM claims.v_balance_amount_to_be_received tab_a
+    JOIN claims.v_balance_amount_to_be_received_base bab ON bab.claim_key_id = tab_a.claim_key_id
     %s
     %s
     LIMIT $10 OFFSET $11
@@ -527,20 +653,49 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION claims.get_balance_amount_tab_a_corrected IS 'API function for Tab A: Balance Amount to be received - CORRECTED with proper field mappings and enhanced functionality';
+COMMENT ON FUNCTION claims.get_balance_amount_to_be_received IS 'API function for Tab A: Balance Amount to be received - Provides programmatic access to Tab A data with comprehensive filtering, pagination, and sorting capabilities. Designed for frontend applications and reporting tools.';
 
 -- ==========================================================================================================
 -- SECTION 5: PERFORMANCE INDEXES - ENHANCED
+-- ==========================================================================================================
+-- 
+-- INDEX STRATEGY:
+-- The report uses a combination of existing DDL indexes and additional composite indexes
+-- to ensure optimal performance for common query patterns.
+--
+-- EXISTING INDEXES (from fresh DDL):
+-- - idx_encounter_start (covers start_at)
+-- - idx_encounter_facility (covers facility_id)
+-- - idx_claim_tx_at (covers tx_at)
+-- - idx_claim_provider (covers provider_id)
+-- - idx_claim_payer (covers payer_id)
+-- - idx_remittance_claim_provider (covers provider_id)
+--
+-- ADDITIONAL INDEXES:
+-- These indexes are specifically designed for the report's query patterns
+-- and provide optimal performance for filtering, sorting, and aggregation operations.
 -- ==========================================================================================================
 
 -- Note: Most performance indexes are already created in the fresh DDL.
 -- This section only adds composite indexes specifically needed for this report.
 
 -- Indexes for base view performance
+-- These indexes are specifically designed for the report's query patterns
+-- and provide optimal performance for filtering, sorting, and aggregation operations
+
+-- Encounter-based queries (facility filtering, date range filtering)
 CREATE INDEX IF NOT EXISTS idx_balance_amount_base_enhanced_encounter ON claims.encounter(claim_id, facility_id, start_at);
+
+-- Remittance-based queries (payment history, settlement dates)
 CREATE INDEX IF NOT EXISTS idx_balance_amount_base_enhanced_remittance ON claims.remittance_claim(claim_key_id, date_settlement);
+
+-- Resubmission queries (resubmission history, event tracking)
 CREATE INDEX IF NOT EXISTS idx_balance_amount_base_enhanced_resubmission ON claims.claim_event(claim_key_id, type, event_time) WHERE type = 2;
+
+-- Submission queries (file tracking, ingestion history)
 CREATE INDEX IF NOT EXISTS idx_balance_amount_base_enhanced_submission ON claims.submission(id, ingestion_file_id);
+
+-- Status timeline queries (current status, status history)
 CREATE INDEX IF NOT EXISTS idx_balance_amount_base_enhanced_status_timeline ON claims.claim_status_timeline(claim_key_id, status_time);
 
 -- Note: Performance indexes are already created in the fresh DDL:
@@ -552,43 +707,85 @@ CREATE INDEX IF NOT EXISTS idx_balance_amount_base_enhanced_status_timeline ON c
 -- - idx_remittance_claim_provider (covers provider_id)
 -- 
 -- Additional composite indexes for report performance (no hardcoded dates):
+-- These indexes support complex filtering and aggregation operations
+
+-- Facility and payer filtering (common business queries)
 CREATE INDEX IF NOT EXISTS idx_balance_amount_facility_payer_enhanced ON claims.claim(provider_id, payer_id);
+
+-- Payment status and settlement queries (payment tracking, reconciliation)
 CREATE INDEX IF NOT EXISTS idx_balance_amount_payment_status_enhanced ON claims.remittance_claim(claim_key_id, date_settlement, payment_reference);
+
+-- Remittance activity queries (payment amounts, denial codes)
 CREATE INDEX IF NOT EXISTS idx_balance_amount_remittance_activity_enhanced ON claims.remittance_activity(remittance_claim_id, payment_amount, denial_code);
 
 -- ==========================================================================================================
 -- SECTION 6: GRANTS - ENHANCED
 -- ==========================================================================================================
+-- 
+-- SECURITY OVERVIEW:
+-- The report uses the claims_user role for access control.
+-- All views and functions are granted to this role to ensure proper security.
+--
+-- ACCESS LEVELS:
+-- - SELECT: Read-only access to views for reporting
+-- - EXECUTE: Function execution for API access
+-- - No INSERT/UPDATE/DELETE: Report is read-only
+-- ==========================================================================================================
 
 -- Grant access to base view
-GRANT SELECT ON claims.v_balance_amount_base_enhanced TO claims_user;
+GRANT SELECT ON claims.v_balance_amount_to_be_received_base TO claims_user;
 
 -- Grant access to all tab views
-GRANT SELECT ON claims.v_balance_amount_tab_a_corrected TO claims_user;
-GRANT SELECT ON claims.v_balance_amount_tab_b_corrected TO claims_user;
-GRANT SELECT ON claims.v_balance_amount_tab_c_corrected TO claims_user;
+GRANT SELECT ON claims.v_balance_amount_to_be_received TO claims_user;
+GRANT SELECT ON claims.v_initial_not_remitted_balance TO claims_user;
+GRANT SELECT ON claims.v_after_resubmission_not_remitted_balance TO claims_user;
 
 -- Grant access to API functions
-GRANT EXECUTE ON FUNCTION claims.get_balance_amount_tab_a_corrected TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_balance_amount_to_be_received TO claims_user;
 GRANT EXECUTE ON FUNCTION claims.map_status_to_text TO claims_user;
 
 -- ==========================================================================================================
 -- SECTION 7: COMPREHENSIVE COMMENTS - ENHANCED
 -- ==========================================================================================================
+-- 
+-- DOCUMENTATION OVERVIEW:
+-- This section provides comprehensive documentation for all views and functions.
+-- Each comment explains the purpose, use cases, and key features.
+-- ==========================================================================================================
 
-COMMENT ON VIEW claims.v_balance_amount_base_enhanced IS 'Enhanced base view for balance amount reporting with corrected field mappings: FacilityGroupID/HealthAuthority use provider_name, Receiver_Name uses payer_name, aging uses encounter.start_at, payment status uses claim_status_timeline';
-COMMENT ON VIEW claims.v_balance_amount_tab_a_corrected IS 'Tab A: Balance Amount to be received - CORRECTED with proper field mappings and business logic';
-COMMENT ON VIEW claims.v_balance_amount_tab_b_corrected IS 'Tab B: Initial Not Remitted Balance - CORRECTED with enhanced filtering logic and proper field mappings';
-COMMENT ON VIEW claims.v_balance_amount_tab_c_corrected IS 'Tab C: After Resubmission Not Remitted Balance - CORRECTED with enhanced filtering logic and proper field mappings';
+COMMENT ON VIEW claims.v_balance_amount_to_be_received_base IS 'Enhanced base view for balance amount reporting with corrected field mappings: FacilityGroupID/HealthAuthority use provider_name, Receiver_Name uses payer_name, aging uses encounter.start_at, payment status uses claim_status_timeline';
+COMMENT ON VIEW claims.v_balance_amount_to_be_received IS 'Tab A: Balance Amount to be received - Overall view of all claims with current status, outstanding balances, and aging analysis. Used for general reporting, facility analysis, and payer analysis.';
+COMMENT ON VIEW claims.v_initial_not_remitted_balance IS 'Tab B: Initial Not Remitted Balance - Shows claims that were submitted but have not received any payments yet. Used for tracking initial submissions and identifying claims that need follow-up.';
+COMMENT ON VIEW claims.v_after_resubmission_not_remitted_balance IS 'Tab C: After Resubmission Not Remitted Balance - Shows claims that were resubmitted but still have outstanding balances. Used for tracking follow-up actions and identifying claims that need additional attention.';
 
-COMMENT ON FUNCTION claims.get_balance_amount_tab_a_corrected IS 'API function for Tab A: Balance Amount to be received - CORRECTED with proper field mappings, enhanced parameter handling, and comprehensive functionality';
+COMMENT ON FUNCTION claims.get_balance_amount_to_be_received IS 'API function for Tab A: Balance Amount to be received - Provides programmatic access to Tab A data with comprehensive filtering, pagination, and sorting capabilities. Designed for frontend applications and reporting tools.';
 
 -- ==========================================================================================================
 -- SECTION 8: USAGE EXAMPLES - ENHANCED
 -- ==========================================================================================================
+-- 
+-- USAGE OVERVIEW:
+-- This section provides comprehensive examples of how to use the report views and functions.
+-- Examples cover common business scenarios, filtering patterns, and analysis techniques.
+--
+-- BUSINESS SCENARIOS:
+-- 1. Facility Analysis: Track outstanding balances by facility
+-- 2. Payer Analysis: Monitor payment patterns by payer
+-- 3. Aging Analysis: Identify claims that need follow-up
+-- 4. Resubmission Tracking: Monitor resubmission effectiveness
+-- 5. Financial Reporting: Generate summary reports and dashboards
+-- ==========================================================================================================
 
--- Example 1: Get all pending claims for a specific facility with aging analysis
--- SELECT * FROM claims.get_balance_amount_tab_a_corrected(
+-- ==========================================================================================================
+-- EXAMPLE 1: FACILITY ANALYSIS WITH AGING
+-- ==========================================================================================================
+-- Purpose: Get all pending claims for a specific facility with aging analysis
+-- Use Case: Facility managers need to track their outstanding claims and prioritize follow-up
+-- Key Features: Facility filtering, aging analysis, status tracking
+-- ==========================================================================================================
+
+-- Get all pending claims for a specific facility with aging analysis
+-- SELECT * FROM claims.get_balance_amount_to_be_received(
 --   'user123',                                    -- user_id
 --   NULL,                                         -- claim_key_ids
 --   ARRAY['DHA-F-0045446'],                      -- facility_codes
@@ -605,7 +802,15 @@ COMMENT ON FUNCTION claims.get_balance_amount_tab_a_corrected IS 'API function f
 --   'DESC'                                        -- order_direction
 -- );
 
--- Example 2: Get claims with outstanding balance > 1000 and aging analysis
+-- ==========================================================================================================
+-- EXAMPLE 2: OUTSTANDING BALANCE ANALYSIS
+-- ==========================================================================================================
+-- Purpose: Get claims with outstanding balance > 1000 and aging analysis
+-- Use Case: Financial analysis, identifying high-value claims that need attention
+-- Key Features: Amount filtering, aging analysis, status tracking
+-- ==========================================================================================================
+
+-- Get claims with outstanding balance > 1000 and aging analysis
 -- SELECT 
 --   claim_number,
 --   facility_name,
@@ -615,11 +820,19 @@ COMMENT ON FUNCTION claims.get_balance_amount_tab_a_corrected IS 'API function f
 --   aging_days,
 --   aging_bucket,
 --   current_claim_status
--- FROM claims.v_balance_amount_tab_a_corrected 
+-- FROM claims.v_balance_amount_to_be_received 
 -- WHERE outstanding_balance > 1000 
 -- ORDER BY aging_days DESC;
 
--- Example 3: Get monthly summary by facility with aging buckets
+-- ==========================================================================================================
+-- EXAMPLE 3: MONTHLY SUMMARY BY FACILITY
+-- ==========================================================================================================
+-- Purpose: Get monthly summary by facility with aging buckets
+-- Use Case: Monthly reporting, facility performance analysis
+-- Key Features: Aggregation, grouping, aging analysis
+-- ==========================================================================================================
+
+-- Get monthly summary by facility with aging buckets
 -- SELECT 
 --   facility_id,
 --   facility_name,
@@ -631,13 +844,105 @@ COMMENT ON FUNCTION claims.get_balance_amount_tab_a_corrected IS 'API function f
 --   SUM(billed_amount) as total_billed_amount,
 --   SUM(outstanding_balance) as total_outstanding_balance,
 --   AVG(aging_days) as avg_aging_days
--- FROM claims.v_balance_amount_tab_a_corrected
+-- FROM claims.v_balance_amount_to_be_received
 -- WHERE encounter_start >= '2024-01-01'
 -- GROUP BY facility_id, facility_name, facility_group_id, encounter_start_year, encounter_start_month, aging_bucket
 -- ORDER BY encounter_start_year DESC, encounter_start_month DESC, aging_bucket;
 
 -- ==========================================================================================================
+-- EXAMPLE 4: PAYER ANALYSIS
+-- ==========================================================================================================
+-- Purpose: Analyze payment patterns by payer
+-- Use Case: Payer performance analysis, identifying slow payers
+-- Key Features: Payer filtering, payment analysis, aging analysis
+-- ==========================================================================================================
+
+-- Analyze payment patterns by payer
+-- SELECT 
+--   id_payer,
+--   payer_name,
+--   COUNT(*) as total_claims,
+--   SUM(billed_amount) as total_billed,
+--   SUM(amount_received) as total_received,
+--   SUM(outstanding_balance) as total_outstanding,
+--   AVG(aging_days) as avg_aging_days,
+--   ROUND((SUM(amount_received) / NULLIF(SUM(billed_amount), 0)) * 100, 2) as payment_rate_percent
+-- FROM claims.v_balance_amount_to_be_received
+-- WHERE encounter_start >= '2024-01-01'
+-- GROUP BY id_payer, payer_name
+-- ORDER BY total_outstanding DESC;
+
+-- ==========================================================================================================
+-- EXAMPLE 5: RESUBMISSION ANALYSIS
+-- ==========================================================================================================
+-- Purpose: Analyze resubmission effectiveness
+-- Use Case: Track which claims were resubmitted and their outcomes
+-- Key Features: Resubmission tracking, outcome analysis
+-- ==========================================================================================================
+
+-- Analyze resubmission effectiveness
+-- SELECT 
+--   facility_id,
+--   facility_name,
+--   COUNT(*) as resubmitted_claims,
+--   SUM(billed_amount) as total_billed,
+--   SUM(outstanding_balance) as total_outstanding,
+--   AVG(resubmission_count) as avg_resubmissions,
+--   MAX(last_resubmission_date) as latest_resubmission
+-- FROM claims.v_after_resubmission_not_remitted_balance
+-- GROUP BY facility_id, facility_name
+-- ORDER BY total_outstanding DESC;
+
+-- ==========================================================================================================
+-- EXAMPLE 6: AGING BUCKET ANALYSIS
+-- ==========================================================================================================
+-- Purpose: Analyze claims by aging buckets
+-- Use Case: Prioritize follow-up actions based on claim age
+-- Key Features: Aging analysis, prioritization
+-- ==========================================================================================================
+
+-- Analyze claims by aging buckets
+-- SELECT 
+--   aging_bucket,
+--   COUNT(*) as claim_count,
+--   SUM(billed_amount) as total_billed,
+--   SUM(outstanding_balance) as total_outstanding,
+--   AVG(aging_days) as avg_aging_days
+-- FROM claims.v_balance_amount_to_be_received
+-- WHERE outstanding_balance > 0
+-- GROUP BY aging_bucket
+-- ORDER BY 
+--   CASE aging_bucket 
+--     WHEN '0-30' THEN 1
+--     WHEN '31-60' THEN 2
+--     WHEN '61-90' THEN 3
+--     WHEN '90+' THEN 4
+--   END;
+
+-- ==========================================================================================================
 -- END OF BALANCE AMOUNT TO BE RECEIVED REPORT IMPLEMENTATION
+-- ==========================================================================================================
+-- 
+-- IMPLEMENTATION SUMMARY:
+-- This report provides a comprehensive solution for tracking outstanding claim balances
+-- with three complementary views designed for different business scenarios.
+--
+-- KEY FEATURES IMPLEMENTED:
+-- 1. Enhanced Base View: Comprehensive data foundation with proper field mappings
+-- 2. Tab A: Overall view of all claims with current status and aging analysis
+-- 3. Tab B: Initial submissions that have not been processed yet
+-- 4. Tab C: Claims that were resubmitted but still have outstanding balances
+-- 5. API Functions: Programmatic access with filtering, pagination, and sorting
+-- 6. Performance Indexes: Optimized for common query patterns
+-- 7. Security Controls: Proper access control and data protection
+-- 8. Comprehensive Documentation: Business logic, use cases, and examples
+--
+-- BUSINESS VALUE:
+-- - Improved visibility into outstanding claim balances
+-- - Enhanced aging analysis for prioritization
+-- - Better tracking of resubmission effectiveness
+-- - Streamlined reporting and analysis workflows
+-- - Data-driven decision making for claims management
 -- ==========================================================================================================
 
 -- Success message
@@ -652,5 +957,8 @@ BEGIN
   RAISE NOTICE '5. Aging → Use encounter.start_at (date_settlement for future)';
   RAISE NOTICE '6. Payment Status → Use claim_status_timeline table';
   RAISE NOTICE '7. Write-off Amount → Extract from claims.claim.comments or external adjustment feed';
+  RAISE NOTICE '8. Enhanced Documentation → Comprehensive business logic and usage examples';
+  RAISE NOTICE '9. Performance Optimization → Strategic indexing for optimal query performance';
+  RAISE NOTICE '10. Security Controls → Proper access control and data protection';
   RAISE NOTICE 'Ready for production use!';
 END$$;

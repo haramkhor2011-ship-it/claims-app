@@ -29,30 +29,31 @@ public class SoapAckerAdapter implements Acker {
     @Override
     public void maybeAck(String fileId, boolean success) {
         if (!ackEnabled) {
-            log.debug("[SOAP] ACK disabled; skip fileId={}", fileId);
+            log.debug("SOAP_ACK_DISABLED fileId={}", fileId);
             return;
         }
         if (!success) {
-            log.debug("[SOAP] Verify not green; skip ACK for fileId={}", fileId);
+            log.debug("SOAP_ACK_SKIPPED fileId={} reason=VERIFY_FAILED", fileId);
             return;
         }
+        log.info("SOAP_ACK_START fileId={} success={}", fileId, success);
         try {
             log.debug("[SOAP] ACK → SetDownloaded for fileId={}", fileId);
             var facilityOpt = fileRegistry.facilityFor(fileId);
             if (facilityOpt.isEmpty()) {
-                log.warn("[SOAP] ACK skipped: facility not found for fileId={}", fileId);
+                log.warn("SOAP_ACK_SKIPPED fileId={} reason=FACILITY_NOT_FOUND", fileId);
                 return;
             }
             var facilityCode = facilityOpt.get();
-            log.debug("[SOAP] ACK → SetDownloaded facility={} fileId={}", facilityCode, fileId);
+            log.info("SOAP_ACK_CALLING fileId={} facility={}", fileId, facilityCode);
             // Method name per your class: maybeMarkDownloaded(facilityCode, fileId)
             setDownloadedHook.maybeMarkDownloaded(facilityCode, fileId);
             // best-effort cleanup
             fileRegistry.forget(fileId);
-            log.debug("[SOAP] ACK success for fileId={}", fileId);
+            log.info("SOAP_ACK_SUCCESS fileId={} facility={}", fileId, facilityCode);
 
         } catch (Exception e) {
-            log.warn("[SOAP] ACK failed for fileId={} : {}", fileId, e.toString());
+            log.error("SOAP_ACK_FAILED fileId={} : {}", fileId, e.toString());
         } finally {
             fileRegistry.forget(fileId);
         }

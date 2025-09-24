@@ -152,6 +152,8 @@ public class DhpoFetchCoordinator {
     }
 
     private void processDelta(FacilityDhpoConfig f) {
+        String facilityCode = f.getFacilityCode();
+        log.info("DHPO_DELTA_START facility={} pollType=delta", facilityCode);
         List<Future<?>> futures;
         final int downloadConcurrency = Math.max(1, soapProps.downloadConcurrency());
         final Semaphore downloadSlots = new Semaphore(downloadConcurrency);
@@ -206,7 +208,7 @@ public class DhpoFetchCoordinator {
                     
                     try {
                         downloadSlots.acquireUninterruptibly();
-                        downloadAndStage(f, row.fileId(), plain);
+                        downloadAndStage(f, row, plain);
                     } catch (Exception e) {
                         log.error("Failed to download and stage file {} for facility {}: {}", 
                                 row.fileId(), f.getFacilityCode(), e.getMessage(), e);
@@ -342,7 +344,7 @@ public class DhpoFetchCoordinator {
                     
                     try {
                         downloadSlots.acquireUninterruptibly();
-                        downloadAndStage(f, file.fileId(), plain);
+                        downloadAndStage(f, file, plain);
                     } catch (Exception e) {
                         log.error("Failed to download and stage file {} for facility {}: {}", 
                                 file.fileId(), f.getFacilityCode(), e.getMessage(), e);
@@ -364,9 +366,9 @@ public class DhpoFetchCoordinator {
      * - Uses normalized UTF-8 XML bytes; rejects malformed payloads
      * - Records metrics and submits either path-based (DISK) or bytes-based (MEM) to the inbox
      */
-    private void downloadAndStage(FacilityDhpoConfig f, String fileId, CredsCipherService.PlainCreds plain) {
+    private void downloadAndStage(FacilityDhpoConfig f, ListFilesParser.FileRow file, CredsCipherService.PlainCreds plain) {
         long t0 = System.nanoTime();
-        var req = DownloadTransactionFileRequest.build(plain.login(), plain.pwd(), fileId, false /*soap1.1*/);
+        var req = DownloadTransactionFileRequest.build(plain.login(), plain.pwd(), file.fileId(), false /*soap1.1*/);
         
         // Execute SOAP call - retry logic is handled in HttpSoapCaller
         com.acme.claims.soap.SoapGateway.SoapResponse resp;
@@ -374,7 +376,7 @@ public class DhpoFetchCoordinator {
             resp = soapCaller.call(req);
         } catch (Exception e) {
             throw new DhpoSoapException(f.getFacilityCode(), "DownloadTransactionFile", 
-                    Integer.MIN_VALUE, "SOAP call failed for fileId: " + fileId, e);
+                    Integer.MIN_VALUE, "SOAP call failed for fileId: " + file.fileId(), e);
         }
         
         long dlMs = (System.nanoTime() - t0) / 1_000_000;
@@ -385,7 +387,7 @@ public class DhpoFetchCoordinator {
             parsed = downloadFileParser.parse(resp.envelopeXml());
         } catch (Exception e) {
             throw new DhpoFetchException(f.getFacilityCode(), "PARSE_DOWNLOAD_RESPONSE", 
-                    "PARSE_ERROR", "Failed to parse DownloadTransactionFile response for fileId: " + fileId, e);
+                    "PARSE_ERROR", "Failed to parse DownloadTransactionFile response for fileId: " + file.fileId(), e);
         }
         
         if (!handleResultCode("DownloadTransactionFile", parsed.code(), parsed.errorMessage(), f.getFacilityCode())) {
@@ -394,7 +396,7 @@ public class DhpoFetchCoordinator {
 
         byte[] raw = parsed.fileBytes();
         if (raw == null || raw.length == 0) {
-            log.warn("Facility {} fileId {}: downloaded file is empty", f.getFacilityCode(), fileId);
+            log.warn("Facility {} fileId {}: downloaded file is empty", f.getFacilityCode(), file.fileId());
             return;
         }
         
@@ -403,15 +405,15 @@ public class DhpoFetchCoordinator {
             xmlBytes = XmlPayloads.normalizeToUtf8OrThrow(raw);
             if (log.isDebugEnabled()) {
                 log.debug("DHPO fileId={} xmlHeadHex={} xmlHeadText[48]={}",
-                        fileId, XmlPayloads.headHex(xmlBytes, 48), XmlPayloads.headUtf8(xmlBytes, 48));
+                        file.fileId(), XmlPayloads.headHex(xmlBytes, 48), XmlPayloads.headUtf8(xmlBytes, 48));
             }
         } catch (IllegalArgumentException bad) {
             // Keep ERROR here so it's visible, with bounded diagnostics
             log.error("Facility {} fileId {}: downloaded payload rejected: {}; headHex={} headText[48]={}",
-                    f.getFacilityCode(), fileId, bad.getMessage(),
+                    f.getFacilityCode(), file.fileId(), bad.getMessage(),
                     XmlPayloads.headHex(raw, 48), XmlPayloads.headUtf8(raw, 48));
             throw new DhpoFetchException(f.getFacilityCode(), "INVALID_PAYLOAD", 
-                    "PAYLOAD_ERROR", "Downloaded payload is not valid XML for fileId: " + fileId, bad);
+                    "PAYLOAD_ERROR", "Downloaded payload is not valid XML for fileId: " + file.fileId(), bad);
         }
 //        var headHex = java.util.HexFormat.of().formatHex(java.util.Arrays.copyOf(fileBytes, Math.min(fileBytes.length, 64)));
 //        String headText = new String(fileBytes, java.nio.charset.StandardCharsets.UTF_8)
@@ -439,22 +441,23 @@ public class DhpoFetchCoordinator {
             dhpoMetrics.recordDownload(f.getFacilityCode(), staged.mode().name().toLowerCase(),
                     xmlBytes.length, dlMs);
 
-            log.info("Facility {} fileId {} staged as {} (name={})", f.getFacilityCode(), fileId, staged.mode(), staged.fileId());
+            log.info("Facility {} fileId {} staged as {} (name={})", f.getFacilityCode(), file.fileId(), staged.mode(), staged.fileId());
             
             // Hand-off to parser/persist remains in your existing flow.
             try {
-                fileRegistry.remember(fileId, f.getFacilityCode());
+                fileRegistry.remember(file.fileId(), f.getFacilityCode());
             } catch (Exception e) {
-                log.warn("Failed to remember file {} for facility {}: {}", fileId, f.getFacilityCode(), e.getMessage());
+                log.warn("Failed to remember file {} for facility {}: {}", file.fileId(), f.getFacilityCode(), e.getMessage());
             }
             
             try {
                 switch (staged.mode()) {
-                    case DISK -> inbox.submit(fileId, null, staged.path(), "soap"); // path-based
-                    case MEM  -> inbox.submitSoap(fileId, staged.bytes());          // in-memory
+                    case DISK -> inbox.submit(file.fileId(), null, staged.path(), "soap", file.fileName()); // path-based
+                    case MEM  -> inbox.submitSoap(file.fileId(), staged.bytes(), file.fileName());          // in-memory
                 }
+                log.info("DHPO_DELTA_FILE_QUEUED facility={} fileId={} fileName={} size={} staged={}", f.getFacilityCode(), file.fileId(), file.fileName(), xmlBytes.length, staged.mode());
             } catch (Exception e) {
-                throw new DhpoStagingException(f.getFacilityCode(), fileId, staged.mode().name(), 
+                throw new DhpoStagingException(f.getFacilityCode(), file.fileId(), staged.mode().name(),
                         "Failed to submit staged file to inbox", e);
             }
             // NOTE: SetTransactionDownloaded will be invoked once ingestion completes in pipeline class
@@ -462,7 +465,7 @@ public class DhpoFetchCoordinator {
             // Re-throw staging exceptions as-is
             throw e;
         } catch (Exception e) {
-            throw new DhpoStagingException(f.getFacilityCode(), fileId, "UNKNOWN", 
+            throw new DhpoStagingException(f.getFacilityCode(), file.fileId(), "UNKNOWN",
                     "Staging operation failed", e);
         }
     }

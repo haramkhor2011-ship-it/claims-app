@@ -31,17 +31,17 @@ public class IngestionProperties {
     /* ===== nested groups ===== */
 
     public static class Poll {
-        private long fixedDelayMs = 2000L;
+        private long fixedDelayMs;
         public long getFixedDelayMs() { return fixedDelayMs; }
         public void setFixedDelayMs(long v) { this.fixedDelayMs = v; }
     }
     public static class Queue {
-        private int capacity = 256;
+        private int capacity;
         public int getCapacity() { return capacity; }
         public void setCapacity(int v) { this.capacity = v; }
     }
     public static class Concurrency {
-        private int parserWorkers = 8;
+        private int parserWorkers;
         public int getParserWorkers() { return parserWorkers; }
         public void setParserWorkers(int v) { this.parserWorkers = v; }
     }
