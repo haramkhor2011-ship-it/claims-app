@@ -95,9 +95,9 @@ claims:
   # ===== Refdata & Bootstrap =====
   refdata:
     # Start with true to auto-seed on first sightings; flip to false once dictionaries are governed
-    auto-insert: true
+    auto-insert: true                    # ENABLED: Populate ref_id columns during persist
   bootstrap:
-    enabled: true                        # prod CSV Bootstrap is typically OFF; run migrations instead
+    enabled: false                       # DISABLED: Don't read CSV files on startup, only populate ref_id during persist
     csv-path: "classpath:refdata/"
 
 # Optional: enable a real cache for ref lookups in prod (Caffeine)

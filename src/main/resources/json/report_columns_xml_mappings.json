@@ -78,7 +78,7 @@
                     "AI Analysis": "External system metadata required; schemas do not include file-level metadata."
                 },
                 {
-                    "Report Column": "Appeal Status",
+                    "Report Column": "Approval(Appeal) Status",
                     "Submission XML path": "Not present",
                     "Remittance XML path": "Not present",
                     "Notes / derivation": "Not supported in provided ClaimSubmission or RemittanceAdvice schemas. Track via external claim management system.",
@@ -86,7 +86,7 @@
                     "Submission DB Path": "Not stored",
                     "Remittance DB Path": "Not stored",
                     "Data Type": "text",
-                    "Best Path": "Not stored; derive from external claim management system, as schemas lack appeal status.",
+                    "Best Path": "this will be approval status similar to claim status, but based on activity level at claim remittance",
                     "AI Analysis": "Requires external system; no schema support for appeal status."
                 },
                 {
@@ -294,7 +294,7 @@
                     "AI Analysis": "Duplicate of CPTCategory; maps to activity type. Schema provides enumerated values."
                 },
                 {
-                    "Report Column": "CTClinician",
+                    "Report Column": "-----CTClinician----not required in reports ignore this",
                     "Submission XML path": "Not present",
                     "Remittance XML path": "Not present",
                     "Notes / derivation": "Not supported in provided ClaimSubmission or RemittanceAdvice schemas. Likely a typo or external field.",
@@ -564,7 +564,7 @@
                     "Notes / derivation": "Free-text comments may include initial denial reasons. Type: RAComments (xs:string, minLength: 0, maxLength: 2000). Not explicit in sample schemas.",
                     "Cursor Analysis": "",
                     "Submission DB Path": "claims.claim.comments",
-                    "Remittance DB Path": "claims.remittance_claim.comments",
+                    "Remittance DB Path": "claims.remittance_claim.comments---confirm if this column exists in our ddl(if not then pick comments from claims.claim",
                     "Data Type": "text",
                     "Best Path": "claims.remittance_claim.comments for remittance; claims.claim.comments for submission if applicable, per schema's RAComments.",
                     "AI Analysis": "May contain denial details; requires parsing. Schema supports comments."
@@ -738,7 +738,7 @@
                     "AI Analysis": "Billed amount in submission; echoed in remittance. Schema confirms xs:float."
                 },
                 {
-                    "Report Column": "Ordering Clinician / OrderingClinician_Name",
+                    "Report Column": "-----------Ordering Clinician / OrderingClinician_Name------not requried in reports ignore this column",
                     "Submission XML path": "Claim/Activity/Clinician",
                     "Remittance XML path": "Claim/Activity/Clinician",
                     "Notes / derivation": "Clinician ID; no separate ordering clinician in schemas. Type: ActivityClinician (xs:string, minLength: 1, no spaces). Name requires lookup.",
@@ -1149,13 +1149,13 @@
                     "Report Column": "Taken Back Amount / Taken Back Count",
                     "Submission XML path": "Not in XMLs",
                     "Remittance XML path": "Not in XMLs",
-                    "Notes / derivation": "Adjustments tracked in accounting/adjustment feed. Not supported in provided schemas; requires sample XML for take-back.",
+                    "Notes / derivation": "Ignore::Adjustments tracked in accounting/adjustment feed. Not supported in provided schemas; requires sample XML for take-back.",
                     "Cursor Analysis": "",
                     "Submission DB Path": "Not stored",
-                    "Remittance DB Path": "Not stored",
+                    "Remittance DB Path": "claims.remittance_activity will have net, payment_amount as -ve in table for such claims",
                     "Data Type": "numeric(14,2) / integer",
-                    "Best Path": "Not stored; track externally in adjustment feed, as schemas lack this field.",
-                    "AI Analysis": "Requires external feed; not in schemas. Pending sample XML for take-back adjustments."
+                    "Best Path": "claims.remittance_activity, for claims where net and payment amount was -ve for that claim we shall consider it as taken back amount, similarly counts of such claims ",
+                    "AI Analysis": ""
                 },
                 {
                     "Report Column": "Total Claim Count / TotalClaim",
@@ -1194,7 +1194,7 @@
                     "AI Analysis": "Directly from header; remittance date > submission date. Schema enforces date format."
                 },
                 {
-                    "Report Column": "Write-off Amount / WriteOffAmt / Write-off Status / Write-off Comment",
+                    "Report Column": "Ignore::----Write-off Amount / WriteOffAmt / Write-off Status / Write-off Comment----not required in reports------",
                     "Submission XML path": "Sometimes in RA as adjustments or in Claim/Comments",
                     "Remittance XML path": "Sometimes in RA or external adjustments",
                     "Notes / derivation": "Not in sample RA; some payers include write-off info in RA or separate adjustment element. Type: RAComments (xs:string, minLength: 0, maxLength: 2000) for comments.",

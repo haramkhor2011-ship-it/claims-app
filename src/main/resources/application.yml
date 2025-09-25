@@ -41,3 +41,30 @@ claims:
       delimiter: ','
       batch-size: 500
     auto-insert: true                          # profiles override
+  
+  security:
+    enabled: false                           # Enable security for API endpoints only
+    jwt:
+      secret: "claims-jwt-secret-key-change-in-production-2025"
+      access-token-expiration: PT15M          # 15 minutes
+      refresh-token-expiration: P7D           # 7 days
+      issuer: "claims-app"
+      audience: "claims-users"
+    
+    multi-tenancy:
+      enabled: false                           # Enable for multi-tenant support
+      default-facility-code: "DEFAULT"
+    
+    sso:
+      enabled: false                           # Enable for SSO integration
+      default-provider: "OAUTH2"
+    
+    account-lockout:
+      max-failed-attempts: 3
+      lockout-duration: PT30M                 # 30 minutes (not used - admin unlock only)
+      auto-unlock: false                      # Disabled - admin unlock only
+    
+    default-admin:
+      username: "admin"
+      password: "admin123"
+      email: "admin@claims.local"

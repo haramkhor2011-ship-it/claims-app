@@ -80,9 +80,9 @@ claims:
 
   # ===== Refdata & Bootstrap =====
   refdata:
-    auto-insert: true                    # local: insert-on-miss to keep dev smooth
+    auto-insert: true                    # local: insert-on-miss to keep dev smooth - ENABLED for ref_id population
   bootstrap:
-    enabled: true                        # enable bootstrap to allow ref data insertion
+    enabled: false                       # DISABLED: Don't read CSV files on startup, only populate ref_id during persist
     csv-path: "classpath:refdata/"       # your CSVs are already under resources/refdata
 
 # Optional simple cache tuning for refdata lookups (if you use Spring Cache)
