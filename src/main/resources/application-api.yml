@@ -1,0 +1,4 @@
+# API profile - Security enabled for API endpoints
+claims:
+  security:
+    enabled: true                            # Enable security for API endpoints

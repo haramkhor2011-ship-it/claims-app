@@ -25,6 +25,18 @@ management:
       exposure:
         include: health,info,metrics,loggers,threaddump,env,configprops
 
+# Swagger/OpenAPI Configuration
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+    tagsSorter: alpha
+    display-request-duration: true
+    display-operation-id: true
+  show-actuator: true
+
 logging:
   level:
     com.acme.claims: INFO                     # orchestrator/fetcher/pipeline visibility
