@@ -641,7 +641,7 @@ BEGIN
   RETURN QUERY
   SELECT 
     rctb.receiver_name,
-    rctb.payer_id,
+    rctb.id_payer,
     rctb.payer_name,
     rctb.total_claim,
     rctb.claim_amt,
