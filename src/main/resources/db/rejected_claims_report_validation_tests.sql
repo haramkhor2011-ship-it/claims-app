@@ -28,9 +28,8 @@ WHERE schemaname = 'claims'
 AND viewname IN (
     'v_rejected_claims_base',
     'v_rejected_claims_summary', 
-    'v_rejected_claims_tab_a',
-    'v_rejected_claims_tab_b',
-    'v_rejected_claims_tab_c'
+    'v_rejected_claims_receiver_payer',
+    'v_rejected_claims_claim_wise'
 );
 
 -- Test 2: Verify all functions exist
@@ -45,9 +44,9 @@ SELECT
 FROM information_schema.routines 
 WHERE routine_schema = 'claims' 
 AND routine_name IN (
-    'get_rejected_claims_tab_a',
-    'get_rejected_claims_tab_b',
-    'get_rejected_claims_tab_c'
+    'get_rejected_claims_summary',
+    'get_rejected_claims_receiver_payer',
+    'get_rejected_claims_claim_wise'
 );
 
 -- Test 3: Verify all indexes exist
@@ -210,9 +209,9 @@ SELECT
 FROM (
     SELECT 
         (SELECT COUNT(*) FROM claims.v_rejected_claims_base) as base_count,
-        (SELECT COUNT(*) FROM claims.v_rejected_claims_tab_a) as tab_a_count,
-        (SELECT COUNT(*) FROM claims.v_rejected_claims_tab_b) as tab_b_count,
-        (SELECT COUNT(*) FROM claims.v_rejected_claims_tab_c) as tab_c_count
+        (SELECT COUNT(*) FROM claims.v_rejected_claims_summary) as tab_a_count,
+        (SELECT COUNT(*) FROM claims.v_rejected_claims_receiver_payer) as tab_b_count,
+        (SELECT COUNT(*) FROM claims.v_rejected_claims_claim_wise) as tab_c_count
 ) t;
 
 -- Test 12: Validate amount consistency across tabs
@@ -228,8 +227,8 @@ SELECT
 FROM (
     SELECT 
         (SELECT COALESCE(SUM(rejected_amount), 0) FROM claims.v_rejected_claims_base) as base_total,
-        (SELECT COALESCE(SUM(rejected_amt_detail), 0) FROM claims.v_rejected_claims_tab_a WHERE rejected_amt_detail IS NOT NULL) as tab_a_total,
-        (SELECT COALESCE(SUM(rejected_amt), 0) FROM claims.v_rejected_claims_tab_c) as tab_c_total
+        (SELECT COALESCE(SUM(rejected_amt_detail), 0) FROM claims.v_rejected_claims_summary WHERE rejected_amt_detail IS NOT NULL) as tab_a_total,
+        (SELECT COALESCE(SUM(rejected_amt), 0) FROM claims.v_rejected_claims_claim_wise) as tab_c_total
 ) t;
 
 -- Test 13: Validate claim count consistency
@@ -244,7 +243,7 @@ SELECT
 FROM (
     SELECT 
         (SELECT COUNT(DISTINCT claim_key_id) FROM claims.v_rejected_claims_base) as base_claims,
-        (SELECT SUM(total_claim) FROM claims.v_rejected_claims_tab_b) as tab_b_claims
+        (SELECT SUM(total_claim) FROM claims.v_rejected_claims_receiver_payer) as tab_b_claims
 ) t;
 
 -- ==========================================================================================================
@@ -261,7 +260,7 @@ SELECT
     result_count
 FROM (
     SELECT COUNT(*) as result_count
-    FROM claims.get_rejected_claims_tab_a(
+    FROM claims.get_rejected_claims_summary(
         'test_user',        -- p_user_id
         NULL,               -- p_facility_codes
         NULL,               -- p_payer_codes
@@ -287,7 +286,7 @@ SELECT
     result_count
 FROM (
     SELECT COUNT(*) as result_count
-    FROM claims.get_rejected_claims_tab_b(
+    FROM claims.get_rejected_claims_receiver_payer(
         'test_user',            -- p_user_id
         NULL,                   -- p_facility_codes
         NULL,                   -- p_payer_codes
@@ -314,7 +313,7 @@ SELECT
     page2_count
 FROM (
     SELECT 
-        (SELECT COUNT(*) FROM claims.get_rejected_claims_tab_c(
+        (SELECT COUNT(*) FROM claims.get_rejected_claims_claim_wise(
             'test_user',        -- p_user_id
             NULL,               -- p_facility_codes
             NULL,               -- p_payer_codes
@@ -328,7 +327,7 @@ FROM (
             'claim_number',     -- p_order_by
             'ASC'               -- p_order_direction
         )) as page1_count,
-        (SELECT COUNT(*) FROM claims.get_rejected_claims_tab_c(
+        (SELECT COUNT(*) FROM claims.get_rejected_claims_claim_wise(
             'test_user',        -- p_user_id
             NULL,               -- p_facility_codes
             NULL,               -- p_payer_codes
@@ -401,7 +400,7 @@ FROM (
         SELECT clock_timestamp() as start_time
     ) t1,
     LATERAL (
-        SELECT COUNT(*) FROM claims.get_rejected_claims_tab_a(
+        SELECT COUNT(*) FROM claims.get_rejected_claims_summary(
             'test_user',        -- p_user_id
             NULL,               -- p_facility_codes
             NULL,               -- p_payer_codes
