@@ -39,7 +39,7 @@ public class SoapFetcherAdapter implements Fetcher {
                         continue;
                     }
                     WorkItem wi = inbox.takeInterruptibly();
-                    log.info("SOAP_FETCHER_DEQUEUED fileId={} fileName={} source={} queueSize={}", 
+                    log.info("SOAP_FETCHER_DEQUEUED fileId={} fileName={} source={} queueSize={}",
                         wi.fileId(), wi.fileName(), wi.source(), inbox.size());
                     onReady.accept(wi);
                 } catch (InterruptedException ie) {

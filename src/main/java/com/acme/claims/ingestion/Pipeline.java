@@ -29,6 +29,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
@@ -85,19 +86,34 @@ public class Pipeline {
         Long filePk = null;
         long t0 = System.nanoTime();
         boolean success = false;
-        log.info("PIPELINE_START fileId={} fileName={} source={} size={}", 
-            wi.fileId(), wi.fileName(), wi.source(), wi.xmlBytes().length);
+
+        // Handle disk-based files where xmlBytes might be null
+        byte[] xmlBytes = wi.xmlBytes();
+        if (xmlBytes == null && wi.sourcePath() != null) {
+            try {
+                xmlBytes = Files.readAllBytes(wi.sourcePath());
+                log.info("Loaded XML from disk: fileId={} fileName={} size={}",
+                    wi.fileId(), wi.fileName(), xmlBytes.length);
+            } catch (IOException e) {
+                log.error("Failed to read XML from disk: fileId={} fileName={} path={} error={}",
+                    wi.fileId(), wi.fileName(), wi.sourcePath(), e.getMessage());
+                throw new RuntimeException("Failed to read XML file from disk", e);
+            }
+        }
+
+        log.info("PIPELINE_START fileId={} fileName={} source={} size={}",
+            wi.fileId(), wi.fileName(), wi.source(), xmlBytes.length);
         try {
             // 1) Root sniff (cheap) so stub row has a valid root_type (1 or 2)
-            RootDetector.RootKind sniffed = RootDetector.detect(wi.xmlBytes());
+            RootDetector.RootKind sniffed = RootDetector.detect(xmlBytes);
             short rootType = switch (sniffed) { case SUBMISSION -> ROOT_SUBMISSION; case REMITTANCE -> ROOT_REMITTANCE; };
             log.info("sniffed root type: {}", rootType);
             // 2) INSERT stub ingestion_file with safe placeholders
-            filePk = self.insertStub(wi, rootType);
+            filePk = self.insertStub(wi, rootType, xmlBytes);
             IngestionFile fileRow = new IngestionFile();
             fileRow.setId(filePk);
             fileRow.setFileId(wi.fileId());
-            fileRow.setXmlBytes(wi.xmlBytes());
+            fileRow.setXmlBytes(xmlBytes);
             fileRow.setFileName(wi.fileName());
             // 3) Parse (XSD → StAX). Parser writes parse errors using ingestion_file_id=filePk
             log.info("going to parse our ingestion file : {}", filePk);
@@ -240,7 +256,7 @@ public class Pipeline {
     // ---------- DB helpers ----------
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Long insertStub(WorkItem wi, short rootType) {
+    public Long insertStub(WorkItem wi, short rootType, byte[] xmlBytes) {
         return jdbc.queryForObject("""
                     INSERT INTO claims.ingestion_file
                       (file_id, file_name,root_type, sender_id, receiver_id, transaction_date,
@@ -251,7 +267,7 @@ public class Pipeline {
                     ON CONFLICT (file_id) DO UPDATE
                        SET updated_at = now()                 -- touch row, no rollback-inducing error
                     RETURNING id
-                """, Long.class, wi.fileId(), wi.fileName(), rootType, wi.xmlBytes());
+                """, Long.class, wi.fileId(), wi.fileName(), rootType, xmlBytes);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

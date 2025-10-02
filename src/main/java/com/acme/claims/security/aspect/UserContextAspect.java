@@ -80,31 +80,49 @@ public class UserContextAspect {
     /**
      * Log user context for service methods that perform data filtering
      */
-    @Around("execution(* com.acme.claims.security.service.*Service.*(..))")
+    @Around("execution(* com.acme.claims.security.service.*Service.*(..)) && " +
+            "!execution(* com.acme.claims.security.service.UserContextService.getCurrentUserContext(..)) && " +
+            "!execution(* com.acme.claims.security.service.UserContextService.getCurrentUserContextWithRequest(..))")
     public Object logServiceOperations(ProceedingJoinPoint joinPoint) throws Throwable {
         String className = joinPoint.getTarget().getClass().getSimpleName();
         String methodName = joinPoint.getSignature().getName();
         String operation = className + "." + methodName;
-        
+
         try {
-            UserContext context = userContextService.getCurrentUserContext();
-            log.debug("Service operation started - Operation: {}, User: {} (ID: {}), Roles: {}", 
-                    operation, context.getUsername(), context.getUserId(), context.getRoleNames());
-            
-            Object result = joinPoint.proceed();
-            
-            log.debug("Service operation completed - Operation: {}, User: {}", 
-                    operation, context.getUsername());
-            
-            return result;
-            
+            // Try to get user context, but handle unauthenticated scenarios gracefully
+            UserContext context = null;
+            try {
+                context = userContextService.getCurrentUserContext();
+            } catch (IllegalStateException e) {
+                // No authenticated user - this is expected for startup services like DataInitializationService
+                log.debug("Service operation started - Operation: {} (no authenticated user)", operation);
+            }
+
+            if (context != null) {
+                log.debug("Service operation started - Operation: {}, User: {} (ID: {}), Roles: {}",
+                        operation, context.getUsername(), context.getUserId(), context.getRoleNames());
+
+                Object result = joinPoint.proceed();
+
+                log.debug("Service operation completed - Operation: {}, User: {}",
+                        operation, context.getUsername());
+
+                return result;
+            } else {
+                // No authenticated user - proceed without logging user context
+                Object result = joinPoint.proceed();
+                log.debug("Service operation completed - Operation: {} (no authenticated user)", operation);
+                return result;
+            }
+
         } catch (Exception e) {
+            // Log error with or without user context
             try {
                 UserContext context = userContextService.getCurrentUserContext();
-                log.error("Service operation failed - Operation: {}, User: {} (ID: {}), Error: {}", 
+                log.error("Service operation failed - Operation: {}, User: {} (ID: {}), Error: {}",
                         operation, context.getUsername(), context.getUserId(), e.getMessage(), e);
             } catch (Exception contextError) {
-                log.error("Service operation failed - Operation: {}, Error: {} (Could not get user context: {})", 
+                log.error("Service operation failed - Operation: {}, Error: {} (Could not get user context: {})",
                         operation, e.getMessage(), contextError.getMessage(), e);
             }
             throw e;

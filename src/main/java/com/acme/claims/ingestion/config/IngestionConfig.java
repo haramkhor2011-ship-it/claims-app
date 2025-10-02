@@ -11,6 +11,7 @@ package com.acme.claims.ingestion.config;
 import com.acme.claims.ingestion.fetch.WorkItem;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -20,6 +21,7 @@ import java.util.concurrent.BlockingQueue;
 
 @Configuration
 @EnableScheduling // enables orchestrator @Scheduled poller
+@Profile("ingestion")
 public class IngestionConfig {
 
     @Bean(name = "ingestionQueue")
