@@ -110,6 +110,14 @@ public class Pipeline {
             log.info("sniffed root type: {}", rootType);
             // 2) INSERT stub ingestion_file with safe placeholders
             filePk = self.insertStub(wi, rootType, xmlBytes);
+            // Early duplicate short-circuit for disk-staged files — if events already exist, treat as success
+            if (wi.sourcePath() != null && alreadyProjected(filePk)) {
+                if (log.isDebugEnabled()) {
+                    log.debug("disk-staged file already processed (short-circuit): {}", wi.fileId());
+                }
+                success = true;
+                return new Result(filePk, rootType == ROOT_SUBMISSION ? 1 : 2, 0, 0, 0, 0, null);
+            }
             IngestionFile fileRow = new IngestionFile();
             fileRow.setId(filePk);
             fileRow.setFileId(wi.fileId());
@@ -161,6 +169,7 @@ public class Pipeline {
                         if (log.isDebugEnabled()) {
                             log.debug("file already processed (short-circuit): {}", fileRow.getFileId());
                         }
+                        success = true;
                         int claimCount = dto.claims().size();
                         int actCount = countActs(dto);
                         return new Result(filePk, 1, claimCount, 0, actCount, 0, dto.header().transactionDate());
@@ -215,6 +224,7 @@ public class Pipeline {
                         if (log.isDebugEnabled()) {
                             log.debug("file already processed (short-circuit): {}", fileRow.getFileId());
                         }
+                        success = true;
                         int claimCount = dto.claims().size();
                         int actCount = countActs(dto);
                         return new Result(filePk, 2, claimCount, 0, actCount, 0, dto.header().transactionDate());
