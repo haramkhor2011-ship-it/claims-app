@@ -42,22 +42,25 @@ public class ReportAccessService {
         try {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new IllegalArgumentException("User not found with ID: " + userId));
-            
+
+            User grantedByUser = userRepository.findById(grantedBy)
+                    .orElseThrow(() -> new IllegalArgumentException("Granting user not found with ID: " + grantedBy));
+
             // Check if user already has access to this report
             boolean alreadyHasAccess = user.getReportPermissions().stream()
                     .anyMatch(permission -> permission.getReportType().equals(reportType));
-            
+
             if (alreadyHasAccess) {
-                log.info("User {} (ID: {}) already has access to report: {}", 
+                log.info("User {} (ID: {}) already has access to report: {}",
                         user.getUsername(), userId, reportType);
                 return true;
             }
-            
+
             // Grant access
             UserReportPermission permission = UserReportPermission.builder()
                     .user(user)
                     .reportType(reportType)
-                    .grantedBy(grantedBy)
+                    .grantedBy(grantedByUser)
                     .grantedAt(LocalDateTime.now())
                     .build();
             

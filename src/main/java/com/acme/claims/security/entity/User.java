@@ -8,10 +8,15 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * User entity for authentication and authorization
@@ -22,7 +27,7 @@ import java.util.Set;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class User {
+public class User implements UserDetails {
     
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -168,5 +173,67 @@ public class User {
      */
     public boolean isManuallyLocked() {
         return locked && failedAttempts < 3;
+    }
+
+    /**
+     * Check if user is super admin
+     */
+    public boolean isSuperAdmin() {
+        return hasRole(Role.SUPER_ADMIN);
+    }
+
+    /**
+     * Check if user is facility admin
+     */
+    public boolean isFacilityAdmin() {
+        return hasRole(Role.FACILITY_ADMIN);
+    }
+
+    /**
+     * Get list of report types this user has access to
+     */
+    public Set<String> getReportTypeNames() {
+        return reportPermissions.stream()
+                .map(permission -> permission.getReportType().name())
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
+    // UserDetails implementation
+
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        return roles.stream()
+                .map(userRole -> new SimpleGrantedAuthority("ROLE_" + userRole.getRole().name()))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public String getPassword() {
+        return passwordHash;
+    }
+
+    @Override
+    public String getUsername() {
+        return username;
+    }
+
+    @Override
+    public boolean isAccountNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isAccountNonLocked() {
+        return !locked && failedAttempts < 3;
+    }
+
+    @Override
+    public boolean isCredentialsNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return enabled;
     }
 }

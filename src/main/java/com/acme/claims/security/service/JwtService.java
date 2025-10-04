@@ -66,13 +66,13 @@ public class JwtService {
         Instant expirationTime = now.plus(expiration);
         
         return Jwts.builder()
-                .setClaims(claims)
-                .setSubject(subject)
-                .setIssuer(securityProperties.getJwt().getIssuer())
-                .setAudience(securityProperties.getJwt().getAudience())
-                .setIssuedAt(Date.from(now))
-                .setExpiration(Date.from(expirationTime))
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .claims(claims)
+                .subject(subject)
+                .issuer(securityProperties.getJwt().getIssuer())
+                .audience().add(securityProperties.getJwt().getAudience()).and()
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(expirationTime))
+                .signWith(getSigningKey())
                 .compact();
     }
     
@@ -144,11 +144,11 @@ public class JwtService {
      * Extract all claims from token
      */
     private Claims extractAllClaims(String token) {
-        return Jwts.parserBuilder()
+        return Jwts.parser()
                 .setSigningKey(getSigningKey())
                 .build()
-                .parseClaimsJws(token)
-                .getBody();
+                .parseClaimsJwt(token)
+                .getPayload();
     }
     
     /**

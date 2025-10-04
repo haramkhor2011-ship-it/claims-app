@@ -177,7 +177,7 @@ public class PersistService {
         for (SubmissionClaimDTO c : file.claims()) {
             try {
                 // Process each claim in its own transaction to prevent single failure from stopping entire file
-                PersistCounts claimCounts = persistSingleClaim(ingestionFileId, submissionId, c, attachments);
+                PersistCounts claimCounts = persistSingleClaim(ingestionFileId, submissionId, c, attachments, file);
 
                 claims += claimCounts.claims();
                 acts += claimCounts.acts();
@@ -240,18 +240,18 @@ public class PersistService {
      * </ul>
      *
      * @param ingestionFileId the unique ID of the ingestion file being processed
-     * @param submissionId the database ID of the parent submission record
-     * @param c the claim DTO containing all claim data to persist
-     * @param attachments list of all attachments for the submission (filtered by claim ID)
+     * @param submissionId    the database ID of the parent submission record
+     * @param c               the claim DTO containing all claim data to persist
+     * @param attachments     list of all attachments for the submission (filtered by claim ID)
+     * @param file
      * @return PersistCounts containing counts of entities persisted for this claim
      * @throws RuntimeException if claim processing fails (logged and handled by caller)
-     *
      * @see SubmissionClaimDTO for input data structure
      * @see PersistCounts for return value details
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public PersistCounts persistSingleClaim(long ingestionFileId, long submissionId, SubmissionClaimDTO c,
-                                           List<ParseOutcome.AttachmentRecord> attachments) {
+                                            List<ParseOutcome.AttachmentRecord> attachments, SubmissionDTO file) {
         final String claimIdBiz = c.id();
         final OffsetDateTime now = OffsetDateTime.now();
 
@@ -271,7 +271,7 @@ public class PersistService {
         }
 
         // Upsert core graph
-        final long claimKeyId = upsertClaimKey(claimIdBiz);
+        final long claimKeyId = upsertClaimKey(claimIdBiz, file.header().transactionDate(), "S");
 
         // resolve ref IDs (inserting into ref tables + auditing if missing)
         final Long payerRefId = (c.payerId() == null) ? null
@@ -405,7 +405,7 @@ public class PersistService {
                 continue; // logged above
             }
 
-            final long claimKeyId = upsertClaimKey(c.id());
+            final long claimKeyId = upsertClaimKey(c.id(), file.header().transactionDate(), "R");
             try {
                 // resolve denial code ref id for the claim scope (if any denial present at claim level)
                 final Long denialRefId = (c.denialCode() == null) ? null
@@ -620,18 +620,21 @@ public class PersistService {
      * @throws IllegalArgumentException if claimIdBiz is null or blank
      * @throws RuntimeException if unable to resolve claim key after multiple attempts
      */
-    private long upsertClaimKey(String claimIdBiz) {
+    private long upsertClaimKey(String claimIdBiz, OffsetDateTime transactionDateTime, String transactionType) {
         Assert.hasText(claimIdBiz, "claimIdBiz must not be blank"); // fast guard
 
         try {
             // Single round-trip, no UPDATE on conflict:
             // 1) Try INSERT, capture id in CTE 'ins'
             // 2) If nothing inserted (conflict), select existing id
+            OffsetDateTime transactionCreateTime = "S".equalsIgnoreCase(transactionType) ? transactionDateTime : null;
+            OffsetDateTime transactionUpdateTime = "R".equalsIgnoreCase(transactionType) ? transactionDateTime : null;
             final String sql = """
                     WITH ins AS (
-                      INSERT INTO claims.claim_key (claim_id)
-                      VALUES (?)
-                      ON CONFLICT (claim_id) DO NOTHING
+                      INSERT INTO claims.claim_key (claim_id, created_at, updated_at)
+                      VALUES (?, ?, ?)
+                      ON CONFLICT (claim_id) DO UPDATE SET
+                      updated_at = COALESCE(?, updated_at)
                       RETURNING id
                     )
                     SELECT id FROM ins
@@ -641,7 +644,7 @@ public class PersistService {
                     """;
 
             // Returns the inserted id, or the existing id if conflict occurred
-            return jdbc.queryForObject(sql, Long.class, claimIdBiz, claimIdBiz);
+            return jdbc.queryForObject(sql, Long.class, claimIdBiz, transactionCreateTime, transactionUpdateTime, transactionUpdateTime, claimIdBiz);
 
         } catch (Exception e) {
             // Handle the case where multiple claim_ids exist in the database (data integrity issue)

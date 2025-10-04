@@ -190,10 +190,9 @@ public class RefCodeResolver {
                                      String actor,
                                      Long ingestionFileId,
                                      String claimExternalId) {
-        // NOTE: You previously used refdataBootstrapProperties.isEnabled() to short-circuit the resolver.
-        // Keeping that behavior unchanged: if bootstrap is disabled, we don’t resolve/insert and just return empty.
-        if (!refdataBootstrapProperties.isEnabled()) {
-            // PATCH: Resolver disabled by bootstrap flag → do nothing (caller persists only string columns)
+        // NOTE: Check if auto-insert is enabled for runtime reference data resolution
+        if (!refDataProperties.isAutoInsert()) {
+            // Auto-insert disabled → do nothing (caller persists only string columns)
             return Optional.empty();
         }
 
