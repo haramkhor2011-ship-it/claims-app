@@ -97,7 +97,7 @@ LEFT JOIN claims.encounter enc ON enc.claim_id = c.id
 LEFT JOIN claims_ref.facility f ON enc.facility_ref_id = f.id
 LEFT JOIN claims_ref.payer p ON rc.payer_ref_id = p.id
 LEFT JOIN claims.ingestion_file ifile ON r.ingestion_file_id = ifile.id
-LEFT JOIN claims_ref.payer rp ON ifile.receiver_id = rp.payer_code
+LEFT JOIN claims_ref.provider rp ON ifile.receiver_id = rp.provider_code
 
 GROUP BY
     cl.name, cl.clinician_code, cl.id, act.clinician,
@@ -136,13 +136,13 @@ SELECT
 
     -- Facility Information
     COALESCE(f.facility_code, '') AS facility_group,
-    COALESCE(ifile.receiver_id, '') AS health_authority,
+    COALESCE(ifile.sender_id, '') AS health_authority,
     COALESCE(f.facility_code, '') AS facility_id,
     f.id AS facility_ref_id,
     COALESCE(f.name, '') AS facility_name,
 
     -- Receiver Information
-    COALESCE(rec.payer_code, '') AS receiver_id,
+    COALESCE(rec.provider_code, '') AS receiver_id,
     COALESCE(rec.name, '') AS receiver_name,
 
     -- Payer Information (from claim)
@@ -184,12 +184,12 @@ LEFT JOIN claims_ref.payer p ON rc.payer_ref_id = p.id
 LEFT JOIN claims_ref.payer pc ON c.payer_ref_id = pc.id
 LEFT JOIN claims_ref.payer ha ON c.payer_ref_id = ha.id  -- Health authority
 LEFT JOIN claims.ingestion_file ifile ON r.ingestion_file_id = ifile.id
-LEFT JOIN claims_ref.payer rec ON ifile.receiver_id = rec.payer_code
+LEFT JOIN claims_ref.provider rec ON ifile.receiver_id = rec.provider_code
 
 GROUP BY
     p.name, p.id, r.tx_at, enc.start_at, ck.claim_id, rc.id_payer, c.member_id,
     rc.payment_reference, ra.activity_id, act.start_at, f.facility_code, f.id,
-    ifile.receiver_id, f.facility_code, f.name, rec.payer_code, rec.name,
+    ifile.receiver_id, f.facility_code, f.name, rec.provider_code, rec.name,
     pc.payer_code, pc.id, c.net, ifile.file_name, rc.id
 
 ORDER BY transaction_date DESC, claim_number;

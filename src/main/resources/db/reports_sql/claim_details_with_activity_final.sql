@@ -213,11 +213,11 @@ LEFT JOIN claims.claim_status_timeline cst ON cst.claim_key_id = ck.id
     )
 LEFT JOIN claims.claim_event ce_resub ON ce_resub.claim_key_id = ck.id AND ce_resub.type = 2
 LEFT JOIN claims.claim_resubmission cr ON cr.claim_event_id = ce_resub.id
-LEFT JOIN claims_ref.provider pr ON pr.provider_code = c.provider_id
+LEFT JOIN claims_ref.provider pr ON pr.id = c.provider_ref_id
 LEFT JOIN claims_ref.payer py ON py.id = c.payer_ref_id
 LEFT JOIN claims.activity a ON a.claim_id = c.id
 LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
-LEFT JOIN claims_ref.activity_code ac ON ac.code = a.code
+LEFT JOIN claims_ref.activity_code ac ON ac.id = a.activity_code_ref_id
 LEFT JOIN claims.diagnosis d_principal ON d_principal.claim_id = c.id AND d_principal.diag_type = 'Principal'
 LEFT JOIN claims.diagnosis d_secondary ON d_secondary.claim_id = c.id AND d_secondary.diag_type = 'Secondary'
 LEFT JOIN claims.ingestion_file if_submission ON if_submission.id = s.ingestion_file_id

@@ -331,7 +331,7 @@ LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
 LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
 LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-LEFT JOIN claims_ref.provider pr ON pr.provider_code = c.provider_id
+LEFT JOIN claims_ref.provider pr ON pr.id = c.provider_ref_id
 LEFT JOIN claims_ref.payer py ON py.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
 
 ORDER BY

@@ -374,11 +374,11 @@ JOIN claims.claim c ON ck.id = c.claim_key_id
 JOIN claims.activity a ON c.id = a.claim_id
 JOIN claims.encounter e ON c.id = e.claim_id
 LEFT JOIN claims_ref.payer p ON p.id = c.payer_ref_id
-LEFT JOIN claims_ref.provider pr ON pr.provider_code = c.provider_id
+LEFT JOIN claims_ref.provider pr ON pr.id = c.provider_ref_id
 LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
 LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
 LEFT JOIN activity_financials af ON a.id = af.activity_internal_id
-LEFT JOIN claims_ref.denial_code dc ON af.latest_denial_code = dc.code
+LEFT JOIN claims_ref.denial_code dc ON ra.denial_code_ref_id = dc.id
 LEFT JOIN claims.submission s ON c.submission_id = s.id
 LEFT JOIN claims.ingestion_file if_sender ON s.ingestion_file_id = if_sender.id
 LEFT JOIN claim_resubmission_summary crs ON ck.id = crs.claim_key_id
@@ -494,7 +494,7 @@ FROM claims.claim_key ck
 JOIN claims.claim c ON ck.id = c.claim_key_id
 JOIN claims.encounter e ON c.id = e.claim_id
 LEFT JOIN claims_ref.payer p ON p.id = c.payer_ref_id
-LEFT JOIN claims_ref.provider pr ON pr.provider_code = c.provider_id
+LEFT JOIN claims_ref.provider pr ON pr.id = c.provider_ref_id
 LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
 -- Join with a single activity per claim to get clinician info (avoiding duplication)
 LEFT JOIN (

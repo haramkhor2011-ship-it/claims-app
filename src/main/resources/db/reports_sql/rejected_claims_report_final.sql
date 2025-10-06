@@ -143,10 +143,10 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) cst ON TRUE
 LEFT JOIN claims.claim_resubmission cr ON cst.claim_event_id = cr.claim_event_id
-LEFT JOIN claims_ref.payer p ON c.id_payer = p.payer_code
-LEFT JOIN claims_ref.facility f ON e.facility_id = f.facility_code
-LEFT JOIN claims_ref.clinician cl ON a.clinician = cl.clinician_code
-LEFT JOIN claims_ref.denial_code dc ON ra.denial_code = dc.code;
+LEFT JOIN claims_ref.payer p ON c.payer_ref_id = p.id
+LEFT JOIN claims_ref.facility f ON e.facility_ref_id = f.id
+LEFT JOIN claims_ref.clinician cl ON a.clinician_ref_id = cl.id
+LEFT JOIN claims_ref.denial_code dc ON ra.denial_code_ref_id = dc.id;
 
 COMMENT ON VIEW claims.v_rejected_claims_base IS 'Base view for Rejected Claims Report - provides foundation data for all report tabs';
 
