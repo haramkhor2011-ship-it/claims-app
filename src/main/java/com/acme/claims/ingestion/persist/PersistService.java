@@ -336,12 +336,12 @@ public class PersistService {
         // Events & Timeline (only for persisted claim)
         long ev1 = insertClaimEvent(claimKeyId, ingestionFileId, now, (short) 1, submissionId, null);
         projectActivitiesToClaimEventFromSubmission(ev1, c.activities());
-        insertStatusTimeline(claimKeyId, (short) 1, now, ev1);
+        insertStatusTimeline(claimKeyId, (short) 1, file.header().transactionDate(), ev1);
 
         if (c.resubmission() != null) {
             long ev2 = insertClaimEvent(claimKeyId, ingestionFileId, now, (short) 2, submissionId, null);
             insertResubmission(ev2, c.resubmission());
-            insertStatusTimeline(claimKeyId, (short) 2, now, ev2);
+            insertStatusTimeline(claimKeyId, (short) 2, file.header().transactionDate(), ev2);
         }
 
         // Attachments (Submission-only)

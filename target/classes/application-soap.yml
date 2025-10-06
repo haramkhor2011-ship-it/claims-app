@@ -1,13 +1,4 @@
 # src/main/resources/application.yml (excerpt)
-#
-# PRODUCTION OPTIMIZATION NOTES:
-# The commented values below (# Production: ...) represent optimized settings for production deployment.
-# These can be uncommented when deploying to EC2 for better performance.
-# Current values are set for development/testing environment.
-#
-# TODO: Merge all YML configurations into a single application.yml file
-# - Combine application.yml, application-soap.yml, application-ingestion.yml, etc.
-# - Remove duplicate properties and consolidate configurations
 spring:
   task:
     execution:
@@ -18,30 +9,22 @@ spring:
 claims:
   ingestion:
     concurrency:
-      parserWorkers: 16       # Original: 16 workers for parallel processing
-      # parserWorkers: 32     # Production: Increased for production: more parallel processing
+      parserWorkers: 16
     queue:
-      capacity: 512           # Original: 512 capacity for burst handling
-      # capacity: 1024       # Production: Increased for production: larger queue for burst handling
+      capacity: 512
     poll:
-      fixedDelayMs: 1000      # Original: 1000ms polling delay
-      # fixedDelayMs: 500    # Production: Faster polling for production responsiveness
+      fixedDelayMs: 1000
   soap:
-    downloadConcurrency: 16   # Original: 16 concurrent downloads
-    # downloadConcurrency: 32 # Production: Increased for production: match worker threads
+    downloadConcurrency: 16
     transport: http
     endpoint: "https://dhpo.eclaimlink.ae/validateTransactions.asmx"
     # SOAP 1.1 default (SOAPAction is set). Keep switch if you ever need 1.2 later.
     soap12: false
-    connectTimeoutMs: 15000   # Original: 15000ms connection timeout
-    # connectTimeoutMs: 10000 # Production: Faster timeout for production
-    readTimeoutMs: 120000     # Original: 120000ms read timeout for large files
-    # readTimeoutMs: 60000    # Production: Optimized for typical file sizes
+    connectTimeoutMs: 15000
+    readTimeoutMs: 120000   # longer reads for Download
     retry:
-      maxAttempts: 3          # Original: 3 retry attempts
-      # maxAttempts: 3        # Production: Standard retry policy (same)
-      backoffMs: 500          # Original: 500ms backoff delay
-      # backoffMs: 1000       # Production: Faster backoff for production
+      maxAttempts: 3        # 1 retry total
+      backoffMs: 500
     poll:
       fixedDelayMs: 1800000    # 30 min between delta polls per facility
   fetch:
@@ -60,12 +43,9 @@ dhpo:
     getNewEnabled: false
     searchDaysBack: 100
     retriesOnMinus4: 3
-    connectTimeoutMs: 6000    # Original: 6000ms connection timeout
-    # connectTimeoutMs: 6000  # Production: Standard timeout for production (same)
-    readTimeoutMs: 15000      # Original: 15000ms read timeout
-    # readTimeoutMs: 15000    # Production: Optimized for production (same)
-    downloadTimeoutMs: 120000 # Original: 120000ms download timeout
-    # downloadTimeoutMs: 60000 # Production: Optimized for typical file sizes
+    connectTimeoutMs: 6000
+    readTimeoutMs: 15000
+    downloadTimeoutMs: 120000
     stageToDiskThresholdMb: 25
 
 claims.security.ame:

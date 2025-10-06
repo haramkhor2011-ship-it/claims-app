@@ -1,0 +1,360 @@
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+2025-10-06 16:47:48.364 [background-preinit] INFO  [] [] o.h.validator.internal.util.Version - HV000001: Hibernate Validator 8.0.1.Final
+ :: Spring Boot ::                (v3.3.2)
+
+2025-10-06 16:47:48.523 [main] INFO  [] [] c.a.claims.ClaimsBackendApplication - Starting ClaimsBackendApplication using Java 21.0.8 with PID 13736 (C:\Users\kvikr\Downloads\claims-backend-full\target\classes started by kvikr in C:\Users\kvikr\Downloads\claims-backend-full)
+2025-10-06 16:47:48.525 [main] INFO  [] [] c.a.claims.ClaimsBackendApplication - The following 3 profiles are active: "soap", "ingestion", "prod"
+2025-10-06 16:47:53.066 [main] WARN  [] [] o.s.c.s.PostProcessorRegistrationDelegate$BeanPostProcessorChecker - Bean 'org.springframework.ws.config.annotation.DelegatingWsConfiguration' of type [org.springframework.ws.config.annotation.DelegatingWsConfiguration$$SpringCGLIB$$0] is not eligible for getting processed by all BeanPostProcessors (for example: not eligible for auto-proxying). The currently created BeanPostProcessor [annotationActionEndpointMapping] is declared through a non-static factory method on that class; consider declaring it as static instead.
+2025-10-06 16:47:54.370 [main] INFO  [] [] o.a.coyote.http11.Http11NioProtocol - Initializing ProtocolHandler ["http-nio-8080"]
+2025-10-06 16:47:54.374 [main] INFO  [] [] o.a.catalina.core.StandardService - Starting service [Tomcat]
+2025-10-06 16:47:54.374 [main] INFO  [] [] o.a.catalina.core.StandardEngine - Starting Servlet engine: [Apache Tomcat/10.1.26]
+2025-10-06 16:47:54.516 [main] INFO  [] [] o.a.c.c.C.[Tomcat].[localhost].[/] - Initializing Spring embedded WebApplicationContext
+2025-10-06 16:47:55.366 [main] INFO  [] [] o.h.jpa.internal.util.LogHelper - HHH000204: Processing PersistenceUnitInfo [name: default]
+2025-10-06 16:47:55.500 [main] INFO  [] [] org.hibernate.Version - HHH000412: Hibernate ORM core version 6.5.2.Final
+2025-10-06 16:47:55.575 [main] INFO  [] [] o.h.c.i.RegionFactoryInitiator - HHH000026: Second-level cache disabled
+2025-10-06 16:47:56.196 [main] INFO  [] [] com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Starting...
+2025-10-06 16:47:56.526 [main] INFO  [] [] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@10728fe8
+2025-10-06 16:47:56.528 [main] INFO  [] [] com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Start completed.
+2025-10-06 16:47:59.720 [main] INFO  [] [] o.h.e.t.j.p.i.JtaPlatformInitiator - HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2025-10-06 16:48:01.570 [main] INFO  [] [] c.a.claims.ClaimsBackendApplication - boot: profiles=soap,ingestion,prod, url=jdbc:postgresql://localhost:5432/claims, user=claims_user
+2025-10-06 16:48:01.830 [main] INFO  [] [] c.a.c.security.ame.AmeKeyProvider - AME key loaded: type=PKCS12, id=claims-ame.v1
+2025-10-06 16:48:04.567 [main] WARN  [] [] o.s.s.c.a.a.c.InitializeUserDetailsBeanManagerConfigurer$InitializeUserDetailsManagerConfigurer - Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used for username/password login. Consider removing the AuthenticationProvider bean. Alternatively, consider using the UserDetailsService in a manually instantiated DaoAuthenticationProvider.
+2025-10-06 16:48:06.801 [main] INFO  [] [] o.a.coyote.http11.Http11NioProtocol - Starting ProtocolHandler ["http-nio-8080"]
+2025-10-06 16:48:06.878 [main] INFO  [] [] c.a.claims.ClaimsBackendApplication - Started ClaimsBackendApplication in 19.66 seconds (process running for 20.687)
+2025-10-06 16:48:06.888 [scheduling-1] INFO  [] [] c.acme.claims.ingestion.Orchestrator - QUEUE STATUS: size=0, remaining=512, workers=16
+2025-10-06 16:48:07.028 [main] INFO  [] [] c.a.c.refdata.RefdataBootstrapRunner - Refdata bootstrap starting. source=classpath:refdata/ strict=false delimiter=',' batch=500
+2025-10-06 16:48:07.157 [main] INFO  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata upsert ok: rows affected=101
+2025-10-06 16:48:07.165 [virtual-56] INFO  [] [] c.a.c.s.fetch.DhpoFetchCoordinator - DHPO_DELTA_START facility=DHA-F-0045446 pollType=delta
+2025-10-06 16:48:07.709 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 3273] Column 'facility_code' contains whitespace
+2025-10-06 16:48:07.709 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 3433] Column 'facility_code' contains whitespace
+2025-10-06 16:48:08.259 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 8940] Column 'facility_code' contains whitespace
+2025-10-06 16:48:08.518 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 11983] Column 'facility_code' contains whitespace
+2025-10-06 16:48:08.620 [main] INFO  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata upsert ok: rows affected=12781
+2025-10-06 16:48:08.831 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 1785] Column 'status' contains whitespace
+2025-10-06 16:48:08.834 [virtual-56] INFO  [] [] c.a.c.soap.transport.HttpSoapCaller - soap.call transport=http op=GetNewTransactions action=http://www.eClaimLink.ae/GetNewTransactions status=200 tookMs=1656 url=https://dhpo.eclaimlink.ae/validateTransactions.asmx
+2025-10-06 16:48:08.850 [virtual-56] INFO  [] [] c.a.c.s.fetch.DhpoFetchCoordinator - Facility DHA-F-0045446: 1 new items
+2025-10-06 16:48:08.870 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 2020] Column 'status' contains whitespace
+2025-10-06 16:48:08.870 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 2021] Column 'status' contains whitespace
+2025-10-06 16:48:08.910 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 2551] Column 'status' contains whitespace
+2025-10-06 16:48:08.958 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 3126] Column 'status' contains whitespace
+2025-10-06 16:48:08.958 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 3273] Column 'provider_code' contains whitespace
+2025-10-06 16:48:08.958 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 3433] Column 'provider_code' contains whitespace
+2025-10-06 16:48:09.052 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 4452] Column 'status' contains whitespace
+2025-10-06 16:48:09.099 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 4572] Column 'status' contains whitespace
+2025-10-06 16:48:09.143 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 5358] Column 'status' contains whitespace
+2025-10-06 16:48:09.143 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 5360] Column 'status' contains whitespace
+2025-10-06 16:48:09.187 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 5859] Column 'status' contains whitespace
+2025-10-06 16:48:09.187 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 5877] Column 'status' contains whitespace
+2025-10-06 16:48:09.208 [virtual-67] INFO  [] [] c.a.c.soap.transport.HttpSoapCaller - soap.call transport=http op=DownloadTransactionFile action=http://www.eClaimLink.ae/DownloadTransactionFile status=200 tookMs=355 url=https://dhpo.eclaimlink.ae/validateTransactions.asmx
+2025-10-06 16:48:09.215 [virtual-67] INFO  [] [] c.a.c.s.fetch.DhpoFetchCoordinator - Facility DHA-F-0045446 fileId 6bbd9150-517d-48b4-ac2e-f0fb507dde4d staged as MEM (name=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML)
+2025-10-06 16:48:09.216 [virtual-67] INFO  [] [] c.a.c.s.fetch.DhpoFetchCoordinator - DHPO_DELTA_FILE_QUEUED facility=DHA-F-0045446 fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML size=635 staged=MEM
+2025-10-06 16:48:09.424 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 7618] Column 'status' contains whitespace
+2025-10-06 16:48:09.506 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 8940] Column 'provider_code' contains whitespace
+2025-10-06 16:48:09.721 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 11983] Column 'provider_code' contains whitespace
+2025-10-06 16:48:09.813 [main] INFO  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata upsert ok: rows affected=12769
+2025-10-06 16:48:09.835 [main] INFO  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata upsert ok: rows affected=1
+2025-10-06 16:48:09.851 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - CSV activity_codes.csv missing headers: [code_system, status] (lenient mode: continuing, rows may be skipped)
+2025-10-06 16:48:13.428 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 49658] Column 'description' length out of bounds
+2025-10-06 16:48:13.428 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 49664] Column 'description' length out of bounds
+2025-10-06 16:48:13.428 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 49719] Column 'description' length out of bounds
+2025-10-06 16:48:13.428 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 49785] Column 'description' length out of bounds
+2025-10-06 16:48:13.428 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 49889] Column 'description' length out of bounds
+2025-10-06 16:48:13.429 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 49893] Column 'description' length out of bounds
+2025-10-06 16:48:13.429 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 49908] Column 'description' length out of bounds
+2025-10-06 16:48:13.464 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50414] Column 'description' length out of bounds
+2025-10-06 16:48:13.464 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50456] Column 'description' length out of bounds
+2025-10-06 16:48:13.498 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50519] Column 'description' length out of bounds
+2025-10-06 16:48:13.498 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50522] Column 'description' length out of bounds
+2025-10-06 16:48:13.498 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50543] Column 'description' length out of bounds
+2025-10-06 16:48:13.498 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50574] Column 'description' length out of bounds
+2025-10-06 16:48:13.498 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50579] Column 'description' length out of bounds
+2025-10-06 16:48:13.498 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50665] Column 'description' length out of bounds
+2025-10-06 16:48:13.498 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50679] Column 'description' length out of bounds
+2025-10-06 16:48:13.499 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50698] Column 'description' length out of bounds
+2025-10-06 16:48:13.499 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50744] Column 'description' length out of bounds
+2025-10-06 16:48:13.499 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50745] Column 'description' length out of bounds
+2025-10-06 16:48:13.499 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 50994] Column 'description' length out of bounds
+2025-10-06 16:48:13.606 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51098] Column 'description' length out of bounds
+2025-10-06 16:48:13.606 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51178] Column 'description' length out of bounds
+2025-10-06 16:48:13.606 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51277] Column 'description' length out of bounds
+2025-10-06 16:48:13.607 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51307] Column 'description' length out of bounds
+2025-10-06 16:48:13.607 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51376] Column 'description' length out of bounds
+2025-10-06 16:48:13.647 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51544] Column 'description' length out of bounds
+2025-10-06 16:48:13.647 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51667] Column 'description' length out of bounds
+2025-10-06 16:48:13.647 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51702] Column 'description' length out of bounds
+2025-10-06 16:48:13.647 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51716] Column 'description' length out of bounds
+2025-10-06 16:48:13.647 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51725] Column 'description' length out of bounds
+2025-10-06 16:48:13.647 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51825] Column 'description' length out of bounds
+2025-10-06 16:48:13.647 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51875] Column 'description' length out of bounds
+2025-10-06 16:48:13.647 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51880] Column 'description' length out of bounds
+2025-10-06 16:48:13.647 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 51919] Column 'description' length out of bounds
+2025-10-06 16:48:13.682 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52191] Column 'description' length out of bounds
+2025-10-06 16:48:13.682 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52258] Column 'description' length out of bounds
+2025-10-06 16:48:13.682 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52263] Column 'description' length out of bounds
+2025-10-06 16:48:13.682 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52299] Column 'description' length out of bounds
+2025-10-06 16:48:13.682 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52419] Column 'description' length out of bounds
+2025-10-06 16:48:13.744 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52555] Column 'description' length out of bounds
+2025-10-06 16:48:13.744 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52566] Column 'description' length out of bounds
+2025-10-06 16:48:13.744 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52599] Column 'description' length out of bounds
+2025-10-06 16:48:13.744 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52626] Column 'description' length out of bounds
+2025-10-06 16:48:13.744 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52665] Column 'description' length out of bounds
+2025-10-06 16:48:13.744 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52668] Column 'description' length out of bounds
+2025-10-06 16:48:13.744 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52715] Column 'description' length out of bounds
+2025-10-06 16:48:13.744 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52731] Column 'description' length out of bounds
+2025-10-06 16:48:13.745 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52734] Column 'description' length out of bounds
+2025-10-06 16:48:13.745 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52746] Column 'description' length out of bounds
+2025-10-06 16:48:13.745 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52790] Column 'description' length out of bounds
+2025-10-06 16:48:13.745 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52824] Column 'description' length out of bounds
+2025-10-06 16:48:13.745 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52964] Column 'description' length out of bounds
+2025-10-06 16:48:13.745 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 52978] Column 'description' length out of bounds
+2025-10-06 16:48:13.782 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53087] Column 'description' length out of bounds
+2025-10-06 16:48:13.783 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53225] Column 'description' length out of bounds
+2025-10-06 16:48:13.783 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53334] Column 'description' length out of bounds
+2025-10-06 16:48:13.783 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53339] Column 'description' length out of bounds
+2025-10-06 16:48:13.783 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53357] Column 'description' length out of bounds
+2025-10-06 16:48:13.783 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53401] Column 'description' length out of bounds
+2025-10-06 16:48:13.783 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53458] Column 'description' length out of bounds
+2025-10-06 16:48:13.783 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53460] Column 'description' length out of bounds
+2025-10-06 16:48:13.818 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53627] Column 'description' length out of bounds
+2025-10-06 16:48:13.818 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53631] Column 'description' length out of bounds
+2025-10-06 16:48:13.818 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53759] Column 'description' length out of bounds
+2025-10-06 16:48:13.818 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53820] Column 'description' length out of bounds
+2025-10-06 16:48:13.818 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53838] Column 'description' length out of bounds
+2025-10-06 16:48:13.818 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 53941] Column 'description' length out of bounds
+2025-10-06 16:48:13.852 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54092] Column 'description' length out of bounds
+2025-10-06 16:48:13.852 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54116] Column 'description' length out of bounds
+2025-10-06 16:48:13.852 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54135] Column 'description' length out of bounds
+2025-10-06 16:48:13.852 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54149] Column 'description' length out of bounds
+2025-10-06 16:48:13.853 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54214] Column 'description' length out of bounds
+2025-10-06 16:48:13.853 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54268] Column 'description' length out of bounds
+2025-10-06 16:48:13.853 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54334] Column 'description' length out of bounds
+2025-10-06 16:48:13.853 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54372] Column 'description' length out of bounds
+2025-10-06 16:48:13.853 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54375] Column 'description' length out of bounds
+2025-10-06 16:48:13.853 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54461] Column 'description' length out of bounds
+2025-10-06 16:48:13.853 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54549] Column 'description' length out of bounds
+2025-10-06 16:48:13.853 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54570] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54600] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54610] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54623] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54658] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54715] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54717] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54739] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54770] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54776] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54830] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54850] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54889] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54894] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54907] Column 'description' length out of bounds
+2025-10-06 16:48:13.974 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54908] Column 'description' length out of bounds
+2025-10-06 16:48:13.975 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54950] Column 'description' length out of bounds
+2025-10-06 16:48:13.975 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 54968] Column 'description' length out of bounds
+2025-10-06 16:48:13.975 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55075] Column 'description' length out of bounds
+2025-10-06 16:48:13.975 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55079] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55135] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55248] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55318] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55321] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55371] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55383] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55389] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55441] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55445] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55513] Column 'description' length out of bounds
+2025-10-06 16:48:14.011 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55560] Column 'description' length out of bounds
+2025-10-06 16:48:14.012 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55572] Column 'description' length out of bounds
+2025-10-06 16:48:14.012 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55585] Column 'description' length out of bounds
+2025-10-06 16:48:14.012 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55604] Column 'description' length out of bounds
+2025-10-06 16:48:14.012 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55605] Column 'description' length out of bounds
+2025-10-06 16:48:14.047 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55643] Column 'description' length out of bounds
+2025-10-06 16:48:14.047 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55673] Column 'description' length out of bounds
+2025-10-06 16:48:14.047 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55738] Column 'description' length out of bounds
+2025-10-06 16:48:14.047 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55775] Column 'description' length out of bounds
+2025-10-06 16:48:14.047 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55800] Column 'description' length out of bounds
+2025-10-06 16:48:14.047 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 55819] Column 'description' length out of bounds
+2025-10-06 16:48:14.048 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56025] Column 'description' length out of bounds
+2025-10-06 16:48:14.048 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56109] Column 'description' length out of bounds
+2025-10-06 16:48:14.048 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56119] Column 'description' length out of bounds
+2025-10-06 16:48:14.082 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56126] Column 'description' length out of bounds
+2025-10-06 16:48:14.083 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56226] Column 'description' length out of bounds
+2025-10-06 16:48:14.083 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56283] Column 'description' length out of bounds
+2025-10-06 16:48:14.083 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56293] Column 'description' length out of bounds
+2025-10-06 16:48:14.083 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56341] Column 'description' length out of bounds
+2025-10-06 16:48:14.083 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56382] Column 'description' length out of bounds
+2025-10-06 16:48:14.083 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56552] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56728] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56794] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56800] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56810] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56854] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 56983] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57026] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57086] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57119] Column 'description' length out of bounds
+2025-10-06 16:48:14.192 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57121] Column 'description' length out of bounds
+2025-10-06 16:48:14.233 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57162] Column 'description' length out of bounds
+2025-10-06 16:48:14.234 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57219] Column 'description' length out of bounds
+2025-10-06 16:48:14.234 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57276] Column 'description' length out of bounds
+2025-10-06 16:48:14.234 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57391] Column 'description' length out of bounds
+2025-10-06 16:48:14.234 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57565] Column 'description' length out of bounds
+2025-10-06 16:48:14.234 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57566] Column 'description' length out of bounds
+2025-10-06 16:48:14.234 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57588] Column 'description' length out of bounds
+2025-10-06 16:48:14.234 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57644] Column 'description' length out of bounds
+2025-10-06 16:48:14.268 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57689] Column 'description' length out of bounds
+2025-10-06 16:48:14.268 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57745] Column 'description' length out of bounds
+2025-10-06 16:48:14.268 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57761] Column 'description' length out of bounds
+2025-10-06 16:48:14.268 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57766] Column 'description' length out of bounds
+2025-10-06 16:48:14.268 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57799] Column 'description' length out of bounds
+2025-10-06 16:48:14.269 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 57985] Column 'description' length out of bounds
+2025-10-06 16:48:14.269 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58076] Column 'description' length out of bounds
+2025-10-06 16:48:14.269 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58085] Column 'description' length out of bounds
+2025-10-06 16:48:14.300 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58200] Column 'description' length out of bounds
+2025-10-06 16:48:14.300 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58279] Column 'description' length out of bounds
+2025-10-06 16:48:14.300 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58328] Column 'description' length out of bounds
+2025-10-06 16:48:14.300 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58400] Column 'description' length out of bounds
+2025-10-06 16:48:14.300 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58454] Column 'description' length out of bounds
+2025-10-06 16:48:14.419 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58703] Column 'description' length out of bounds
+2025-10-06 16:48:14.421 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58757] Column 'description' length out of bounds
+2025-10-06 16:48:14.421 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58785] Column 'description' length out of bounds
+2025-10-06 16:48:14.421 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58835] Column 'description' length out of bounds
+2025-10-06 16:48:14.421 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 58945] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59178] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59220] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59286] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59360] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59526] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59598] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59601] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59638] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59654] Column 'description' length out of bounds
+2025-10-06 16:48:14.451 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59655] Column 'description' length out of bounds
+2025-10-06 16:48:14.487 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59939] Column 'description' length out of bounds
+2025-10-06 16:48:14.487 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 59963] Column 'description' length out of bounds
+2025-10-06 16:48:14.487 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 60082] Column 'description' length out of bounds
+2025-10-06 16:48:14.526 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 60262] Column 'description' length out of bounds
+2025-10-06 16:48:14.526 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 60440] Column 'description' length out of bounds
+2025-10-06 16:48:14.526 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 60457] Column 'description' length out of bounds
+2025-10-06 16:48:14.526 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 60569] Column 'description' length out of bounds
+2025-10-06 16:48:14.568 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 60807] Column 'description' length out of bounds
+2025-10-06 16:48:14.569 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 60884] Column 'description' length out of bounds
+2025-10-06 16:48:14.569 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61000] Column 'description' length out of bounds
+2025-10-06 16:48:14.569 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61070] Column 'description' length out of bounds
+2025-10-06 16:48:14.569 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61072] Column 'description' length out of bounds
+2025-10-06 16:48:14.616 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61203] Column 'description' length out of bounds
+2025-10-06 16:48:14.616 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61263] Column 'description' length out of bounds
+2025-10-06 16:48:14.616 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61281] Column 'description' length out of bounds
+2025-10-06 16:48:14.616 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61392] Column 'description' length out of bounds
+2025-10-06 16:48:14.616 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61421] Column 'description' length out of bounds
+2025-10-06 16:48:14.616 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61436] Column 'description' length out of bounds
+2025-10-06 16:48:14.616 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61473] Column 'description' length out of bounds
+2025-10-06 16:48:14.616 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61533] Column 'description' length out of bounds
+2025-10-06 16:48:14.616 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61586] Column 'description' length out of bounds
+2025-10-06 16:48:14.656 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61711] Column 'description' length out of bounds
+2025-10-06 16:48:14.657 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61724] Column 'description' length out of bounds
+2025-10-06 16:48:14.657 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61782] Column 'description' length out of bounds
+2025-10-06 16:48:14.657 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61838] Column 'description' length out of bounds
+2025-10-06 16:48:14.657 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 61885] Column 'description' length out of bounds
+2025-10-06 16:48:14.657 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 62005] Column 'description' length out of bounds
+2025-10-06 16:48:14.657 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 62016] Column 'description' length out of bounds
+2025-10-06 16:48:14.658 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 62150] Column 'description' length out of bounds
+2025-10-06 16:48:14.779 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 62542] Column 'description' length out of bounds
+2025-10-06 16:48:14.779 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 62547] Column 'description' length out of bounds
+2025-10-06 16:48:14.779 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 62557] Column 'description' length out of bounds
+2025-10-06 16:48:14.833 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63113] Column 'description' length out of bounds
+2025-10-06 16:48:14.833 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63119] Column 'description' length out of bounds
+2025-10-06 16:48:14.833 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63170] Column 'description' length out of bounds
+2025-10-06 16:48:14.833 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63189] Column 'description' length out of bounds
+2025-10-06 16:48:14.871 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63227] Column 'description' length out of bounds
+2025-10-06 16:48:14.871 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63345] Column 'description' length out of bounds
+2025-10-06 16:48:14.871 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63359] Column 'description' length out of bounds
+2025-10-06 16:48:14.871 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63414] Column 'description' length out of bounds
+2025-10-06 16:48:14.871 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63457] Column 'description' length out of bounds
+2025-10-06 16:48:14.872 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63515] Column 'description' length out of bounds
+2025-10-06 16:48:14.872 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63516] Column 'description' length out of bounds
+2025-10-06 16:48:14.872 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63664] Column 'description' length out of bounds
+2025-10-06 16:48:14.872 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63702] Column 'description' length out of bounds
+2025-10-06 16:48:14.911 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63777] Column 'description' length out of bounds
+2025-10-06 16:48:14.911 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 63900] Column 'description' length out of bounds
+2025-10-06 16:48:14.912 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 64162] Column 'description' length out of bounds
+2025-10-06 16:48:14.943 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 64227] Column 'description' length out of bounds
+2025-10-06 16:48:14.944 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 64397] Column 'description' length out of bounds
+2025-10-06 16:48:14.944 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 64407] Column 'description' length out of bounds
+2025-10-06 16:48:14.944 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 64458] Column 'description' length out of bounds
+2025-10-06 16:48:14.944 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 64469] Column 'description' length out of bounds
+2025-10-06 16:48:14.944 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 64625] Column 'description' length out of bounds
+2025-10-06 16:48:14.944 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 64653] Column 'description' length out of bounds
+2025-10-06 16:48:14.985 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata row skipped (lenient): [line 64817] Column 'description' length out of bounds
+2025-10-06 16:48:14.994 [main] INFO  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata upsert ok: rows affected=64619
+2025-10-06 16:48:15.080 [main] WARN  [] [] c.a.claims.refdata.RefdataCsvLoader - CSV diagnosis_codes.csv missing headers: [code_system, status] (lenient mode: continuing, rows may be skipped)
+2025-10-06 16:48:19.779 [main] INFO  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata upsert ok: rows affected=72621
+2025-10-06 16:48:19.823 [main] INFO  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata upsert ok: rows affected=101
+2025-10-06 16:48:19.832 [main] INFO  [] [] c.a.claims.refdata.RefdataCsvLoader - Refdata upsert ok: rows affected=2
+2025-10-06 16:48:19.833 [main] INFO  [] [] c.a.c.refdata.RefdataBootstrapRunner - Refdata bootstrap finished. total rows affected=162995
+2025-10-06 16:48:19.837 [main] WARN  [] [] c.a.c.s.service.UserContextService - Attempted to get user context for unauthenticated user
+2025-10-06 16:48:19.837 [main] INFO  [] [] c.a.c.s.s.DataInitializationService - Security is disabled - skipping user initialization
+2025-10-06 16:48:19.838 [main] INFO  [] [] c.acme.claims.ingestion.Orchestrator - Orchestrator starting — mode=localfs, stageToDisk=false, workers=16
+2025-10-06 16:48:19.839 [virtual-68] INFO  [] [] c.a.c.i.f.soap.SoapFetcherAdapter - SOAP_FETCHER_DEQUEUED fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML source=soap queueSize=0
+2025-10-06 16:48:19.839 [virtual-68] INFO  [] [] c.acme.claims.ingestion.Orchestrator - ORCHESTRATOR_ENQUEUED fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML source=soap queueSize=2
+2025-10-06 16:48:26.902 [scheduling-1] INFO  [] [] c.acme.claims.ingestion.Orchestrator - QUEUE STATUS: size=2, remaining=510, workers=16
+2025-10-06 16:48:26.908 [ingest-1] INFO  [6bbd9150-517d-48b4-ac2e-f0fb507dde4d] [PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML] c.acme.claims.ingestion.Orchestrator - ORCHESTRATOR_PROCESS_START fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML source=soap
+2025-10-06 16:48:26.909 [ingest-1] INFO  [6bbd9150-517d-48b4-ac2e-f0fb507dde4d] [PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML] com.acme.claims.ingestion.Pipeline - PIPELINE_START fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML source=soap size=635
+2025-10-06 16:48:26.912 [ingest-1] WARN  [6bbd9150-517d-48b4-ac2e-f0fb507dde4d] [PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML] com.acme.claims.ingestion.Pipeline - PIPELINE_FAIL before file registration. fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d msg=java.lang.IllegalArgumentException: Unknown XML root
+2025-10-06 16:48:26.912 [ingest-1] ERROR [] [] c.acme.claims.ingestion.Orchestrator - ORCHESTRATOR_PROCESS_FAIL fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML source=soap : Unknown XML root
+java.lang.IllegalArgumentException: Unknown XML root
+	at com.acme.claims.ingestion.util.RootDetector.detect(RootDetector.java:16)
+	at com.acme.claims.ingestion.Pipeline.process(Pipeline.java:108)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:354)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:196)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:163)
+	at org.springframework.aop.framework.CglibAopProxy$CglibMethodInvocation.proceed(CglibAopProxy.java:768)
+	at org.springframework.transaction.interceptor.TransactionAspectSupport.invokeWithinTransaction(TransactionAspectSupport.java:379)
+	at org.springframework.transaction.interceptor.TransactionInterceptor.invoke(TransactionInterceptor.java:119)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:184)
+	at org.springframework.aop.framework.CglibAopProxy$CglibMethodInvocation.proceed(CglibAopProxy.java:768)
+	at org.springframework.aop.framework.CglibAopProxy$DynamicAdvisedInterceptor.intercept(CglibAopProxy.java:720)
+	at com.acme.claims.ingestion.Pipeline$$SpringCGLIB$$1.process(<generated>)
+	at com.acme.claims.ingestion.Orchestrator.processOne(Orchestrator.java:381)
+	at com.acme.claims.ingestion.Orchestrator.lambda$drain$0(Orchestrator.java:298)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+2025-10-06 16:48:26.924 [ingest-1] INFO  [] [] c.acme.claims.ingestion.Orchestrator - ORCHESTRATOR_ACK_ATTEMPTED fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML success=false
+2025-10-06 16:48:46.907 [scheduling-1] INFO  [] [] c.acme.claims.ingestion.Orchestrator - QUEUE STATUS: size=1, remaining=511, workers=16
+2025-10-06 16:48:46.907 [ingest-2] INFO  [6bbd9150-517d-48b4-ac2e-f0fb507dde4d] [PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML] c.acme.claims.ingestion.Orchestrator - ORCHESTRATOR_PROCESS_START fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML source=soap
+2025-10-06 16:48:46.907 [ingest-2] INFO  [6bbd9150-517d-48b4-ac2e-f0fb507dde4d] [PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML] com.acme.claims.ingestion.Pipeline - PIPELINE_START fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML source=soap size=635
+2025-10-06 16:48:46.907 [ingest-2] WARN  [6bbd9150-517d-48b4-ac2e-f0fb507dde4d] [PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML] com.acme.claims.ingestion.Pipeline - PIPELINE_FAIL before file registration. fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d msg=java.lang.IllegalArgumentException: Unknown XML root
+2025-10-06 16:48:46.907 [ingest-2] ERROR [] [] c.acme.claims.ingestion.Orchestrator - ORCHESTRATOR_PROCESS_FAIL fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML source=soap : Unknown XML root
+java.lang.IllegalArgumentException: Unknown XML root
+	at com.acme.claims.ingestion.util.RootDetector.detect(RootDetector.java:16)
+	at com.acme.claims.ingestion.Pipeline.process(Pipeline.java:108)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:354)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:196)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:163)
+	at org.springframework.aop.framework.CglibAopProxy$CglibMethodInvocation.proceed(CglibAopProxy.java:768)
+	at org.springframework.transaction.interceptor.TransactionAspectSupport.invokeWithinTransaction(TransactionAspectSupport.java:379)
+	at org.springframework.transaction.interceptor.TransactionInterceptor.invoke(TransactionInterceptor.java:119)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:184)
+	at org.springframework.aop.framework.CglibAopProxy$CglibMethodInvocation.proceed(CglibAopProxy.java:768)
+	at org.springframework.aop.framework.CglibAopProxy$DynamicAdvisedInterceptor.intercept(CglibAopProxy.java:720)
+	at com.acme.claims.ingestion.Pipeline$$SpringCGLIB$$1.process(<generated>)
+	at com.acme.claims.ingestion.Orchestrator.processOne(Orchestrator.java:381)
+	at com.acme.claims.ingestion.Orchestrator.lambda$drain$0(Orchestrator.java:298)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+2025-10-06 16:48:46.907 [ingest-2] INFO  [] [] c.acme.claims.ingestion.Orchestrator - ORCHESTRATOR_ACK_ATTEMPTED fileId=6bbd9150-517d-48b4-ac2e-f0fb507dde4d fileName=PA_DHA_PR_DHA-F-0045446-INS010-20251006150543_4039674827_20251006031052.XML success=false
+2025-10-06 16:49:06.910 [scheduling-1] INFO  [] [] c.acme.claims.ingestion.Orchestrator - QUEUE STATUS: size=0, remaining=512, workers=16
+2025-10-06 16:49:23.299 [SpringApplicationShutdownHook] INFO  [] [] com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Shutdown initiated...
+2025-10-06 16:49:23.310 [SpringApplicationShutdownHook] INFO  [] [] com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Shutdown completed.

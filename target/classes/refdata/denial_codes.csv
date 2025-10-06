@@ -1,3 +1,102 @@
 code,description,payer_code
-D001,Duplicate claim,INS025
-D002,Policy inactive,INS018
+AUTH-001,Prior approval is required and was not obtained,null
+AUTH-003,PriorAuthorizationNumber is invalid,null
+AUTH-004,Service(s) is (are) performed outside authorization validity date,null
+AUTH-005,Claim information is inconsistent with pre-certified/authorized services,null
+BENX-002,Benefit maximum for this time period or occurrence has been reached,null
+BENX-005,Annual limit/sublimit amount exceeded ,null
+CLAI-007,Claim is a work-related injury/illness and thus the liability of the employer ,null
+CLAI-008,Claim overlaps inpatient stay. Resubmit only those services rendered outside the inpatient stay,null
+CLAI-009,Date of birth follows the date of service,null
+CLAI-010,Date of death precedes the date of service,null
+CLAI-011,Inpatient admission spans multiple rate periods.  Resubmit separate claims,null
+CLAI-012,Submission not compliant with contractual agreement between provider & payer,null
+CLAI-014,Claim not compliant with Resubmission type (used only for resubmissions),null
+CODE-010,Activity/diagnosis inconsistent with clinician specialty,null
+CODE-012,Encounter type inconsistent with service(s) / diagnosis,null
+CODE-013,Invalid principal diagnosis ,null
+CODE-014,Activity/diagnosis is inconsistent with the patient's age/gender,null
+CODE-015,Activity/diagnosis is inconsistent with the provider type,null
+COPY-001,Deductible/co-pay not collected from member,null
+DUPL-001,Claim is a duplicate based on service codes and dates,null
+DUPL-002,Payment already made for same/similar service within set time frame,null
+ELIG-001,Patient is not a covered member,null
+ELIG-005,Services performed after the last date of coverage,null
+ELIG-006,Services performed prior to the effective date of coverage,null
+ELIG-007,Services performed by a non-network provider,null
+MNEC-003,Service is not clinically indicated based on good clinical practice,null
+MNEC-004,Service is not clinically indicated based on good clinical practice, without additional supporting diagnoses/activities,null
+MNEC-005,Service/supply may be appropriate, but too frequent,null
+MNEC-006,Alternative service should have been utilized,null
+NCOV-001,Diagnosis(es) is (are) not covered,null
+NCOV-002,Pre-existing conditions are not covered,null
+NCOV-003,Service(s) is (are) not covered,null
+NCOV-025,Service(s) is (are) not performed (used after audit),null
+PRCE-001,Calculation discrepancy ,null
+PRCE-002,Payment is included in the allowance for another service,null
+PRCE-003,Recovery of Payment,null
+PRCE-006,Consultation within free follow up period,null
+PRCE-007,Service has no contract price,null
+PRCE-008,Multiple procedure payment rules incorrectly applied,null
+PRCE-009,Charges inconsistent with clinician specialty,null
+PRCE-010,Use bundled code,null
+TIME-001,Time limit for submission has expired,null
+TIME-002,Requested additional information was not received or was not received within time limit,null
+TIME-003,Appeal procedures not followed or time limits not met,null
+AUTH-006,Alert drug - drug interaction or drug is contra-indicated,null
+AUTH-007,Drug duplicate therapy,null
+AUTH-008,Inappropriate drug dose,null
+AUTH-009,Prescription out of date,null
+AUTH-010,Authorization request overlaps or is within the period of another paid claim or approved authorization,null
+AUTH-011,Waiting period on pre-existing / specific conditions,null
+CLAI-017,Services not available on direct billing,null
+CLAI-018,Claims Recalled By Provider,null
+PRCE-011,Discount discrepancy,null
+SURC-001,Severe drug - drug interaction,null
+SURC-002,Severe drug - age contraindication,null
+SURC-003,Severe drug - gender contraindication,null
+SURC-004,Severe drug - diaganosis contraindication,null
+SURC-005,Severe procedure\service - diagnosis contraindication,null
+SURC-006,Severe procedure\service - drug contraindication,null
+SURC-007,Severe procedure\service - procedure contraindication,null
+SURC-008,Serious safety issue with drug dose,null
+WRNG-001,Wrong submission, receiver is not responsible for the payer within this transaction submission.,null
+CLAI-019,Incorrect IR-DRG code ,null
+CLAI-020,Missing IR-DRG code ,null
+AUTH-012,Request for information,null
+AUTH-002,Services performed are inconsistent with authorized or approved services,null
+AUTH-013,Missing eRx Reference number,null
+BENX-001,Service / Medication is above AED threshold,null
+CLAI-013,Missing an Observation (Dental Tooth #),null
+CLAI-021,Incorrect DRG payment parameter,null
+CLAI-022,Missing DRG payment parameter,null
+CODE-001,Missing, incomplete or invalid principal diagnosis,null
+CODE-002,Missing, incomplete or invalid service code,null
+CODE-006,Diagnosis is inconsistent with the procedure,null
+CODE-014,Activity/diagnosis is inconsistent with the patient's age/gender,null
+CODE-016,Activity/diagnosis inconsistent with Service,null
+MNEC-007,Service is not clinically indicated based on good clinical practice, without additional supporting documentation,null
+NCOV-009,Dental treatments are not covered,null
+NCOV-010,Elective procedure is not covered,null
+NCOV-012,Eye exams and treatments are not covered,null
+NCOV-014,Hearing services are not covered,null
+NCOV-018,Immunizations are not covered,null
+NCOV-019,Preventative care is not covered,null
+NCOV-020,Services resulting from attempted suicide or self-infliction are not covered,null
+NCOV-021,Vaccinations are not covered,null
+NCOV-024,Chronic Condition Service(s) is (are) not covered,null
+NCOV-027,Non Coverage of certain medication as per policy,null
+AUTH-014,Medication has been added to a prior request that is not in line with Pharmacist Edit Restrictions,null
+PRCE-012,Recovery of Payment – DHIC Authorized,null
+DRG-001,Incorrect DRG code,null
+DRG-002,Missing DRG code,null
+DRG-003,Incorrect Billing Regime,null
+DRG-004,Missing Activities,null
+COPY-002,Incorrect Patient Share,null
+COPY-003,Missing Patient Share,null
+DRG-005,Missing Observation (ActivityCost and/or File Attachment),null
+BSMA-001,Member not covered under Basmah,null
+BSMA-002,Claims is not eligible under Basmah Fund,null
+BSMA-003,Prior approval is required but not taken (Basmah),null
+CLAI-023,Submission not compliant with contractual agreement between non-network physician & payer,null
+ELIG-008,Services performed by a non-network physician,null

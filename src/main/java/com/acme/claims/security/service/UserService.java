@@ -1,7 +1,8 @@
 package com.acme.claims.security.service;
 
-import com.acme.claims.security.Role;
 import com.acme.claims.security.ReportType;
+import com.acme.claims.security.Role;
+import com.acme.claims.security.config.SecurityProperties;
 import com.acme.claims.security.entity.User;
 import com.acme.claims.security.entity.UserFacility;
 import com.acme.claims.security.entity.UserReportPermission;

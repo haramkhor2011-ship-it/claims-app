@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS claims_ref.payer (
   payer_code  TEXT NOT NULL UNIQUE,
   name        TEXT,
   status      TEXT DEFAULT 'ACTIVE',
+  classification   TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW(),
   updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
@@ -226,6 +227,7 @@ CREATE INDEX IF NOT EXISTS idx_ref_clinician_name_trgm ON claims_ref.clinician U
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims_ref.activity_code (
   id           BIGSERIAL PRIMARY KEY,
+  type          TEXT,
   code         TEXT NOT NULL,
   code_system  TEXT NOT NULL DEFAULT 'LOCAL',
   description  TEXT,
@@ -341,6 +343,25 @@ CREATE TABLE IF NOT EXISTS claims_ref.resubmission_type (
   type_code   TEXT PRIMARY KEY,
   description TEXT
 );
+
+-- ----------------------------------------------------------------------------------------------------------
+-- 4.11 BOOTSTRAP STATUS
+-- ----------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS claims_ref.bootstrap_status (
+  id              BIGSERIAL PRIMARY KEY,
+  bootstrap_name  TEXT NOT NULL UNIQUE,
+  completed_at    TIMESTAMPTZ DEFAULT NOW(),
+  version         TEXT DEFAULT '1.0',
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+COMMENT ON TABLE claims_ref.bootstrap_status IS 'Tracks completion status of one-time bootstrap operations';
+COMMENT ON COLUMN claims_ref.bootstrap_status.bootstrap_name IS 'Unique identifier for the bootstrap operation';
+COMMENT ON COLUMN claims_ref.bootstrap_status.completed_at IS 'Timestamp when bootstrap completed successfully';
+COMMENT ON COLUMN claims_ref.bootstrap_status.version IS 'Version of the bootstrap data/process';
+
+CREATE INDEX IF NOT EXISTS idx_bootstrap_status_name ON claims_ref.bootstrap_status(bootstrap_name);
+CREATE INDEX IF NOT EXISTS idx_bootstrap_status_completed ON claims_ref.bootstrap_status(completed_at);
 
 -- ==========================================================================================================
 -- SECTION 5: MAIN CLAIMS SCHEMA (claims)

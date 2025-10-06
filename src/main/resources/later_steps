@@ -1,0 +1,1 @@
+   --DELETE FROM claims_ref.bootstrap_status WHERE bootstrap_name = 'refdata_csv_loader';

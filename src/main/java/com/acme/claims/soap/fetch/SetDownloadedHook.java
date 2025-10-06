@@ -33,7 +33,7 @@ public class SetDownloadedHook {
      */
     public void maybeMarkDownloaded(String facilityCode, String fileId) {
         if (!toggles.isEnabled("dhpo.setDownloaded.enabled")) {
-            log.debug("SetDownloaded disabled; skipping for facility={} fileId={}", facilityCode, fileId);
+            log.info("SetDownloaded disabled; skipping for facility={} fileId={}", facilityCode, fileId);
             return;
         }
         var f = facilities.findByActiveTrue().stream()

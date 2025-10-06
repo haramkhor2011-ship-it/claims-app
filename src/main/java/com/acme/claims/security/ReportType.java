@@ -9,6 +9,7 @@ public enum ReportType {
     BALANCE_AMOUNT_REPORT("Balance Amount Report", "Shows balance amounts to be received"),
     CLAIM_DETAILS_WITH_ACTIVITY("Claim Details With Activity", "Detailed claim information with activity timeline"),
     CLAIM_SUMMARY("Claim Summary", "Summary view of claims with key metrics"),
+    CLAIM_SUMMARY_MONTHWISE("Claim Summary - Monthwise Report", "Monthly summary of claims with comprehensive metrics and breakdowns by payer and encounter type"),
     DOCTOR_DENIAL_REPORT("Doctor Denial Report", "Reports on claims denied by doctors"),
     REJECTED_CLAIMS_REPORT("Rejected Claims Report", "Claims that were rejected during processing"),
     REMITTANCE_ADVICE_PAYERWISE("Remittance Advice Payerwise", "Remittance advice grouped by payer"),

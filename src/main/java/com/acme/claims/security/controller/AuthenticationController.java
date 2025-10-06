@@ -1,5 +1,6 @@
 package com.acme.claims.security.controller;
 
+import com.acme.claims.security.config.SecurityProperties;
 import com.acme.claims.security.service.AuthenticationService;
 import com.acme.claims.security.service.UserService;
 import jakarta.validation.Valid;

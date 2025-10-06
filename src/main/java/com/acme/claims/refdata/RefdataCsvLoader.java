@@ -33,16 +33,16 @@ public class RefdataCsvLoader {
     @Transactional
     public int loadPayers() {
         return loadCsv("payers.csv",
-                Set.of("payer_code","name","status"),
+                Set.of("payer_code","name","classification"),
                 recs -> batchUpsert(recs, """
-                        insert into claims_ref.payer(payer_code, name, status)
+                        insert into claims_ref.payer(payer_code, name, classification)
                         values (?,?,?)
                         on conflict (payer_code) do update set name=excluded.name, status=excluded.status
                         """,
                         (rec) -> new Object[]{
                                 req(rec,"payer_code", 1, 120, true),
                                 opt(rec,"name", 0, 256),
-                                def(rec,"status","ACTIVE", 1, 32, true)
+                                opt(rec,"classification", 1, 32)
                         }));
     }
 
@@ -104,8 +104,8 @@ public class RefdataCsvLoader {
         return loadCsv("activity_codes.csv",
                 Set.of("code","code_system","description","status"),
                 recs -> batchUpsert(recs, """
-                        insert into claims_ref.activity_code(code, code_system, description, status)
-                        values (?,?,?,?)
+                        insert into claims_ref.activity_code(code, code_system, description, status,type)
+                        values (?,?,?,?,?)
                         on conflict (code, code_system) do update
                            set description=excluded.description, status=excluded.status
                         """,
@@ -113,7 +113,8 @@ public class RefdataCsvLoader {
                                 req(rec,"code", 1, 64, true),                               // ActivityCode: no whitespace
                                 def(rec,"code_system","LOCAL", 1, 32, true),
                                 opt(rec,"description", 0, 512),
-                                def(rec,"status","ACTIVE", 1, 32, true)
+                                def(rec,"status","ACTIVE", 1, 32, true),
+                                opt(rec, "type", 0,5)
                         }));
     }
 
