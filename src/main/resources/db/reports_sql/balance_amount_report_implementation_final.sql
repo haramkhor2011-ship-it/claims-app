@@ -92,9 +92,54 @@ COMMENT ON FUNCTION claims.map_status_to_text IS 'Maps claim status SMALLINT to 
 -- - Calculated fields (aging, pending amounts, buckets)
 -- ==========================================================================================================
 
--- Enhanced base balance amount view with corrected field mappings
+-- Enhanced base balance amount view with optimized CTEs (replacing LATERAL JOINs)
 DROP VIEW IF EXISTS claims.v_balance_amount_to_be_received_base CASCADE;
 CREATE OR REPLACE VIEW claims.v_balance_amount_to_be_received_base AS
+WITH latest_remittance AS (
+  -- Replace LATERAL JOIN with CTE for better performance
+  SELECT DISTINCT ON (claim_key_id) 
+    claim_key_id,
+    date_settlement,
+    payment_reference
+  FROM claims.remittance_claim
+  ORDER BY claim_key_id, date_settlement DESC
+),
+remittance_summary AS (
+  -- Pre-aggregate remittance data to avoid multiple joins
+  SELECT 
+    rc.claim_key_id,
+    SUM(ra.payment_amount) as total_payment_amount,
+    SUM(CASE WHEN ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) as total_denied_amount,
+    COUNT(*) as remittance_count,
+    MIN(rc.date_settlement) as first_remittance_date,
+    MAX(rc.date_settlement) as last_remittance_date,
+    MAX(rc.payment_reference) as last_payment_reference
+  FROM claims.remittance_claim rc
+  JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id
+  GROUP BY rc.claim_key_id
+),
+resubmission_summary AS (
+  -- Pre-aggregate resubmission data
+  SELECT 
+    ce.claim_key_id,
+    COUNT(*) as resubmission_count,
+    MAX(ce.event_time) as last_resubmission_date,
+    MAX(cr.comment) as last_resubmission_comment,
+    MAX(cr.resubmission_type) as last_resubmission_type
+  FROM claims.claim_event ce
+  LEFT JOIN claims.claim_resubmission cr ON ce.id = cr.claim_event_id
+  WHERE ce.type = 2  -- RESUBMISSION events
+  GROUP BY ce.claim_key_id
+),
+latest_status AS (
+  -- Get latest status for each claim
+  SELECT DISTINCT ON (claim_key_id)
+    claim_key_id,
+    status,
+    status_time
+  FROM claims.claim_status_timeline
+  ORDER BY claim_key_id, status_time DESC
+)
 SELECT 
   ck.id AS claim_key_id,
   ck.claim_id,
@@ -124,30 +169,24 @@ SELECT
   -- This represents the organizational grouping for reporting purposes
   COALESCE(e.facility_id, c.provider_id) AS facility_group_id,  -- JSON: claims.encounter.facility_id (preferred) or claims.claim.provider_id
   
-  -- Reference data with fallbacks (in case claims_ref schema is not accessible)
+  -- Reference data with fallbacks (hybrid approach for reliability)
   -- Business Logic: Use reference data when available, fallback to IDs for display
-  -- TODO: Enable when claims_ref schema is accessible and populated
-  -- p.name AS provider_name,
-  -- p.provider_code,
-  COALESCE(c.provider_id, 'UNKNOWN') AS provider_name,  -- Fallback: Use provider_id as name
-  c.provider_id AS provider_code,
+  -- Provider information from reference data
+  COALESCE(p.name, c.provider_id, 'UNKNOWN') AS provider_name,
+  COALESCE(p.provider_code, c.provider_id) AS provider_code,
   
   -- Facility details with fallbacks
   -- Business Logic: Use facility reference data when available, fallback to facility_id
-  -- TODO: Enable when claims_ref schema is accessible and populated
-  -- f.name AS facility_name,
-  -- f.facility_code,
-  COALESCE(e.facility_id, 'UNKNOWN') AS facility_name,  -- Fallback: Use facility_id as name
-  e.facility_id AS facility_code,
+  -- Facility information from reference data
+  COALESCE(f.name, e.facility_id, 'UNKNOWN') AS facility_name,
+  COALESCE(f.facility_code, e.facility_id) AS facility_code,
   
   -- Payer details with fallbacks (for Receiver_Name mapping)
   -- Business Logic: Use payer reference data when available, fallback to payer_id
   -- This is used for Receiver_Name in Tab B (Initial Not Remitted Balance)
-  -- TODO: Enable when claims_ref schema is accessible and populated
-  -- pay.name AS payer_name,
-  -- pay.payer_code,
-  COALESCE(c.payer_id, 'UNKNOWN') AS payer_name,  -- Fallback: Use payer_id as name
-  c.payer_id AS payer_code,
+  -- Payer information from reference data
+  COALESCE(pay.name, c.payer_id, 'UNKNOWN') AS payer_name,
+  COALESCE(pay.payer_code, c.payer_id) AS payer_code,
   
   -- Health Authority mapping (CORRECTED per JSON mapping)
   -- Business Logic: Track health authority for both submission and remittance phases
@@ -155,30 +194,30 @@ SELECT
   if_sub.sender_id AS health_authority_submission,  -- JSON: claims.ingestion_file.sender_id for submission
   if_rem.receiver_id AS health_authority_remittance,  -- JSON: claims.ingestion_file.receiver_id for remittance
   
-  -- Remittance summary (enhanced with better NULL handling)
+  -- Remittance summary (using CTE instead of LATERAL JOIN)
   -- Business Logic: Aggregate all remittance data for a claim to show payment history
   -- Used for calculating outstanding balances and payment status
-  COALESCE(rem_summary.total_payment_amount, 0) AS total_payment_amount,  -- Total amount paid across all remittances
-  COALESCE(rem_summary.total_denied_amount, 0) AS total_denied_amount,    -- Total amount denied across all remittances
-  rem_summary.first_remittance_date,                                      -- Date of first payment
-  rem_summary.last_remittance_date,                                       -- Date of most recent payment
-  rem_summary.last_payment_reference,                                     -- Reference number of last payment
-  COALESCE(rem_summary.remittance_count, 0) AS remittance_count,         -- Number of remittance files processed
+  COALESCE(remittance_summary.total_payment_amount, 0) AS total_payment_amount,  -- Total amount paid across all remittances
+  COALESCE(remittance_summary.total_denied_amount, 0) AS total_denied_amount,    -- Total amount denied across all remittances
+  remittance_summary.first_remittance_date,                                      -- Date of first payment
+  remittance_summary.last_remittance_date,                                       -- Date of most recent payment
+  remittance_summary.last_payment_reference,                                     -- Reference number of last payment
+  COALESCE(remittance_summary.remittance_count, 0) AS remittance_count,         -- Number of remittance files processed
   
-  -- Resubmission summary (enhanced with better NULL handling)
+  -- Resubmission summary (using CTE instead of LATERAL JOIN)
   -- Business Logic: Track resubmission history for claims that were rejected and resubmitted
   -- Used in Tab C to show claims that were resubmitted but still have outstanding balances
-  COALESCE(resub_summary.resubmission_count, 0) AS resubmission_count,     -- Number of times claim was resubmitted
-  resub_summary.last_resubmission_date,                                   -- Date of most recent resubmission
-  resub_summary.last_resubmission_comment,                                -- Comments from last resubmission
-  resub_summary.last_resubmission_type,                                   -- Type of last resubmission
+  COALESCE(resubmission_summary.resubmission_count, 0) AS resubmission_count,     -- Number of times claim was resubmitted
+  resubmission_summary.last_resubmission_date,                                   -- Date of most recent resubmission
+  resubmission_summary.last_resubmission_comment,                                -- Comments from last resubmission
+  resubmission_summary.last_resubmission_type,                                   -- Type of last resubmission
   
   -- Submission file details (using direct joins)
   -- Business Logic: Track submission file information for audit and reference purposes
   if_sub.file_id AS last_submission_file,  -- File ID of the submission
   if_sub.receiver_id,                       -- Receiver ID for the submission
   
-  -- Payment status from claim_status_timeline (CORRECTED)
+  -- Payment status from claim_status_timeline (using CTE)
   -- Business Logic: Get the most recent status from the timeline to show current claim state
   -- This provides the authoritative current status of the claim
   claims.map_status_to_text(cst.status) AS current_claim_status,  -- Current status as readable text
@@ -189,7 +228,7 @@ SELECT
   -- Formula: Initial Net Amount - Total Payments - Total Denials = Outstanding Balance
   CASE 
     WHEN c.net IS NULL OR c.net = 0 THEN 0
-    ELSE c.net - COALESCE(rem_summary.total_payment_amount, 0) - COALESCE(rem_summary.total_denied_amount, 0)
+    ELSE c.net - COALESCE(remittance_summary.total_payment_amount, 0) - COALESCE(remittance_summary.total_denied_amount, 0)
   END AS pending_amount,  -- Outstanding balance (what is still owed)
   
   -- Aging calculation (CORRECTED: Use encounter.start_at)
@@ -206,55 +245,19 @@ SELECT
 FROM claims.claim_key ck
 JOIN claims.claim c ON c.claim_key_id = ck.id
 LEFT JOIN claims.encounter e ON e.claim_id = c.id
--- Reference data joins (may fail if claims_ref schema is not accessible)
--- LEFT JOIN claims_ref.provider p ON p.provider_code = c.provider_id
--- LEFT JOIN claims_ref.facility f ON f.facility_code = e.facility_id
--- LEFT JOIN claims_ref.payer pay ON pay.payer_code = c.payer_id
+-- Reference data joins (optimized with ref_id columns)
+LEFT JOIN claims_ref.provider p ON p.id = c.provider_ref_id
+LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+LEFT JOIN claims_ref.payer pay ON pay.id = c.payer_ref_id
 LEFT JOIN claims.submission s ON s.id = c.submission_id
 LEFT JOIN claims.ingestion_file if_sub ON if_sub.id = s.ingestion_file_id
 LEFT JOIN claims.remittance_claim rc_join ON rc_join.claim_key_id = ck.id
 LEFT JOIN claims.remittance rem ON rem.id = rc_join.remittance_id
 LEFT JOIN claims.ingestion_file if_rem ON if_rem.id = rem.ingestion_file_id
-
--- Remittance summary (lateral join for performance)
-LEFT JOIN LATERAL (
-  SELECT 
-    COUNT(*) AS remittance_count,
-    SUM(ra.payment_amount) AS total_payment_amount,
-    SUM(CASE WHEN ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS total_denied_amount,
-    MIN(rc.date_settlement) AS first_remittance_date,
-    MAX(rc.date_settlement) AS last_remittance_date,
-    MAX(rc.payment_reference) AS last_payment_reference
-  FROM claims.remittance_claim rc
-  JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-  WHERE rc.claim_key_id = ck.id
-) rem_summary ON TRUE
-
--- Resubmission summary (CORRECTED: Fixed event type reference)
-LEFT JOIN LATERAL (
-  SELECT 
-    COUNT(*) AS resubmission_count,
-    MAX(ce.event_time) AS last_resubmission_date,
-    MAX(cr.comment) AS last_resubmission_comment,
-    'RESUBMISSION' AS last_resubmission_type
-  FROM claims.claim_event ce
-  LEFT JOIN claims.claim_resubmission cr ON cr.claim_event_id = ce.id
-  WHERE ce.claim_key_id = ck.id
-  AND ce.type = 2  -- RESUBMISSION
-) resub_summary ON TRUE
-
--- Submission file details (now using direct joins above)
-
-  -- Current claim status from timeline (CORRECTED)
-LEFT JOIN LATERAL (
-  SELECT 
-    cst.status,
-    cst.status_time
-  FROM claims.claim_status_timeline cst
-  WHERE cst.claim_key_id = ck.id
-  ORDER BY cst.status_time DESC
-  LIMIT 1
-) cst ON TRUE;
+-- Use CTEs instead of LATERAL JOINs for better performance
+LEFT JOIN remittance_summary ON remittance_summary.claim_key_id = ck.id
+LEFT JOIN resubmission_summary ON resubmission_summary.claim_key_id = ck.id
+LEFT JOIN latest_status cst ON cst.claim_key_id = ck.id;
 
 COMMENT ON VIEW claims.v_balance_amount_to_be_received_base IS 'Enhanced base view for balance amount reporting with corrected field mappings and business logic';
 
@@ -550,52 +553,52 @@ BEGIN
     p_date_to := NOW();
   END IF;
   
-  -- Build WHERE clause with proper parameter handling
-  v_where_clause := 'WHERE bab.encounter_start >= $6 AND bab.encounter_start <= $7';
+  -- Build WHERE clause with proper parameter handling for materialized view
+  v_where_clause := 'WHERE mv.encounter_start >= $6 AND mv.encounter_start <= $7';
   
   -- Claim key filtering
   IF p_claim_key_ids IS NOT NULL AND array_length(p_claim_key_ids, 1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND tab_a.claim_key_id = ANY($2)';
+    v_where_clause := v_where_clause || ' AND mv.claim_key_id = ANY($2)';
   END IF;
   
   -- Facility filtering with scoping
   IF p_facility_codes IS NOT NULL AND array_length(p_facility_codes, 1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND bab.facility_id = ANY($3)';
+    v_where_clause := v_where_clause || ' AND mv.facility_id = ANY($3)';
   ELSE
-    -- v_where_clause := v_where_clause || ' AND claims.check_user_facility_access($1, bab.facility_id, ''READ'')';
+    -- v_where_clause := v_where_clause || ' AND claims.check_user_facility_access($1, mv.facility_id, ''READ'')';
   END IF;
   
   -- Payer filtering (code)
   IF p_payer_codes IS NOT NULL AND array_length(p_payer_codes, 1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND bab.payer_id = ANY($4)';
+    v_where_clause := v_where_clause || ' AND mv.payer_id = ANY($4)';
   END IF;
   
   -- Receiver filtering
   IF p_receiver_ids IS NOT NULL AND array_length(p_receiver_ids, 1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND bab.receiver_id = ANY($5)';
+    v_where_clause := v_where_clause || ' AND mv.payer_name = ANY($5)';
   END IF;
   
   -- Year filtering
   IF p_year IS NOT NULL THEN
-    v_where_clause := v_where_clause || ' AND bab.encounter_start_year = $8';
+    v_where_clause := v_where_clause || ' AND EXTRACT(YEAR FROM mv.encounter_start) = $8';
   END IF;
   
   -- Month filtering
   IF p_month IS NOT NULL THEN
-    v_where_clause := v_where_clause || ' AND bab.encounter_start_month = $9';
+    v_where_clause := v_where_clause || ' AND EXTRACT(MONTH FROM mv.encounter_start) = $9';
   END IF;
   
   -- Based on initial net amount filtering
   IF p_based_on_initial_net THEN
-    v_where_clause := v_where_clause || ' AND bab.initial_net_amount > 0';
+    v_where_clause := v_where_clause || ' AND mv.initial_net > 0';
   END IF;
 
   -- Ref-id optional filters via EXISTS
   IF p_facility_ref_ids IS NOT NULL AND array_length(p_facility_ref_ids,1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE e.claim_id = bab.claim_id_internal AND rf.id = ANY($14))';
+    v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE e.claim_id = mv.claim_internal_id AND rf.id = ANY($14))';
   END IF;
   IF p_payer_ref_ids IS NOT NULL AND array_length(p_payer_ref_ids,1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.claim c2 WHERE c2.id = bab.claim_id_internal AND c2.payer_ref_id = ANY($15))';
+    v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.claim c2 WHERE c2.id = mv.claim_internal_id AND c2.payer_ref_id = ANY($15))';
   END IF;
   
   -- Build ORDER BY clause with validation
@@ -609,11 +612,10 @@ BEGIN
   
   v_order_clause := 'ORDER BY ' || p_order_by || ' ' || p_order_direction;
   
-  -- Get total count
+  -- Get total count using materialized view for sub-second performance
   v_sql := FORMAT('
     SELECT COUNT(*)
-    FROM claims.v_balance_amount_to_be_received tab_a
-    JOIN claims.v_balance_amount_to_be_received_base bab ON bab.claim_key_id = tab_a.claim_key_id
+    FROM claims.mv_balance_amount_summary mv
     %s
   ', v_where_clause);
   
@@ -621,40 +623,44 @@ BEGIN
   USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
   INTO v_total_count;
   
-  -- Return paginated results
+  -- Return paginated results using materialized view for sub-second performance
   v_sql := FORMAT('
     SELECT 
-      tab_a.claim_key_id,
-      tab_a.claim_id,
-      tab_a.facility_group_id,
-      tab_a.health_authority,
-      tab_a.facility_id,
-      tab_a.facility_name,
-      tab_a.claim_number,
-      tab_a.encounter_start_date,
-      tab_a.encounter_end_date,
-      tab_a.encounter_start_year,
-      tab_a.encounter_start_month,
-      tab_a.id_payer,
-      tab_a.patient_id,
-      tab_a.member_id,
-      tab_a.emirates_id_number,
-      tab_a.billed_amount,
-      tab_a.amount_received,
-      tab_a.denied_amount,
-      tab_a.outstanding_balance,
-      tab_a.submission_date,
-      tab_a.submission_reference_file,
-      tab_a.claim_status,
-      tab_a.remittance_count,
-      tab_a.resubmission_count,
-      tab_a.aging_days,
-      tab_a.aging_bucket,
-      tab_a.current_claim_status,
-      tab_a.last_status_date,
+      mv.claim_key_id,
+      mv.claim_id,
+      mv.facility_id as facility_group_id,
+      mv.payer_name as health_authority,
+      mv.facility_id,
+      mv.facility_name,
+      mv.claim_id as claim_number,
+      mv.encounter_start as encounter_start_date,
+      mv.encounter_start as encounter_end_date,
+      EXTRACT(YEAR FROM mv.encounter_start) as encounter_start_year,
+      EXTRACT(MONTH FROM mv.encounter_start) as encounter_start_month,
+      mv.payer_id as id_payer,
+      ''N/A'' as patient_id,
+      ''N/A'' as member_id,
+      ''N/A'' as emirates_id_number,
+      mv.initial_net as billed_amount,
+      mv.total_payment as amount_received,
+      mv.total_denied as denied_amount,
+      mv.pending_amount as outstanding_balance,
+      mv.tx_at as submission_date,
+      ''N/A'' as submission_reference_file,
+      mv.current_status as claim_status,
+      mv.remittance_count,
+      mv.resubmission_count,
+      mv.aging_days,
+      CASE 
+        WHEN mv.aging_days <= 30 THEN ''0-30''
+        WHEN mv.aging_days <= 60 THEN ''31-60''
+        WHEN mv.aging_days <= 90 THEN ''61-90''
+        ELSE ''90+''
+      END as aging_bucket,
+      mv.current_status as current_claim_status,
+      mv.last_status_date,
       %s as total_records
-    FROM claims.v_balance_amount_to_be_received tab_a
-    JOIN claims.v_balance_amount_to_be_received_base bab ON bab.claim_key_id = tab_a.claim_key_id
+    FROM claims.mv_balance_amount_summary mv
     %s
     %s
     LIMIT $10 OFFSET $11

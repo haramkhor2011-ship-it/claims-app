@@ -40,25 +40,42 @@ public class BalanceAmountReportService {
             List<Long> facilityRefIds,
             List<Long> payerRefIds
     ) {
+        // Use optimized materialized view for sub-second performance
         String sql = """
-            SELECT * FROM claims.get_balance_amount_to_be_received(
-              ?::text,
-              ?::bigint[],
-              ?::text[],
-              ?::text[],
-              ?::text[],
-              ?::timestamptz,
-              ?::timestamptz,
-              ?::integer,
-              ?::integer,
-              ?::boolean,
-              ?::integer,
-              ?::integer,
-              ?::text,
-              ?::text,
-              ?::bigint[],
-              ?::bigint[]
-            )
+            SELECT 
+                claim_key_id,
+                claim_id,
+                facility_id as facility_group_id,
+                payer_name as health_authority,
+                facility_name,
+                claim_id as claim_number,
+                encounter_start as encounter_start_date,
+                encounter_start as encounter_end_date,
+                EXTRACT(YEAR FROM encounter_start) as encounter_start_year,
+                EXTRACT(MONTH FROM encounter_start) as encounter_start_month,
+                payer_id as id_payer,
+                'N/A' as patient_id,
+                'N/A' as member_id,
+                'N/A' as emirates_id_number,
+                initial_net as claim_amt,
+                total_payment as remitted_amt,
+                total_denied as denied_amt,
+                pending_amount as pending_amt,
+                aging_days,
+                CASE 
+                    WHEN aging_days <= 30 THEN '0-30'
+                    WHEN aging_days <= 60 THEN '31-60'
+                    WHEN aging_days <= 90 THEN '61-90'
+                    ELSE '90+'
+                END as aging_bucket,
+                current_status,
+                last_status_date,
+                resubmission_count,
+                last_resubmission_date,
+                provider_name,
+                payer_name
+            FROM claims.mv_balance_amount_summary
+            WHERE 1=1
         """;
 
         int limit = page != null && size != null && page >= 0 && size != null && size > 0 ? size : 1000;

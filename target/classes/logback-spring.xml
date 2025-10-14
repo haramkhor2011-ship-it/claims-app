@@ -38,6 +38,27 @@
         </encoder>
     </appender>
     
+    <!-- Database Monitoring File Appender (separate daily log for DB monitoring) -->
+    <appender name="DB_MONITORING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/database-monitoring.log</file>
+        <filter class="ch.qos.logback.core.filter.EvaluatorFilter">
+            <evaluator class="ch.qos.logback.classic.boolex.OnMarkerEvaluator">
+                <marker>DB_MONITORING</marker>
+            </evaluator>
+            <onMismatch>DENY</onMismatch>
+            <onMatch>ACCEPT</onMatch>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/database-monitoring.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>90</maxHistory>
+            <totalSizeCap>5GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    
     <!-- Async Appender for better performance -->
     <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
         <appender-ref ref="FILE"/>
@@ -66,6 +87,58 @@
         <appender-ref ref="ASYNC_FILE"/>
         <appender-ref ref="ERROR_FILE"/>
     </logger>
+    
+    <!-- Database monitoring logging -->
+    <logger name="com.acme.claims.monitoring" level="INFO" additivity="false">
+        <appender-ref ref="STDOUT"/>
+        <appender-ref ref="ASYNC_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+        <appender-ref ref="DB_MONITORING_FILE"/>
+        <appender-ref ref="APP_MONITORING_FILE"/>
+        <appender-ref ref="BACKUP_MONITORING_FILE"/>
+    </logger>
+    
+    <!-- Application monitoring file appender -->
+    <appender name="APP_MONITORING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/application-monitoring.log</file>
+        <filter class="ch.qos.logback.core.filter.EvaluatorFilter">
+            <evaluator class="ch.qos.logback.classic.boolex.OnMarkerEvaluator">
+                <marker>APP_MONITORING</marker>
+            </evaluator>
+            <onMismatch>DENY</onMismatch>
+            <onMatch>ACCEPT</onMatch>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/application-monitoring.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>90</maxHistory>
+            <totalSizeCap>5GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    
+    <!-- Backup monitoring file appender -->
+    <appender name="BACKUP_MONITORING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/backup-monitoring.log</file>
+        <filter class="ch.qos.logback.core.filter.EvaluatorFilter">
+            <evaluator class="ch.qos.logback.classic.boolex.OnMarkerEvaluator">
+                <marker>BACKUP_MONITORING</marker>
+            </evaluator>
+            <onMismatch>DENY</onMismatch>
+            <onMatch>ACCEPT</onMatch>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/backup-monitoring.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>90</maxHistory>
+            <totalSizeCap>5GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
     
     <!-- SQL logging (optional - for debugging) -->
     <logger name="org.hibernate.SQL" level="WARN" additivity="false">

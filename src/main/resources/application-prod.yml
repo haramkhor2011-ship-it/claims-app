@@ -74,7 +74,6 @@ claims:
       password: ${DHPO_SOAP_PASSWORD}
       connect-timeout-ms: 5000
       read-timeout-ms: 15000
-      # optional TLS trust/key settings can be added here
 
     ack:
       enabled: true                       # best-effort after success (per requirements)
@@ -84,7 +83,7 @@ claims:
       max-pool-size: 12
       queue-capacity: 1000
     poll:
-      fixedDelayMs: ${INGESTION_POLL_MS:20000}   # 20s default
+      fixedDelayMs: 1000   # 20s default
 
   parser:
     allowNonSchemaAttachments: false
@@ -94,21 +93,43 @@ claims:
 
   # ===== Refdata & Bootstrap =====
   refdata:
-    # Start with true to auto-seed on first sightings; flip to false once dictionaries are governed
-    auto-insert: true                    # ENABLED: Populate ref_id columns during persist
+    auto-insert: true
     bootstrap:
-      enabled: true                     # ENABLED: Read CSV files on startup
+      enabled: true
       location: "classpath:refdata/"
 
 # Optional: enable a real cache for ref lookups in prod (Caffeine)
 claims.security.ame:
   enabled: true
   keystore:
-    type: "PKCS12"                    # or "PKCS12" or "FILE"
-    path: "file:config/claims.p12" # or "file:config/claims.p12" or "file:config/ame.key"
+    type: "PKCS12"
+    path: "file:config/claims.p12"
     alias: "claims-ame"
-    passwordEnv: "CLAIMS_AME_STORE_PASS"   # only store/pass are env-based
+    passwordEnv: "CLAIMS_AME_STORE_PASS"
   crypto:
     kekRotationAllowed: true
     gcmTagBits: 128
-    keyId : claims-ame.v1 #  used in enc_meta to mark which key encrypted the row
+    keyId : claims-ame.v1
+
+# Active SOAP client properties
+claims.soap:
+  endpoint: ${DHPO_SOAP_ENDPOINT}
+  soap12: false
+  connectTimeoutMs: 5000
+  readTimeoutMs: 15000
+  retry:
+    maxAttempts: 3
+    backoffMs: 500
+  poll:
+    fixedDelayMs: 1800000
+  downloadConcurrency: 16
+
+# DHPO client tuning
+dhpo.client:
+  getNewEnabled: false
+  searchDaysBack: 100
+  retriesOnMinus4: 3
+  connectTimeoutMs: 6000
+  readTimeoutMs: 15000
+  downloadTimeoutMs: 120000
+  stageToDiskThresholdMb: 25

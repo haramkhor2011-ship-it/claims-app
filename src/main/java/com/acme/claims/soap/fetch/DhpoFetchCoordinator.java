@@ -254,9 +254,25 @@ public class DhpoFetchCoordinator {
                 for (var f : list) {
                     scope.fork(() -> {
                         try {
-                            // Two searches per facility: submissions(sent=2, direction=1) & remittances(received=8, direction=2)
-                            searchWindow(f, 1, 2);
-                            searchWindow(f, 2, 8);
+                            // === TEMP BACKFILL START ===
+                            // Temporary multi-window backfill for ingestion only:
+                            // Run 10 consecutive 100-day windows covering ~last 1000 days.
+                            // NOTE: Remove this block and restore the original calls below
+                            // once the initial ingestion is complete.
+                            LocalDateTime now = LocalDateTime.now();
+                            for (int i = 0; i < 10; i++) {
+                                LocalDateTime to = now.minusDays(100L * i);
+                                LocalDateTime from = to.minusDays(100);
+                                // submissions (direction=1, tx=2)
+                                searchWindowRange(f, 1, 2, from, to);
+                                // remittances (direction=2, tx=8)
+                                searchWindowRange(f, 2, 8, from, to);
+                            }
+                            // === TEMP BACKFILL END ===
+
+                            // Original behavior (restore after ingestion):
+                            // searchWindow(f, 1, 2);
+                            // searchWindow(f, 2, 8);
                             return null;
                         } catch (DhpoFetchException e) {
                             // Log structured exception with context
@@ -356,6 +372,80 @@ public class DhpoFetchCoordinator {
             }
         } catch (Exception e) {
             throw new DhpoFetchException(f.getFacilityCode(), "VIRTUAL_THREAD_EXECUTION", 
+                    "THREAD_ERROR", "Failed to execute virtual threads for search downloads", e);
+        }
+    }
+
+    // Temporary explicit-range search used by the backfill loop.
+    // TODO: REMOVE after initial ingestion completes (use searchWindow(...) instead)
+    private void searchWindowRange(FacilityDhpoConfig f, int direction, int transactionId,
+                                   LocalDateTime from, LocalDateTime to) {
+        final int downloadConcurrency = Math.max(1, soapProps.downloadConcurrency());
+        final Semaphore downloadSlots = new Semaphore(downloadConcurrency);
+        List<Future<?>> futures = new ArrayList<>();
+
+        CredsCipherService.PlainCreds plain;
+        try {
+            plain = creds.decryptFor(f);
+        } catch (Exception e) {
+            throw new DhpoCredentialException(f.getFacilityCode(),
+                    "Failed to decrypt credentials for facility", e);
+        }
+
+        var req = SearchTransactionsRequest.build(
+                plain.login(), plain.pwd(), direction,
+                f.getFacilityCode(), "",                            // callerLicense = facility_code, ePartner blank
+                transactionId, 1,                                   // TransactionStatus=1 (new/undownloaded)
+                FMT.format(from), FMT.format(to),
+                1, 500, false /*soap1.1*/
+        );
+
+        com.acme.claims.soap.SoapGateway.SoapResponse resp;
+        try {
+            resp = soapCaller.call(req);
+        } catch (Exception e) {
+            throw new DhpoSoapException(f.getFacilityCode(), "SearchTransactions",
+                    Integer.MIN_VALUE, "SOAP call failed", e);
+        }
+
+        ListFilesParser.Result parsed;
+        try {
+            parsed = listFilesParser.parse(resp.envelopeXml());
+        } catch (Exception e) {
+            throw new DhpoFetchException(f.getFacilityCode(), "PARSE_RESPONSE",
+                    "PARSE_ERROR", "Failed to parse SearchTransactions response", e);
+        }
+
+        if (!handleResultCode("SearchTransactions", parsed.code(), parsed.errorMessage(), f.getFacilityCode())) {
+            return;
+        }
+
+        long candidates = parsed.files().stream().filter(fr -> fr.isDownloaded()==null || Boolean.FALSE.equals(fr.isDownloaded())).count();
+        log.info("Facility {} SearchRange dir={} tx={} from={} to={} candidates={}",
+                f.getFacilityCode(), direction, transactionId, FMT.format(from), FMT.format(to), candidates);
+
+        try (var vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            for (var file : parsed.files().stream().filter(fr -> fr.isDownloaded() == null || !fr.isDownloaded()).toList()) {
+                futures.add(vt.submit(() -> {
+                    if (!tryMarkInflight(f.getFacilityCode(), file.fileId())) {
+                        log.debug("Skip duplicate inflight {}|{}", f.getFacilityCode(), file.fileId());
+                        return;
+                    }
+
+                    try {
+                        downloadSlots.acquireUninterruptibly();
+                        downloadAndStage(f, file, plain);
+                    } catch (Exception e) {
+                        log.error("Failed to download and stage file {} for facility {}: {}",
+                                file.fileId(), f.getFacilityCode(), e.getMessage(), e);
+                    } finally {
+                        downloadSlots.release();
+                        unmarkInflight(f.getFacilityCode(), file.fileId());
+                    }
+                }));
+            }
+        } catch (Exception e) {
+            throw new DhpoFetchException(f.getFacilityCode(), "VIRTUAL_THREAD_EXECUTION",
                     "THREAD_ERROR", "Failed to execute virtual threads for search downloads", e);
         }
     }

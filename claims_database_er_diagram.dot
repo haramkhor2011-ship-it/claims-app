@@ -1,0 +1,172 @@
+digraph ClaimsDatabase {
+    // Graph settings
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor=lightblue, fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=8, arrowsize=0.7];
+    
+    // Define schema subgraphs for better organization
+    subgraph cluster_claims_ref {
+        label="claims_ref Schema (Reference Data)";
+        style=filled;
+        fillcolor=lightyellow;
+        
+        // Reference tables
+        facility [label="facility\l(id, facility_code*,\lname, city, country,\lstatus, created_at,\lupdated_at)\l", fillcolor=wheat];
+        payer [label="payer\l(id, payer_code*,\lname, status,\lclassification,\lcreated_at, updated_at)\l", fillcolor=wheat];
+        provider [label="provider\l(id, provider_code*,\lname, status,\lcreated_at, updated_at)\l", fillcolor=wheat];
+        clinician [label="clinician\l(id, clinician_code*,\lname, specialty,\lstatus, created_at,\lupdated_at)\l", fillcolor=wheat];
+        activity_code [label="activity_code\l(id, type, code*,\lcode_system, description,\lstatus, created_at,\lupdated_at)\l", fillcolor=wheat];
+        diagnosis_code [label="diagnosis_code\l(id, code*, code_system*,\ldescription, status,\lcreated_at, updated_at)\l", fillcolor=wheat];
+        denial_code [label="denial_code\l(id, code*, description,\lpayer_code, created_at,\lupdated_at)\l", fillcolor=wheat];
+        observation_type [label="observation_type\l(obs_type*, description)\l", fillcolor=wheat];
+        observation_value_type [label="observation_value_type\l(value_type*, description)\l", fillcolor=wheat];
+        observation_code [label="observation_code\l(id, code*, description,\lcreated_at, updated_at)\l", fillcolor=wheat];
+        bootstrap_status [label="bootstrap_status\l(id, bootstrap_name*,\lcompleted_at, version,\lcreated_at)\l", fillcolor=wheat];
+    }
+    
+    subgraph cluster_claims {
+        label="claims Schema (Core Business Data)";
+        style=filled;
+        fillcolor=lightcyan;
+        
+        // Core ingestion and file processing
+        ingestion_run [label="ingestion_run\l(id, started_at,\lended_at, profile,\lfetcher_name, acker_name,\lpoll_reason, files_discovered,\lfiles_pulled, files_processed_ok,\lfiles_failed, files_already,\lacks_sent)\l", fillcolor=lightgreen];
+        
+        ingestion_file [label="ingestion_file\l(id, file_id*, file_name,\lroot_type, sender_id,\lreceiver_id, transaction_date,\lrecord_count_declared,\ldisposition_flag, xml_bytes,\lcreated_at, updated_at)\l", fillcolor=lightgreen];
+        
+        ingestion_error [label="ingestion_error\l(id, ingestion_file_id,\lstage, object_type,\lobject_key, error_code,\lerror_message, stack_excerpt,\lretryable, occurred_at)\l", fillcolor=lightcoral];
+        
+        ingestion_file_audit [label="ingestion_file_audit\l(id, ingestion_run_id,\lingestion_file_id, status,\lreason, error_class,\lerror_message, validation_ok,\lheader_*, parsed_*,\lpersisted_*, ...)\l", fillcolor=lightcoral];
+        
+        // Claim key (canonical identifier)
+        claim_key [label="claim_key\l(id, claim_id*,\lcreated_at, updated_at)\l", fillcolor=gold];
+        
+        // Submission flow
+        submission [label="submission\l(id, ingestion_file_id,\lcreated_at, updated_at,\ltx_at)\l", fillcolor=lightblue];
+        
+        claim [label="claim\l(id, claim_key_id*,\lsubmission_id, id_payer,\lmember_id, payer_id,\lprovider_id, emirates_id_number,\lgross, patient_share, net,\lcomments, payer_ref_id,\lprovider_ref_id,\lcreated_at, updated_at,\ltx_at)\l", fillcolor=lightblue];
+        
+        encounter [label="encounter\l(id, claim_id, facility_id,\ltype, patient_id, start_at,\lend_at, start_type, end_type,\ltransfer_source,\ltransfer_destination,\lfacility_ref_id,\lcreated_at, updated_at)\l", fillcolor=lightblue];
+        
+        diagnosis [label="diagnosis\l(id, claim_id, diag_type,\lcode, diagnosis_code_ref_id,\lcreated_at, updated_at)\l", fillcolor=lightblue];
+        
+        activity [label="activity\l(id, claim_id, activity_id*,\lstart_at, type, code,\lquantity, net, clinician,\lprior_authorization_id,\lclinician_ref_id,\lactivity_code_ref_id,\lcreated_at, updated_at)\l", fillcolor=lightblue];
+        
+        observation [label="observation\l(id, activity_id, obs_type,\lobs_code, value_text,\lvalue_type, file_bytes,\lcreated_at, updated_at)\l", fillcolor=lightblue];
+        
+        // Remittance flow
+        remittance [label="remittance\l(id, ingestion_file_id,\lcreated_at, updated_at,\ltx_at)\l", fillcolor=lavender];
+        
+        remittance_claim [label="remittance_claim\l(id, remittance_id,\lclaim_key_id, id_payer,\lprovider_id, comments,\lpayment_reference,\ldate_settlement, facility_id,\lpayer_ref_id, provider_ref_id,\lcreated_at, updated_at)\l", fillcolor=lavender];
+        
+        remittance_activity [label="remittance_activity\l(id, remittance_claim_id,\lactivity_id*, start_at,\ltype, code, quantity, net,\llist_price, clinician,\lprior_authorization_id,\lgross, patient_share,\lpayment_amount, denial_code,\ldenial_code_ref_id,\lactivity_code_ref_id,\lclinician_ref_id,\lcreated_at, updated_at)\l", fillcolor=lavender];
+        
+        // Event tracking
+        claim_event [label="claim_event\l(id, claim_key_id,\lingestion_file_id,\levent_time, type,\lsubmission_id, remittance_id,\lcreated_at)\l", fillcolor=orange];
+        
+        claim_event_activity [label="claim_event_activity\l(id, claim_event_id,\lactivity_id_ref,\lremittance_activity_id_ref,\lactivity_id_at_event,\lstart_at_event, type_at_event,\lcode_at_event, quantity_at_event,\lnet_at_event, clinician_at_event,\lprior_authorization_id_at_event,\llist_price_at_event,\lgross_at_event,\lpatient_share_at_event,\lpayment_amount_at_event,\ldenial_code_at_event,\lcreated_at)\l", fillcolor=orange];
+        
+        event_observation [label="event_observation\l(id, claim_event_activity_id,\lobs_type, obs_code,\lvalue_text, value_type,\lfile_bytes, created_at)\l", fillcolor=orange];
+        
+        claim_status_timeline [label="claim_status_timeline\l(id, claim_key_id, status,\lstatus_time, claim_event_id,\lcreated_at)\l", fillcolor=orange];
+        
+        // Supporting tables
+        claim_resubmission [label="claim_resubmission\l(id, claim_event_id*,\lresubmission_type, comment,\lattachment, created_at,\lupdated_at)\l", fillcolor=lightsalmon];
+        
+        claim_contract [label="claim_contract\l(id, claim_id, package_name,\lcreated_at, updated_at)\l", fillcolor=lightsalmon];
+        
+        claim_attachment [label="claim_attachment\l(id, claim_key_id,\lclaim_event_id, file_name,\lmime_type, data_base64,\ldata_length, created_at)\l", fillcolor=lightsalmon];
+        
+        code_discovery_audit [label="code_discovery_audit\l(id, discovered_at,\lsource_table, code,\lcode_system, discovered_by,\lingestion_file_id,\lclaim_external_id, details)\l", fillcolor=lightsalmon];
+        
+        // Integration and configuration
+        facility_dhpo_config [label="facility_dhpo_config\l(id, facility_code*,\lfacility_name, endpoint_url,\lendpoint_url_for_erx,\ldhpo_username_enc,\ldhpo_password_enc,\lenc_meta_json, active,\lcreated_at, updated_at)\l", fillcolor=lightsteelblue];
+        
+        integration_toggle [label="integration_toggle\l(code*, enabled,\lupdated_at)\l", fillcolor=lightsteelblue];
+        
+        // Verification
+        verification_rule [label="verification_rule\l(id, code*, description,\lseverity, sql_text, active,\lcreated_at)\l", fillcolor=plum];
+        
+        verification_run [label="verification_run\l(id, ingestion_file_id,\lstarted_at, ended_at,\lpassed, failed_rules)\l", fillcolor=plum];
+        
+        verification_result [label="verification_result\l(id, verification_run_id,\lrule_id, ok, rows_affected,\lsample_json, message,\lexecuted_at)\l", fillcolor=plum];
+    }
+    
+    // ========================================
+    // FOREIGN KEY RELATIONSHIPS
+    // ========================================
+    
+    // Ingestion relationships
+    ingestion_file_audit -> ingestion_run [label="ingestion_run_id"];
+    ingestion_file_audit -> ingestion_file [label="ingestion_file_id"];
+    ingestion_error -> ingestion_file [label="ingestion_file_id"];
+    
+    // Submission flow relationships
+    submission -> ingestion_file [label="ingestion_file_id"];
+    claim -> claim_key [label="claim_key_id", color=red, penwidth=2];
+    claim -> submission [label="submission_id"];
+    encounter -> claim [label="claim_id"];
+    diagnosis -> claim [label="claim_id"];
+    activity -> claim [label="claim_id"];
+    observation -> activity [label="activity_id"];
+    claim_contract -> claim [label="claim_id"];
+    
+    // Remittance flow relationships
+    remittance -> ingestion_file [label="ingestion_file_id"];
+    remittance_claim -> remittance [label="remittance_id"];
+    remittance_claim -> claim_key [label="claim_key_id", color=red, penwidth=2];
+    remittance_activity -> remittance_claim [label="remittance_claim_id"];
+    
+    // Event tracking relationships
+    claim_event -> claim_key [label="claim_key_id", color=red, penwidth=2];
+    claim_event -> ingestion_file [label="ingestion_file_id"];
+    claim_event -> submission [label="submission_id"];
+    claim_event -> remittance [label="remittance_id"];
+    claim_event_activity -> claim_event [label="claim_event_id"];
+    claim_event_activity -> activity [label="activity_id_ref", style=dashed];
+    claim_event_activity -> remittance_activity [label="remittance_activity_id_ref", style=dashed];
+    event_observation -> claim_event_activity [label="claim_event_activity_id"];
+    claim_status_timeline -> claim_key [label="claim_key_id"];
+    claim_status_timeline -> claim_event [label="claim_event_id", style=dashed];
+    claim_resubmission -> claim_event [label="claim_event_id"];
+    claim_attachment -> claim_key [label="claim_key_id"];
+    claim_attachment -> claim_event [label="claim_event_id"];
+    
+    // Reference data relationships (from claims to claims_ref)
+    claim -> payer [label="payer_ref_id", color=blue, style=dashed];
+    claim -> provider [label="provider_ref_id", color=blue, style=dashed];
+    encounter -> facility [label="facility_ref_id", color=blue, style=dashed];
+    activity -> clinician [label="clinician_ref_id", color=blue, style=dashed];
+    activity -> activity_code [label="activity_code_ref_id", color=blue, style=dashed];
+    diagnosis -> diagnosis_code [label="diagnosis_code_ref_id", color=blue, style=dashed];
+    remittance_claim -> payer [label="payer_ref_id", color=blue, style=dashed];
+    remittance_claim -> provider [label="provider_ref_id", color=blue, style=dashed];
+    remittance_activity -> denial_code [label="denial_code_ref_id", color=blue, style=dashed];
+    remittance_activity -> activity_code [label="activity_code_ref_id", color=blue, style=dashed];
+    remittance_activity -> clinician [label="clinician_ref_id", color=blue, style=dashed];
+    
+    // Verification relationships
+    verification_run -> ingestion_file [label="ingestion_file_id"];
+    verification_result -> verification_run [label="verification_run_id"];
+    verification_result -> verification_rule [label="rule_id"];
+    
+    // Code discovery
+    code_discovery_audit -> ingestion_file [label="ingestion_file_id", style=dashed];
+    
+    // Legend
+    subgraph cluster_legend {
+        label="Legend";
+        style=filled;
+        fillcolor=white;
+        
+        legend_node1 [label="Solid line = FK constraint", shape=plaintext];
+        legend_node2 [label="Dashed line = Optional FK/Soft ref", shape=plaintext];
+        legend_node3 [label="Red line = claim_key relationships", shape=plaintext];
+        legend_node4 [label="Blue line = Reference data FK", shape=plaintext];
+        
+        legend_node1 -> legend_node2 [style=invis];
+        legend_node2 -> legend_node3 [style=invis];
+        legend_node3 -> legend_node4 [style=invis];
+    }
+}
+

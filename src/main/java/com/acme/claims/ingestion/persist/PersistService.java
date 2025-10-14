@@ -170,14 +170,21 @@ public class PersistService {
                 "insert into claims.submission(ingestion_file_id) values (?) returning id",
                 Long.class, ingestionFileId
         );
+        log.info("persistSubmission: created submission header id={} for ingestionFileId={}", submissionId, ingestionFileId);
 
         int claims = 0, acts = 0, obs = 0, dxs = 0;
         int skippedDup = 0, skippedInvalidClaim = 0;
 
         for (SubmissionClaimDTO c : file.claims()) {
             try {
+                log.info("persistSingleClaim: start claimId={} payerId={} providerId={} emiratesId={} gross={} patientShare={} net={} activities={} diagnoses={}",
+                        c.id(), c.payerId(), c.providerId(), c.emiratesIdNumber(), c.gross(), c.patientShare(), c.net(),
+                        (c.activities() == null ? 0 : c.activities().size()), (c.diagnoses() == null ? 0 : c.diagnoses().size()));
                 // Process each claim in its own transaction to prevent single failure from stopping entire file
                 PersistCounts claimCounts = persistSingleClaim(ingestionFileId, submissionId, c, attachments, file);
+
+                log.info("persistSingleClaim: result claimId={} counts[c={},a={},obs={},dxs={}]",
+                        c.id(), claimCounts.claims(), claimCounts.acts(), claimCounts.obs(), claimCounts.dxs());
 
                 claims += claimCounts.claims();
                 acts += claimCounts.acts();
@@ -189,7 +196,8 @@ public class PersistService {
                 // Log error but continue with next claim (partial success)
                 errors.claimError(ingestionFileId, "PERSIST", claimIdBiz,
                         "CLAIM_PERSIST_FAIL", claimEx.getMessage(), false);
-                log.debug("claim persist failed claimId={} : ", claimIdBiz, claimEx);
+                log.warn("persistSingleClaim: failure claimId={} : {}", claimIdBiz, claimEx.getMessage());
+                log.info("persistSingleClaim: exception stack for claimId={} ", claimIdBiz, claimEx);
                 // continue with next claim - transaction isolation prevents this from affecting other claims
             }
         }
@@ -259,19 +267,23 @@ public class PersistService {
         if (!claimHasRequired(ingestionFileId, c)) {
             errors.claimError(ingestionFileId, "VALIDATE", claimIdBiz, "MISSING_CLAIM_REQUIRED",
                     "Claim required fields missing; skipping claim.", false);
+            log.warn("persistSingleClaim: validation failed, required field missing for claimId={}", claimIdBiz);
             return new PersistCounts(0, 0, 0, 0, 0, 0);
         }
 
         // Duplicate prior SUBMISSION and current has no <Resubmission> → skip & log
         if (isAlreadySubmitted(claimIdBiz) && c.resubmission() == null) {
             log.info("Claim already submitted : {}", claimIdBiz);
+            log.info("persistSingleClaim: skipping duplicate without <Resubmission> claimId={}", claimIdBiz);
             errors.claimError(ingestionFileId, "VALIDATE", claimIdBiz, "DUP_SUBMISSION_NO_RESUB",
                     "Duplicate Claim.Submission without <Resubmission>; skipped.", false);
             return new PersistCounts(0, 0, 0, 0, 0, 0);
         }
 
         // Upsert core graph
+        log.info("persistSingleClaim: upserting claim_key for claimId={} txAt={} type=S", claimIdBiz, file.header().transactionDate());
         final long claimKeyId = upsertClaimKey(claimIdBiz, file.header().transactionDate(), "S");
+        log.info("persistSingleClaim: claim_key id={} for claimId={}", claimKeyId, claimIdBiz);
 
         // resolve ref IDs (inserting into ref tables + auditing if missing)
         final Long payerRefId = (c.payerId() == null) ? null
@@ -279,7 +291,10 @@ public class PersistService {
         final Long providerRefId = (c.providerId() == null) ? null
                 : refCodeResolver.resolveProvider(c.providerId(), null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
 
+        log.info("persistSingleClaim: about to insert claim for claimId={} amounts[gross={}, patientShare={}, net={}]",
+                claimIdBiz, c.gross(), c.patientShare(), c.net());
         final long claimId = upsertClaim(claimKeyId, submissionId, c, payerRefId, providerRefId);
+        log.info("persistSingleClaim: inserted claim dbId={} for claimId={} (submissionId={})", claimId, claimIdBiz, submissionId);
 
         // Contract (optional)
         if (c.contract() != null) {
@@ -316,7 +331,7 @@ public class PersistService {
                 if (!activityHasRequired(ingestionFileId, claimIdBiz, a)) continue;
                 // resolve activity/clinician refs
                 final Long activityCodeRefId = (a.code() == null) ? null
-                        : refCodeResolver.resolveActivityCode(a.code(), null, null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
+                        : refCodeResolver.resolveActivityCode(a.code(), a.type(), null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
                 final Long clinicianRefId = (a.clinician() == null) ? null
                         : refCodeResolver.resolveClinician(a.clinician(), null, null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
 
@@ -334,12 +349,14 @@ public class PersistService {
         }
 
         // Events & Timeline (only for persisted claim)
-        long ev1 = insertClaimEvent(claimKeyId, ingestionFileId, now, (short) 1, submissionId, null);
+        long ev1 = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 1, submissionId, null);
+        log.info("persistSingleClaim: inserted submission event id={} for claimId={} ingestionFileId={}", ev1, claimIdBiz, ingestionFileId);
         projectActivitiesToClaimEventFromSubmission(ev1, c.activities());
         insertStatusTimeline(claimKeyId, (short) 1, file.header().transactionDate(), ev1);
 
         if (c.resubmission() != null) {
-            long ev2 = insertClaimEvent(claimKeyId, ingestionFileId, now, (short) 2, submissionId, null);
+            long ev2 = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 2, submissionId, null);
+            log.info("persistSingleClaim: inserted resubmission event id={} for claimId={} ingestionFileId={}", ev2, claimIdBiz, ingestionFileId);
             insertResubmission(ev2, c.resubmission());
             insertStatusTimeline(claimKeyId, (short) 2, file.header().transactionDate(), ev2);
         }
@@ -361,6 +378,22 @@ public class PersistService {
     /* ========================= REMITTANCE PATH ========================= */
 
     /**
+     * Persists a remittance file without attachments.
+     * 
+     * <p>This is a convenience method that delegates to the main persistence method
+     * with an empty list of attachments.
+     * 
+     * @param ingestionFileId the ID of the ingestion file being processed
+     * @param file the parsed remittance advice data
+     * @return counts of persisted entities
+     * @see #persistRemittance(long, RemittanceAdviceDTO, List)
+     */
+    @Transactional
+    public PersistCounts persistRemittance(long ingestionFileId, RemittanceAdviceDTO file) {
+        return persistRemittance(ingestionFileId, file, List.of());
+    }
+
+    /**
      * Persists remittance advice data and updates claim statuses.
      * 
      * <p>This method processes remittance advice files which contain payment information
@@ -372,6 +405,7 @@ public class PersistService {
      *   <li>Resolves reference data for payers, providers, and denial codes</li>
      *   <li>Calculates and updates claim statuses based on payment amounts</li>
      *   <li>Creates claim events and status timeline entries</li>
+     *   <li>Processes file attachments (if present)</li>
      * </ul>
      * 
      * <p>Status determination logic:
@@ -386,11 +420,12 @@ public class PersistService {
      * 
      * @param ingestionFileId the ID of the ingestion file being processed
      * @param file the parsed remittance advice data
+     * @param attachments optional list of file attachments associated with this remittance
      * @return PersistCounts containing the number of remittance entities persisted
      * @throws IllegalArgumentException if required parameters are null or invalid
      */
     @Transactional
-    public PersistCounts persistRemittance(long ingestionFileId, RemittanceAdviceDTO file) {
+    public PersistCounts persistRemittance(long ingestionFileId, RemittanceAdviceDTO file, List<ParseOutcome.AttachmentRecord> attachments) {
         final Long remittanceId = jdbc.queryForObject(
                 "insert into claims.remittance(ingestion_file_id) values (?) returning id",
                 Long.class, ingestionFileId
@@ -402,64 +437,25 @@ public class PersistService {
             // guard remittance-claim level (ID, IDPayer, ProviderID, PaymentReference as used)
             if (!remitClaimHasRequired(ingestionFileId, c)) {
                 skippedInvalidRemitClaim++;
+                log.warn("persistRemittance: missing required remittance fields; skipping claimId={} idPayer={} providerId={} paymentRef={}",
+                        c.id(), c.idPayer(), c.providerId(), c.paymentReference());
                 continue; // logged above
             }
 
-            final long claimKeyId = upsertClaimKey(c.id(), file.header().transactionDate(), "R");
             try {
-                // resolve denial code ref id for the claim scope (if any denial present at claim level)
-                final Long denialRefId = (c.denialCode() == null) ? null
-                        : refCodeResolver.resolveDenialCode(c.denialCode(), null, c.idPayer(), "SYSTEM", ingestionFileId, c.id())
-                        .orElse(null);
-                final Long payerRefId = (c.idPayer() == null) ? null
-                        : refCodeResolver.resolvePayer(c.idPayer(), null, "SYSTEM", ingestionFileId, c.id())
-                        .orElse(null);
-                final Long providerRefId = (c.providerId() == null) ? null
-                        : refCodeResolver.resolveProvider(c.providerId(), null, "SYSTEM", ingestionFileId, c.id())
-                        .orElse(null);
-
-                final long rcId = upsertRemittanceClaim(remittanceId, claimKeyId, c, denialRefId, payerRefId, providerRefId); // PATCH
-
-
-                if (c.activities() != null) {
-                    for (RemittanceActivityDTO a : c.activities()) {
-                        if (!remitActivityHasRequired(ingestionFileId, c.id(), a)) continue; // logged+skip
-                        upsertRemittanceActivity(rcId, a);
-                        rActs++;
-                    }
-                }
-
-                long ev = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 3, null, remittanceId);
-                projectActivitiesToClaimEventFromRemittance(ev, c.activities());
-
-                // Decide status from amounts & denials
-                var netRequested = fetchSubmissionNetRequested(claimKeyId);  // sum of submission activity.net
-                var paidAmount = fetchRemittancePaidAmount(rcId);          // sum of remit activity.payment_amount
-                boolean allDenied = areAllRemitActivitiesDenied(rcId);
-
-                short status;
-                final short SUBMITTED = 1, RESUBMITTED = 2, PAID = 3, PARTIALLY_PAID = 4, REJECTED = 5; // doc’d types
-                int cmp = nz(paidAmount).compareTo(nz(netRequested));
-                if (cmp == 0 && nz(netRequested).signum() >= 0) {
-                    status = PAID;
-                } else if (nz(paidAmount).signum() > 0 && cmp < 0) {
-                    status = PARTIALLY_PAID;
-                } else if (nz(paidAmount).signum() == 0 && allDenied) {
-                    status = REJECTED;
-                } else {
-                    status = PARTIALLY_PAID; // conservative default
-                }
-
-                insertStatusTimeline(claimKeyId, status, file.header().transactionDate(), ev);
-
-                rClaims++;
+                // Process each claim in its own transaction to prevent single failure from stopping entire file
+                log.info("persistSingleRemittanceClaim: start claimId={} idPayer={} providerId={} activities={} paymentRef={}",
+                        c.id(), c.idPayer(), c.providerId(), (c.activities() == null ? 0 : c.activities().size()), c.paymentReference());
+                PersistCounts claimCounts = persistSingleRemittanceClaim(ingestionFileId, remittanceId, c, attachments, file);
+                rClaims += claimCounts.remitClaims();
+                rActs += claimCounts.remitActs();
             } catch (Exception claimEx) {
-                // NEW: contain the blast radius to this claim
+                // Log error but continue with next claim (partial success)
                 errors.claimError(ingestionFileId, "PERSIST", c.id(),
                         "CLAIM_PERSIST_FAIL", claimEx.getMessage(), false);
-                // optionally log debug stack:
-                log.info(" Remittance claim persist failed claimId={} : ", c.id(), claimEx);
-                // continue with next claim
+                log.warn("persistRemittance: failure claimId={} : {}", c.id(), claimEx.getMessage());
+                log.info("persistRemittance: exception stack for claimId={} ", c.id(), claimEx);
+                // continue with next claim - transaction isolation prevents this from affecting other claims
             }
         }
 
@@ -469,6 +465,110 @@ public class PersistService {
         }
 
         return new PersistCounts(0, 0, 0, 0, rClaims, rActs);
+    }
+
+    /**
+     * # persistSingleRemittanceClaim - Isolated Remittance Claim Processing with Transaction Safety
+     *
+     * <p><b>Purpose:</b> Process a single remittance claim in complete isolation within its own transaction.
+     * This ensures that claim-level failures don't cascade to other claims in the same file.</p>
+     *
+     * <h3>Processing Scope</h3>
+     * <p>Handles all aspects of a single remittance claim:</p>
+     * <ul>
+     *   <li><b>Claim Key:</b> Creates or retrieves canonical claim identifier</li>
+     *   <li><b>Remittance Claim Record:</b> Persists remittance claim data with reference IDs</li>
+     *   <li><b>Remittance Activities:</b> Individual activity payment tracking</li>
+     *   <li><b>Event Tracking:</b> Creates remittance events and status timeline</li>
+     *   <li><b>Status Calculation:</b> Determines claim status based on payments and denials</li>
+     *   <li><b>Attachments:</b> Links file attachments to the claim</li>
+     * </ul>
+     *
+     * <h3>Transaction Strategy</h3>
+     * <ul>
+     *   <li><b>Isolation Level:</b> {@code REQUIRES_NEW} - Independent transaction</li>
+     *   <li><b>Failure Containment:</b> Claim failure doesn't affect other claims</li>
+     *   <li><b>Success Guarantee:</b> If this method returns successfully, all claim data is committed</li>
+     *   <li><b>Error Recovery:</b> Failed claims are logged but don't prevent other claims from processing</li>
+     * </ul>
+     *
+     * @param ingestionFileId the unique ID of the ingestion file being processed
+     * @param remittanceId    the database ID of the parent remittance record
+     * @param c               the remittance claim DTO containing all claim data to persist
+     * @param attachments     list of all attachments for the remittance (filtered by claim ID)
+     * @param file            the complete remittance file for header information
+     * @return PersistCounts containing counts of entities persisted for this claim
+     * @throws RuntimeException if claim processing fails (logged and handled by caller)
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public PersistCounts persistSingleRemittanceClaim(long ingestionFileId, long remittanceId, RemittanceClaimDTO c,
+                                                      List<ParseOutcome.AttachmentRecord> attachments, RemittanceAdviceDTO file) {
+        final String claimIdBiz = c.id();
+        final long claimKeyId = upsertClaimKey(c.id(), file.header().transactionDate(), "R");
+        
+        // resolve denial code ref id for the claim scope (if any denial present at claim level)
+        // final Long denialRefId = (c.denialCode() == null) ? null
+        //         : refCodeResolver.resolveDenialCode(c.denialCode(), null, c.idPayer(), "SYSTEM", ingestionFileId, c.id())
+        //         .orElse(null);
+        final Long payerRefId = (c.idPayer() == null) ? null
+                : refCodeResolver.resolvePayer(c.idPayer(), null, "SYSTEM", ingestionFileId, c.id())
+                .orElse(null);
+        final Long providerRefId = (c.providerId() == null) ? null
+                : refCodeResolver.resolveProvider(c.providerId(), null, "SYSTEM", ingestionFileId, c.id())
+                .orElse(null);
+
+        final long rcId = upsertRemittanceClaim(remittanceId, claimKeyId, c, null, payerRefId, providerRefId);
+
+        int rActs = 0;
+        if (c.activities() != null) {
+            for (RemittanceActivityDTO a : c.activities()) {
+                if (!remitActivityHasRequired(ingestionFileId, c.id(), a)) continue; // logged+skip
+                // resolve activity code ref id
+                final Long activityCodeRefId = (a.code() == null) ? null
+                        : refCodeResolver.resolveActivityCode(a.code(), a.type(), null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
+                final Long denialRefId = (a.denialCode() == null) ? null
+                        : refCodeResolver.resolveDenialCode(a.denialCode(), null, c.idPayer(), "SYSTEM", ingestionFileId, c.id()).orElse(null);
+                final Long clinicianRefId = (a.clinician() == null) ? null
+                        : refCodeResolver.resolveClinician(a.clinician(), null, null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
+                upsertRemittanceActivity(rcId, a, activityCodeRefId, denialRefId, clinicianRefId);
+                rActs++;
+            }
+        }
+
+        long ev = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 3, null, remittanceId);
+        projectActivitiesToClaimEventFromRemittance(ev, c.activities());
+
+        // Decide status from amounts & denials
+        var netRequested = fetchSubmissionNetRequested(claimKeyId);  // sum of submission activity.net
+        var paidAmount = fetchRemittancePaidAmount(rcId);          // sum of remit activity.payment_amount
+        boolean allDenied = areAllRemitActivitiesDenied(rcId);
+
+        short status;
+        final short SUBMITTED = 1, RESUBMITTED = 2, PAID = 3, PARTIALLY_PAID = 4, REJECTED = 5; // doc'd types
+        int cmp = nz(paidAmount).compareTo(nz(netRequested));
+        if (cmp == 0 && nz(netRequested).signum() >= 0) {
+            status = PAID;
+        } else if (nz(paidAmount).signum() > 0 && cmp < 0) {
+            status = PARTIALLY_PAID;
+        } else if (nz(paidAmount).signum() == 0 && allDenied) {
+            status = REJECTED;
+        } else {
+            status = PARTIALLY_PAID; // conservative default
+        }
+
+        insertStatusTimeline(claimKeyId, status, file.header().transactionDate(), ev);
+
+        // Attachments (Remittance)
+        if (attachments != null && !attachments.isEmpty()) {
+            for (ParseOutcome.AttachmentRecord ar : attachments) {
+                if (!Objects.equals(ar.claimId(), c.id())) continue;
+                upsertClaimAttachment(claimKeyId, ev, ingestionFileId, ar);
+            }
+        }
+
+        log.info("Successfully persisted remittance claim: {} with {} activities", claimIdBiz, rActs);
+
+        return new PersistCounts(0, 0, 0, 0, 1, rActs);
     }
 
     /**
@@ -633,8 +733,7 @@ public class PersistService {
                     WITH ins AS (
                       INSERT INTO claims.claim_key (claim_id, created_at, updated_at)
                       VALUES (?, ?, ?)
-                      ON CONFLICT (claim_id) DO UPDATE SET
-                      updated_at = COALESCE(?, updated_at)
+                      ON CONFLICT (claim_id) DO NOTHING
                       RETURNING id
                     )
                     SELECT id FROM ins
@@ -644,7 +743,13 @@ public class PersistService {
                     """;
 
             // Returns the inserted id, or the existing id if conflict occurred
-            return jdbc.queryForObject(sql, Long.class, claimIdBiz, transactionCreateTime, transactionUpdateTime, transactionUpdateTime, claimIdBiz);
+            Long claimKeyId = jdbc.queryForObject(sql, Long.class, claimIdBiz, transactionCreateTime, transactionUpdateTime, claimIdBiz);
+
+            // If we have a transaction update time (e.g., remittance), apply a follow-up UPDATE safely
+            if (transactionUpdateTime != null && claimKeyId != null) {
+                jdbc.update("update claims.claim_key set updated_at = ? where id = ?", transactionUpdateTime, claimKeyId);
+            }
+            return claimKeyId;
 
         } catch (Exception e) {
             // Handle the case where multiple claim_ids exist in the database (data integrity issue)
@@ -676,7 +781,7 @@ public class PersistService {
                 e.getMessage().contains("unique constraint") ||
                 e.getMessage().contains("violates unique constraint"))) {
 
-                log.debug("Race condition detected for claim_id: {}, attempting fallback query", claimIdBiz);
+                log.info("Race condition detected for claim_id: {}, attempting fallback query", claimIdBiz);
 
                 try {
                     // Fallback: Query for existing record (race condition with another thread)
@@ -685,7 +790,7 @@ public class PersistService {
                             Long.class, claimIdBiz);
 
                     if (existingId != null) {
-                        log.debug("Using existing claim_key ID: {} for claim_id: {} (race condition resolved)", existingId, claimIdBiz);
+                        log.info("Using existing claim_key ID: {} for claim_id: {} (race condition resolved)", existingId, claimIdBiz);
                         return existingId;
                     }
                 } catch (Exception fallbackEx) {
@@ -849,7 +954,20 @@ public class PersistService {
         for (RemittanceActivityDTO a : acts) {
             // First, get the remittance_activity_id_ref from the actual remittance activity record
             Long remittanceActivityIdRef = jdbc.queryForObject(
-                "SELECT id FROM claims.remittance_activity WHERE activity_id = ? AND remittance_claim_id = (SELECT rc.id FROM claims.remittance_claim rc JOIN claims.claim_event ce ON rc.claim_key_id = ce.claim_key_id WHERE ce.id = ?)",
+                """
+                SELECT ra.id
+                  FROM claims.remittance_activity ra
+                 WHERE ra.activity_id = ?
+                   AND ra.remittance_claim_id = (
+                        SELECT rc.id
+                          FROM claims.remittance_claim rc
+                          JOIN claims.claim_event ce
+                            ON rc.claim_key_id = ce.claim_key_id
+                           AND rc.remittance_id = ce.remittance_id
+                         WHERE ce.id = ?
+                         LIMIT 1
+                   )
+                """,
                 Long.class, a.id(), eventId
             );
             
@@ -889,13 +1007,12 @@ public class PersistService {
     private long upsertRemittanceClaim(long remittanceId, long claimKeyId, RemittanceClaimDTO c, Long denialCodeRefId, Long payerCodeRefId, Long providerCodeRefId) { // PATCH
         jdbc.update("""
                             insert into claims.remittance_claim(
-                              remittance_id, claim_key_id, id_payer, provider_id, denial_code, payment_reference, date_settlement, facility_id,
-                              denial_code_ref_id,payer_ref_id,provider_ref_id                                               -- PATCH
-                            ) values (?,?,?,?,?,?,?,?,?,?,?)
+                              remittance_id, claim_key_id, id_payer, provider_id, comments, payment_reference, date_settlement, facility_id,
+                              payer_ref_id, provider_ref_id                                               
+                            ) values (?,?,?,?,?,?,?,?,?,?)
                             on conflict (remittance_id, claim_key_id) do nothing
-                        """, remittanceId, claimKeyId, c.idPayer(), c.providerId(), c.denialCode(),
-                c.paymentReference(), c.dateSettlement(), c.facilityId(),
-                denialCodeRefId, payerCodeRefId, providerCodeRefId
+                        """, remittanceId, claimKeyId, c.idPayer(), c.providerId(), c.comments(),
+                c.paymentReference(), c.dateSettlement(), c.facilityId(), payerCodeRefId, providerCodeRefId
         );
         return jdbc.queryForObject(
                 "select id from claims.remittance_claim where remittance_id=? and claim_key_id=?",
@@ -906,15 +1023,15 @@ public class PersistService {
     /**
      * NEW: Upsert remittance activity row, idempotent on (remittance_claim_id, activity_id).
      */
-    private void upsertRemittanceActivity(long remittanceClaimId, RemittanceActivityDTO a) {
+    private void upsertRemittanceActivity(long remittanceClaimId, RemittanceActivityDTO a, Long activityCodeRefId, Long denialCodeRefId, Long clinicianRefId) {
         jdbc.update("""
                             insert into claims.remittance_activity(
                               remittance_claim_id, activity_id, start_at, type, code, quantity, net, list_price,
-                              clinician, prior_authorization_id, gross, patient_share, payment_amount, denial_code
-                            ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                              clinician, prior_authorization_id, gross, patient_share, payment_amount, denial_code, activity_code_ref_id, denial_code_ref_id, clinician_ref_id
+                            ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             on conflict (remittance_claim_id, activity_id) do nothing
                         """, remittanceClaimId, a.id(), a.start(), a.type(), a.code(), a.quantity(), a.net(), a.listPrice(),
-                a.clinician(), a.priorAuthorizationId(), a.gross(), a.patientShare(), a.paymentAmount(), a.denialCode());
+                a.clinician(), a.priorAuthorizationId(), a.gross(), a.patientShare(), a.paymentAmount(), a.denialCode(), activityCodeRefId, denialCodeRefId, clinicianRefId);
     }
 
     /**

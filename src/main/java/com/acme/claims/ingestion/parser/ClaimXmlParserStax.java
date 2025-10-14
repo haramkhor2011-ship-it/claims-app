@@ -434,6 +434,7 @@ public class ClaimXmlParserStax implements StageParser {
 
     /** Aggregates a parsed claim and any claim-level attachments discovered. */
     private record ParsedSubmissionClaim(SubmissionClaimDTO claim, List<ParseOutcome.AttachmentRecord> attachments) {}
+    private record ParsedRemittanceClaim(RemittanceClaimDTO claim, List<ParseOutcome.AttachmentRecord> attachments) {}
 
     /**
      * Parse a single &lt;Claim&gt; in Submission, including:
@@ -508,30 +509,9 @@ public class ClaimXmlParserStax implements StageParser {
 
                     // ----- NON-SCHEMA Attachment (Submission only)
                     case "Attachment" -> {
-                        String b64 = nn(readElementText(r));
-                        if (isBlank(b64)) {
-                            addProblem(problems, fileId, r, ParseProblem.Severity.WARNING,
-                                    "PARSE", "Attachment", id, "ATTACH_EMPTY", "Attachment element is empty; skipping");
-                        } else {
-                            try {
-                                byte[] bytes = java.util.Base64.getMimeDecoder().decode(b64);
-                                if (bytes.length == 0) {
-                                    addProblem(problems, fileId, r, ParseProblem.Severity.WARNING,
-                                            "PARSE", "Attachment", id, "ATTACH_EMPTY", "Attachment decoded to 0 bytes; skipping");
-                                } else if (bytes.length > maxAttachmentBytes) {
-                                    // persistence will skip binary.
-                                    addProblem(problems, fileId, r, ParseProblem.Severity.ERROR,
-                                            "VALIDATE", "Attachment", id, "ATTACH_TOO_LARGE", "Attachment exceeds max allowed bytes: " + maxAttachmentBytes);
-                                } else {
-                                    byte[] sha = MessageDigest.getInstance("SHA-256").digest(bytes);
-                                    attachments.add(new ParseOutcome.AttachmentRecord(
-                                            id, null, null, null, bytes, sha, bytes.length
-                                    ));
-                                }
-                            } catch (IllegalArgumentException ex) {
-                                addProblem(problems, fileId, r, ParseProblem.Severity.WARNING,
-                                        "PARSE", "Attachment", id, "ATTACH_INVALID_BASE64", "Invalid base64: " + ex.getMessage());
-                            }
+                        ParseOutcome.AttachmentRecord attachment = readAttachment(r, problems, fileId, "Claim", id);
+                        if (attachment != null) {
+                            attachments.add(attachment);
                         }
                     }
                 }
@@ -730,6 +710,7 @@ public class ClaimXmlParserStax implements StageParser {
         try {
             RemittanceHeaderDTO header = null;
             List<RemittanceClaimDTO> claims = new ArrayList<>();
+            List<ParseOutcome.AttachmentRecord> attachmentsOut = new ArrayList<>();
             int claimCount = 0;
 
             while (r.hasNext()) {
@@ -740,7 +721,9 @@ public class ClaimXmlParserStax implements StageParser {
                         case "Header" -> header = readRemittanceHeader(r, problems, fileId);
                         case "Claim" -> {
                             claimCount++;
-                            claims.add(readRemittanceClaim(r, problems, fileId));
+                            var parsed = readRemittanceClaim(r, problems, fileId); // consumes until </Claim>
+                            claims.add(parsed.claim());
+                            if (!parsed.attachments().isEmpty()) attachmentsOut.addAll(parsed.attachments());
                         }
                     }
                 }
@@ -766,12 +749,12 @@ public class ClaimXmlParserStax implements StageParser {
      * Parse a single &lt;Claim&gt; inside Remittance. Required: ID, IDPayer, PaymentReference.
      * Encounter/FacilityID is read if present (stored on remittance_claim table per DDL). :contentReference[oaicite:2]{index=2}
      */
-    private RemittanceClaimDTO readRemittanceClaim(XMLStreamReader r, List<ParseProblem> problems, long fileId) throws Exception {
-        String id = null, idPayer = null, providerId = null, denialCode = null, paymentRef = null, facilityId = null;
+    private ParsedRemittanceClaim readRemittanceClaim(XMLStreamReader r, List<ParseProblem> problems, long fileId) throws Exception {
+        String id = null, idPayer = null, providerId = null, denialCode = null, paymentRef = null, facilityId = null, comments = null;
         OffsetDateTime dateSettlement = null;
         List<RemittanceActivityDTO> acts = new ArrayList<>();
         Set<String> activityIds = new HashSet<>();
-
+        List<ParseOutcome.AttachmentRecord> attachments = new ArrayList<>();
         while (r.hasNext()) {
             int ev = r.next();
             if (ev == XMLStreamConstants.START_ELEMENT) {
@@ -787,9 +770,14 @@ public class ClaimXmlParserStax implements StageParser {
                         facilityId = nn(readChild(r, "FacilityID"));
                         skipToEnd(r, "Encounter");
                     }
+                    case "Comments" -> comments = nn(readElementText(r));
                     case "Activity" -> {
                         RemittanceActivityDTO a = readRemittanceActivity(r, problems, fileId, activityIds);
                         if (a != null) acts.add(a);
+                    }
+                    case "Attachment" -> {
+                        ParseOutcome.AttachmentRecord a = readAttachment(r, problems, fileId, "Claim", id);
+                        if (a != null) attachments.add(a);
                     }
                 }
             } else if (ev == XMLStreamConstants.END_ELEMENT && "Claim".equals(r.getLocalName())) {
@@ -804,7 +792,7 @@ public class ClaimXmlParserStax implements StageParser {
         if (isBlank(paymentRef))
             addProblem(problems, fileId, null, ParseProblem.Severity.ERROR, "PARSE", "RemittanceClaim", "PaymentReference", "REQ_MISSING", "PaymentReference is required");
 
-        return new RemittanceClaimDTO(id, idPayer, providerId, denialCode, paymentRef, dateSettlement, facilityId, acts);
+        return new ParsedRemittanceClaim(new RemittanceClaimDTO(id, idPayer, providerId, denialCode, paymentRef, dateSettlement, facilityId, acts, comments), attachments);
     }
 
     /**
@@ -855,6 +843,55 @@ public class ClaimXmlParserStax implements StageParser {
         }
 
         return new RemittanceActivityDTO(id, start, type, code, qty, net, list, clinician, priorAuth, gross, patientShare, pay, denialCode);
+    }
+
+    /**
+     * Common method to parse attachment elements from XML.
+     * Used by both submission and remittance parsing flows.
+     *
+     * @param r XMLStreamReader positioned at the Attachment element
+     * @param problems List to collect parsing problems
+     * @param fileId File identifier for problem reporting
+     * @param context Context for error reporting (e.g., "Claim", "Activity")
+     * @param claimId Claim ID for attachment association
+     * @return AttachmentRecord if successfully parsed, null otherwise
+     */
+    private ParseOutcome.AttachmentRecord readAttachment(XMLStreamReader r, List<ParseProblem> problems, long fileId, String context, String claimId) throws Exception {
+        String b64 = nn(readElementText(r));
+        if (isBlank(b64)) {
+            addProblem(problems, fileId, r, ParseProblem.Severity.WARNING,
+                    "PARSE", "Attachment", claimId, "ATTACH_EMPTY", "Attachment element is empty; skipping");
+            return null;
+        } else {
+            try {
+                byte[] bytes = java.util.Base64.getMimeDecoder().decode(b64);
+                if (bytes.length == 0) {
+                    addProblem(problems, fileId, r, ParseProblem.Severity.WARNING,
+                            "PARSE", "Attachment", claimId, "ATTACH_EMPTY", "Attachment decoded to 0 bytes; skipping");
+                    return null;
+                } else if (bytes.length > maxAttachmentBytes) {
+                    // persistence will skip binary.
+                    addProblem(problems, fileId, r, ParseProblem.Severity.ERROR,
+                            "VALIDATE", "Attachment", claimId, "ATTACH_TOO_LARGE", "Attachment exceeds max allowed bytes: " + maxAttachmentBytes);
+                    return null;
+                } else {
+                    try {
+                        byte[] sha = MessageDigest.getInstance("SHA-256").digest(bytes);
+                        return new ParseOutcome.AttachmentRecord(
+                                claimId, null, null, null, bytes, sha, bytes.length
+                        );
+                    } catch (java.security.NoSuchAlgorithmException ex) {
+                        addProblem(problems, fileId, r, ParseProblem.Severity.ERROR,
+                                "PARSE", "Attachment", claimId, "ATTACH_SHA_ERROR", "SHA-256 algorithm not available: " + ex.getMessage());
+                        return null;
+                    }
+                }
+            } catch (IllegalArgumentException ex) {
+                addProblem(problems, fileId, r, ParseProblem.Severity.WARNING,
+                        "PARSE", "Attachment", claimId, "ATTACH_INVALID_BASE64", "Invalid base64: " + ex.getMessage());
+                return null;
+            }
+        }
     }
 
     /**

@@ -62,6 +62,15 @@ DROP INDEX IF EXISTS claims.idx_rejected_claims_base_ageing_days;
 -- ==========================================================================================================
 
 CREATE OR REPLACE VIEW claims.v_rejected_claims_base AS
+WITH status_timeline AS (
+  -- Replace LATERAL with window function for better performance
+  SELECT 
+    claim_key_id,
+    status,
+    status_time,
+    LAG(status_time) OVER (PARTITION BY claim_key_id ORDER BY status_time) as prev_status_time
+  FROM claims.claim_status_timeline
+)
 SELECT 
     -- Core identifiers
     ck.id AS claim_key_id,
@@ -438,87 +447,89 @@ CREATE OR REPLACE FUNCTION claims.get_rejected_claims_summary(
 ) LANGUAGE plpgsql AS $$
 BEGIN
   RETURN QUERY
+  -- Use materialized view for sub-second performance
   SELECT
-    rcta.facility_id,
-    rcta.facility_name,
-    rcta.claim_year,
-    rcta.claim_month_name,
-    rcta.payer_id,
-    rcta.payer_name,
-    rcta.total_claim,
-    rcta.claim_amt,
-    rcta.remitted_claim,
-    rcta.remitted_amt,
-    rcta.rejected_claim,
-    rcta.rejected_amt,
-    rcta.pending_remittance,
-    rcta.pending_remittance_amt,
-    rcta.rejected_percentage_remittance,
-    rcta.rejected_percentage_submission,
-    rcta.claim_id,
-    rcta.member_id,
-    rcta.emirates_id_number,
-    rcta.claim_amt_detail,
-    rcta.remitted_amt_detail,
-    rcta.rejected_amt_detail,
-    rcta.rejection_type,
-    rcta.activity_start_date,
-    rcta.activity_code,
-    rcta.activity_denial_code,
-    rcta.denial_type,
-    rcta.clinician_name,
-    rcta.ageing_days,
-    rcta.current_status,
-    rcta.resubmission_type,
-    rcta.submission_file_id,
-    rcta.remittance_file_id
-  FROM claims.v_rejected_claims_summary rcta
+    mv.facility_id,
+    mv.facility_name,
+    mv.report_year as claim_year,
+    TO_CHAR(mv.report_month, 'Month') as claim_month_name,
+    mv.payer_id,
+    mv.payer_name,
+    1 as total_claim,
+    mv.activity_net_amount as claim_amt,
+    CASE WHEN mv.activity_payment_amount > 0 THEN 1 ELSE 0 END as remitted_claim,
+    mv.activity_payment_amount as remitted_amt,
+    1 as rejected_claim,
+    mv.rejected_amount as rejected_amt,
+    0 as pending_remittance,
+    0.0 as pending_remittance_amt,
+    CASE WHEN mv.activity_payment_amount > 0 THEN 
+      ROUND((mv.rejected_amount / (mv.activity_payment_amount + mv.rejected_amount)) * 100, 2) 
+    ELSE 0 END as rejected_percentage_remittance,
+    CASE WHEN mv.activity_net_amount > 0 THEN 
+      ROUND((mv.rejected_amount / mv.activity_net_amount) * 100, 2) 
+    ELSE 0 END as rejected_percentage_submission,
+    mv.claim_id,
+    mv.member_id,
+    mv.emirates_id_number,
+    mv.activity_net_amount as claim_amt_detail,
+    mv.activity_payment_amount as remitted_amt_detail,
+    mv.rejected_amount as rejected_amt_detail,
+    mv.rejection_type,
+    mv.activity_start_date,
+    mv.activity_code,
+    mv.activity_denial_code,
+    mv.denial_type,
+    mv.clinician_name,
+    mv.aging_days as ageing_days,
+    'N/A' as current_status,
+    'N/A' as resubmission_type,
+    mv.submission_id as submission_file_id,
+    mv.remittance_claim_id as remittance_file_id
+  FROM claims.mv_rejected_claims_summary mv
   WHERE 
-    (p_facility_codes IS NULL OR rcta.facility_id = ANY(p_facility_codes))
-    AND (p_payer_codes IS NULL OR rcta.payer_id = ANY(p_payer_codes))
-    AND (p_receiver_ids IS NULL OR rcta.payer_name = ANY(p_receiver_ids))
-    AND (p_date_from IS NULL OR rcta.activity_start_date >= p_date_from)
-    AND (p_date_to IS NULL OR rcta.activity_start_date <= p_date_to)
-    AND (p_year IS NULL OR rcta.claim_year = p_year)
-    AND (p_month IS NULL OR EXTRACT(MONTH FROM rcta.activity_start_date) = p_month)
+    (p_facility_codes IS NULL OR mv.facility_id = ANY(p_facility_codes))
+    AND (p_payer_codes IS NULL OR mv.payer_id = ANY(p_payer_codes))
+    AND (p_receiver_ids IS NULL OR mv.payer_name = ANY(p_receiver_ids))
+    AND (p_date_from IS NULL OR mv.activity_start_date >= p_date_from)
+    AND (p_date_to IS NULL OR mv.activity_start_date <= p_date_to)
+    AND (p_year IS NULL OR mv.report_year = p_year)
+    AND (p_month IS NULL OR mv.report_month_num = p_month)
     AND (
       p_facility_ref_ids IS NULL
-      OR EXISTS (
-        SELECT 1 FROM claims.v_rejected_claims_base b
-        WHERE b.claim_id = rcta.claim_id AND b.facility_ref_id = ANY(p_facility_ref_ids)
-      )
+      OR mv.facility_ref_id = ANY(p_facility_ref_ids)
     )
     AND (
       p_payer_ref_ids IS NULL
-      OR EXISTS (
-        SELECT 1 FROM claims.v_rejected_claims_base b
-        WHERE b.claim_id = rcta.claim_id AND b.payer_ref_id = ANY(p_payer_ref_ids)
-      )
+      OR mv.payer_ref_id = ANY(p_payer_ref_ids)
     )
     AND (
       p_clinician_ref_ids IS NULL
-      OR EXISTS (
-        SELECT 1 FROM claims.v_rejected_claims_base b
-        WHERE b.claim_id = rcta.claim_id AND b.clinician_ref_id = ANY(p_clinician_ref_ids)
-      )
+      OR mv.clinician_ref_id = ANY(p_clinician_ref_ids)
     )
   ORDER BY
     CASE WHEN p_order_direction = 'DESC' THEN
       CASE p_order_by
-        WHEN 'facility_name' THEN rcta.facility_name
-        WHEN 'claim_year' THEN rcta.claim_year::TEXT
-        WHEN 'rejected_amt' THEN rcta.rejected_amt::TEXT
-        WHEN 'rejected_percentage_remittance' THEN rcta.rejected_percentage_remittance::TEXT
-        ELSE rcta.facility_name
+        WHEN 'facility_name' THEN mv.facility_name
+        WHEN 'claim_year' THEN mv.report_year::TEXT
+        WHEN 'rejected_amt' THEN mv.rejected_amount::TEXT
+        WHEN 'rejected_percentage_remittance' THEN 
+          CASE WHEN mv.activity_payment_amount > 0 THEN 
+            ROUND((mv.rejected_amount / (mv.activity_payment_amount + mv.rejected_amount)) * 100, 2)::TEXT
+          ELSE '0' END
+        ELSE mv.facility_name
       END
     END DESC,
     CASE WHEN p_order_direction = 'ASC' OR p_order_direction IS NULL THEN
       CASE p_order_by
-        WHEN 'facility_name' THEN rcta.facility_name
-        WHEN 'claim_year' THEN rcta.claim_year::TEXT
-        WHEN 'rejected_amt' THEN rcta.rejected_amt::TEXT
-        WHEN 'rejected_percentage_remittance' THEN rcta.rejected_percentage_remittance::TEXT
-        ELSE rcta.facility_name
+        WHEN 'facility_name' THEN mv.facility_name
+        WHEN 'claim_year' THEN mv.report_year::TEXT
+        WHEN 'rejected_amt' THEN mv.rejected_amount::TEXT
+        WHEN 'rejected_percentage_remittance' THEN 
+          CASE WHEN mv.activity_payment_amount > 0 THEN 
+            ROUND((mv.rejected_amount / (mv.activity_payment_amount + mv.rejected_amount)) * 100, 2)::TEXT
+          ELSE '0' END
+        ELSE mv.facility_name
       END
     END ASC
   LIMIT p_limit

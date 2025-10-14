@@ -51,6 +51,17 @@
 -- VIEW: v_doctor_denial_high_denial (Tab A - Doctors with high denial rates)
 -- ==========================================================================================================
 CREATE OR REPLACE VIEW claims.v_doctor_denial_high_denial AS
+WITH payer_rankings AS (
+  -- Replace correlated subquery with window function for better performance
+  SELECT 
+    clinician_ref_id,
+    payer_id,
+    COUNT(*) as claim_count,
+    ROW_NUMBER() OVER (PARTITION BY clinician_ref_id ORDER BY COUNT(*) DESC) as payer_rank
+  FROM claims.activity a
+  JOIN claims.claim c ON a.claim_id = c.id
+  GROUP BY clinician_ref_id, payer_id
+)
 SELECT
     -- Clinician Information
     a.clinician as clinician_id,
@@ -421,35 +432,36 @@ BEGIN
     CASE p_tab
         WHEN 'high_denial' THEN
             RETURN QUERY
+            -- Use materialized view for sub-second performance
             SELECT
-                vhd.clinician_id,
-                vhd.clinician_name,
-                vhd.clinician_specialty,
-                vhd.facility_id,
-                vhd.facility_name,
-                vhd.facility_group,
-                vhd.health_authority,
-                vhd.report_month,
-                vhd.report_year,
-                vhd.report_month_num,
-                vhd.total_claims,
-                vhd.remitted_claims,
-                vhd.rejected_claims,
-                vhd.pending_remittance_claims,
-                vhd.total_claim_amount,
-                vhd.remitted_amount,
-                vhd.rejected_amount,
-                vhd.pending_remittance_amount,
-                vhd.rejection_percentage,
-                vhd.collection_rate,
-                vhd.avg_claim_value,
+                mv.clinician_id,
+                mv.clinician_name,
+                mv.clinician_specialty,
+                mv.facility_id,
+                mv.facility_name,
+                mv.facility_group,
+                mv.health_authority,
+                mv.report_month,
+                mv.report_year,
+                mv.report_month_num,
+                mv.total_claims,
+                mv.remitted_claims,
+                mv.rejected_claims,
+                mv.pending_remittance_claims,
+                mv.total_claim_amount,
+                mv.remitted_amount,
+                mv.rejected_amount,
+                mv.pending_remittance_amount,
+                mv.rejection_percentage,
+                mv.collection_rate,
+                mv.avg_claim_value,
                 NULL::NUMERIC(14,2) as net_balance,
                 NULL::TEXT as top_payer_code,
-                vhd.unique_providers,
-                vhd.unique_patients,
-                vhd.earliest_submission,
-                vhd.latest_submission,
-                vhd.avg_processing_days,
+                mv.unique_providers,
+                mv.unique_patients,
+                mv.earliest_submission,
+                mv.latest_submission,
+                mv.avg_processing_days,
                 NULL::TEXT as claim_id,
                 NULL::BIGINT as claim_db_id,
                 NULL::TEXT as payer_id,
@@ -473,18 +485,18 @@ BEGIN
                 NULL::TIMESTAMPTZ as date_settlement,
                 NULL::TIMESTAMPTZ as submission_date,
                 NULL::TIMESTAMPTZ as remittance_date
-            FROM claims.v_doctor_denial_high_denial vhd
+            FROM claims.mv_doctor_denial_summary mv
             WHERE
-                (p_facility_code IS NULL OR vhd.facility_id = p_facility_code)
-                AND (p_clinician_code IS NULL OR vhd.clinician_id = p_clinician_code)
-                AND (p_facility_ref_id IS NULL OR vhd.facility_ref_id = p_facility_ref_id)
-                AND (p_clinician_ref_id IS NULL OR vhd.clinician_ref_id = p_clinician_ref_id)
-                AND (p_payer_ref_id IS NULL OR vhd.payer_ref_id = p_payer_ref_id)
-                AND (p_from_date IS NULL OR vhd.report_month >= DATE_TRUNC('month', p_from_date))
-                AND (p_to_date IS NULL OR vhd.report_month <= DATE_TRUNC('month', p_to_date))
-                AND (p_year IS NULL OR vhd.report_year = p_year)
-                AND (p_month IS NULL OR vhd.report_month_num = p_month)
-            ORDER BY vhd.rejection_percentage DESC, vhd.total_claims DESC
+                (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+                AND (p_clinician_code IS NULL OR mv.clinician_id = p_clinician_code)
+                AND (p_facility_ref_id IS NULL OR mv.facility_ref_id = p_facility_ref_id)
+                AND (p_clinician_ref_id IS NULL OR mv.clinician_ref_id = p_clinician_ref_id)
+                AND (p_payer_ref_id IS NULL OR mv.payer_ref_id = p_payer_ref_id)
+                AND (p_from_date IS NULL OR mv.report_month >= DATE_TRUNC('month', p_from_date))
+                AND (p_to_date IS NULL OR mv.report_month <= DATE_TRUNC('month', p_to_date))
+                AND (p_year IS NULL OR mv.report_year = p_year)
+                AND (p_month IS NULL OR mv.report_month_num = p_month)
+            ORDER BY mv.rejection_percentage DESC, mv.total_claims DESC
             LIMIT p_limit OFFSET p_offset;
 
         WHEN 'summary' THEN

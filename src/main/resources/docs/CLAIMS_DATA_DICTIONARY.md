@@ -13,11 +13,11 @@ Legend: PK=primary key, FK=foreign key, TX=transactional timestamp, SSOT=single 
   - root_type: 1=Submission, 2=Remittance; determines parse path.
   - sender_id: Header sender; used for ops filtering.
   - receiver_id: Header receiver; used for ops filtering.
-  - transaction_date (TX): Business transaction time for the file.
+  - transaction_date (TX): **Business transaction time from XML header** - Single Source of Truth for all tx_at columns.
   - record_count_declared: Header claim count expected in the file.
   - disposition_flag: Header disposition (informational).
   - xml_bytes (SSOT): Raw XML persisted for audit/replay.
-  - created_at, updated_at: Audit timestamps.
+  - created_at, updated_at: **Audit timestamps** - When file was processed by system.
 
 - claims.ingestion_error
   - id (PK): Unique error record.
@@ -36,19 +36,20 @@ Legend: PK=primary key, FK=foreign key, TX=transactional timestamp, SSOT=single 
 - claims.claim_key
   - id (PK): Canonical claim spine; links submission and remittance.
   - claim_id: Business Claim.ID from XML.
-  - created_at, updated_at: Audit timestamps.
+  - created_at: **Business transaction time from XML header** (populated via PersistService.upsertClaimKey).
+  - updated_at: **Business transaction time from XML header** (populated via PersistService.upsertClaimKey).
 
 - claims.submission
   - id (PK): One submission row per ingested submission file.
   - ingestion_file_id (FK): Source file for this group.
-  - tx_at (TX): Derived from file transaction_date.
-  - created_at, updated_at: Audit timestamps.
+  - tx_at (TX): **Business transaction time from XML header** (via trigger: set_submission_tx_at).
+  - created_at, updated_at: **Audit timestamps** - When submission was processed by system.
 
 - claims.remittance
   - id (PK): One remittance row per ingested remittance file.
   - ingestion_file_id (FK): Source file for this group.
-  - tx_at (TX): Derived from file transaction_date.
-  - created_at, updated_at: Audit timestamps.
+  - tx_at (TX): **Business transaction time from XML header** (via trigger: set_remittance_tx_at).
+  - created_at, updated_at: **Audit timestamps** - When remittance was processed by system.
 
 ### Submission graph (per Claim.ID)
 
@@ -65,8 +66,8 @@ Legend: PK=primary key, FK=foreign key, TX=transactional timestamp, SSOT=single 
   - comments: Free-text claim comments if present.
   - payer_ref_id (FK → claims_ref.payer.id): Resolved payer master.
   - provider_ref_id (FK → claims_ref.provider.id): Resolved provider master.
-  - tx_at (TX): Derived from parent submission.tx_at.
-  - created_at, updated_at: Audit timestamps.
+  - tx_at (TX): **Business transaction time from XML header** (via trigger: set_claim_tx_at).
+  - created_at, updated_at: **Audit timestamps** - When claim was processed by system.
 
 - claims.encounter
   - id (PK): Encounter record for a submission claim.
@@ -203,9 +204,9 @@ Legend: PK=primary key, FK=foreign key, TX=transactional timestamp, SSOT=single 
   - id (PK): Status timeline entry.
   - claim_key_id (FK → claim_key.id): Which claim.
   - status: 1=SUBMITTED, 2=RESUBMITTED, 3=PAID, 4=PARTIALLY_PAID, 5=REJECTED.
-  - status_time: Business time for status transition.
+  - status_time: **Business transaction time from XML header** (populated via PersistService.insertStatusTimeline).
   - claim_event_id (FK): Event producing this status.
-  - created_at: Audit timestamp.
+  - created_at: **Audit timestamp** - When status timeline entry was created by system.
 
 ### Reference data (keys used by reports)
 
@@ -284,12 +285,53 @@ Legend: PK=primary key, FK=foreign key, TX=transactional timestamp, SSOT=single 
   - Diagnosis code: `diagnosis.diagnosis_code_ref_id = claims_ref.diagnosis_code.id` (fallback: `diagnosis.code`)
   - Denial code (remittance): `remittance_claim.denial_code_ref_id = claims_ref.denial_code.id` (fallback: `remittance_claim.denial_code`)
 
+### Transaction Date Handling (TX vs Audit Timestamps)
+
+#### **Business Transaction Time (TX) - From XML Headers**
+**Source**: `file.header().transactionDate()` from parsed XML files
+**Storage**: `claims.ingestion_file.transaction_date` (Single Source of Truth)
+**Purpose**: Represents when the business transaction actually occurred
+
+**Tables with TX timestamps**:
+- `claims.submission.tx_at` ← `ingestion_file.transaction_date` (via trigger)
+- `claims.remittance.tx_at` ← `ingestion_file.transaction_date` (via trigger)  
+- `claims.claim.tx_at` ← `submission.tx_at` (via trigger)
+- `claims.claim_key.created_at/updated_at` ← `file.header().transactionDate()` (via PersistService)
+- `claims.claim_status_timeline.status_time` ← `file.header().transactionDate()` (via PersistService)
+
+#### **System Audit Timestamps - From Database Operations**
+**Source**: `NOW()` function during database operations
+**Purpose**: Tracks when records were created/modified in the database
+
+**Tables with audit timestamps**:
+- All tables have `created_at` (when record was inserted)
+- Most tables have `updated_at` (when record was last modified)
+
+#### **Materialized View Usage Analysis**
+**✅ Correct Usage**: MVs primarily use `tx_at` columns for business reporting:
+- `c.tx_at` for claim transaction dates
+- `s.tx_at` for submission dates  
+- `r.tx_at` for remittance dates
+- `cst.status_time` for status timeline dates
+
+**⚠️ Fallback Usage**: Some MVs use `ck.created_at` as fallback when `tx_at` is NULL:
+```sql
+DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE))
+```
+
+#### **Key Principles**
+1. **Business Reporting**: Always use `tx_at` columns for period filters and business logic
+2. **System Monitoring**: Use `created_at`/`updated_at` for operational monitoring
+3. **Consistency**: All `tx_at` columns contain the same transaction date from XML
+4. **Fallback Strategy**: Use audit timestamps only when business timestamps are unavailable
+
 ### Testing tips for report SQLs
 
 - Use claim spine to avoid duplication: aggregate at `claim_key` when combining submission and remittance.
 - Respect TX windows:
   - Use `submission.tx_at` and `remittance.tx_at` for period filters.
   - For event-based snapshots, use `claim_event.event_time`.
+  - **Always prefer `tx_at` over `created_at` for business reporting**.
 - Activity reconciliation:
   - Requested vs paid: sum submission `activity.net` vs remittance `remittance_activity.payment_amount` per `claim_key` and `activity_id`.
   - Handle duplicates via uniques: `(claim_id, activity_id)` and `(remittance_claim_id, activity_id)` ensure one row each.
@@ -325,8 +367,87 @@ Legend: PK=primary key, FK=foreign key, TX=transactional timestamp, SSOT=single 
   group by ck.claim_id, a.activity_id;
   ```
 
+### Materialized View Design Patterns (MV Fixes - 2025)
+
+#### Claim Lifecycle Understanding
+- **Pattern**: Submission → Remittance → Resubmission → Remittance (can repeat multiple times)
+- **Activities**: Remain consistent across submission, resubmission, and remittances
+- **Snapshots**: `claim_event_activity` stores activity snapshots at event time for accurate historical reporting
+- **Aggregation Principle**: Aggregate all remittances per claim in every report to prevent duplicates
+
+#### Common Duplicate Issues in MVs
+1. **Multiple JOINs to same table**: e.g., 5 resubmission cycles, 5 remittance cycles creating Cartesian products
+2. **Multiple secondary diagnoses**: One claim can have multiple secondary diagnoses causing row multiplication
+3. **Redundant JOINs**: Extra `LEFT JOIN claims.remittance_claim` when already aggregated
+4. **Unaggregated remittance data**: Multiple remittance records per claim causing duplicate rows
+
+#### MV Fix Patterns Applied
+
+**Remittance Aggregation Pattern**:
+```sql
+remittance_aggregated AS (
+    SELECT 
+        rc.claim_key_id,
+        SUM(rc.payment_amount) as total_payment_amount,
+        MAX(rc.date_settlement) as latest_settlement_date,
+        COUNT(*) as remittance_count
+    FROM claims.remittance_claim rc
+    GROUP BY rc.claim_key_id
+)
+```
+
+**Diagnosis Aggregation Pattern**:
+```sql
+diag_agg AS (
+    SELECT 
+        c.id as claim_id,
+        MAX(CASE WHEN d.diag_type = 'Principal' THEN d.code END) as primary_diagnosis,
+        STRING_AGG(CASE WHEN d.diag_type = 'Secondary' THEN d.code END, ', ' ORDER BY d.code) as secondary_diagnosis
+    FROM claims.claim c
+    LEFT JOIN claims.diagnosis d ON c.id = d.claim_id
+    GROUP BY c.id
+)
+```
+
+**Cycle Aggregation Pattern**:
+```sql
+resubmission_cycles_aggregated AS (
+    SELECT 
+        ce.claim_key_id,
+        (ARRAY_AGG(cr.resubmission_type ORDER BY ce.event_time))[1] as first_resubmission_type,
+        (ARRAY_AGG(ce.event_time ORDER BY ce.event_time))[1] as first_resubmission_date,
+        (ARRAY_AGG(cr.resubmission_type ORDER BY ce.event_time))[2] as second_resubmission_type,
+        (ARRAY_AGG(ce.event_time ORDER BY ce.event_time))[2] as second_resubmission_date,
+        -- ... up to 5 cycles
+    FROM claims.claim_event ce
+    LEFT JOIN claims.claim_resubmission cr ON ce.id = cr.claim_event_id
+    WHERE ce.type = 2
+    GROUP BY ce.claim_key_id
+)
+```
+
+#### MV Refresh Best Practices
+- **Use CONCURRENTLY**: `REFRESH MATERIALIZED VIEW CONCURRENTLY` for non-blocking updates
+- **Requires unique index**: Each MV needs a unique index for concurrent refresh
+- **Pre-aggregate in CTEs**: Use Common Table Expressions to aggregate data before main JOINs
+- **Avoid Cartesian products**: Always aggregate one-to-many relationships before joining
+- **Test with diagnostics**: Use diagnostic queries to identify duplicate key violations
+
+#### Error Patterns to Watch
+- `ERROR: duplicate key value violates unique constraint` - Indicates MV query produces duplicates
+- `ERROR: could not create unique index` - MV definition has logical flaws causing row multiplication
+- Ambiguous column references in CTEs - Multiple CTEs defining same column names
+- Cartesian products from multiple JOINs - Use aggregation CTEs to prevent
+
+#### Success Criteria for MVs
+- All MVs refresh without duplicate key errors
+- MVs return expected row counts matching business logic
+- Claim lifecycle properly represented with correct aggregation
+- Performance maintained through proper pre-aggregation
+- Unique indexes can be created successfully for concurrent refresh
+
 ---
 
-Owner: Claims Team • Last updated: autogenerated from DDL and code (Pipeline/Parser/Persist).
+Owner: Claims Team • Last updated: autogenerated from DDL and code (Pipeline/Parser/Persist) + MV fixes analysis (2025).
 
 

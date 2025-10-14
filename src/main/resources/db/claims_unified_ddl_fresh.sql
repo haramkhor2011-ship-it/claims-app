@@ -234,12 +234,12 @@ CREATE TABLE IF NOT EXISTS claims_ref.activity_code (
   status       TEXT DEFAULT 'ACTIVE',
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   updated_at   TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT uq_activity_code UNIQUE (code, code_system)
+  CONSTRAINT uq_activity_code UNIQUE (code, type)
 );
 
 COMMENT ON TABLE claims_ref.activity_code IS 'Service/procedure codes used in Activity.Code';
 
-CREATE INDEX IF NOT EXISTS idx_activity_code_lookup ON claims_ref.activity_code(code, code_system);
+CREATE INDEX IF NOT EXISTS idx_activity_code_lookup ON claims_ref.activity_code(code, type);
 CREATE INDEX IF NOT EXISTS idx_activity_code_status ON claims_ref.activity_code(status);
 CREATE INDEX IF NOT EXISTS idx_ref_activity_code ON claims_ref.activity_code(code);
 CREATE INDEX IF NOT EXISTS idx_ref_activity_desc_trgm ON claims_ref.activity_code USING gin (description gin_trgm_ops);
@@ -319,10 +319,10 @@ CREATE TABLE IF NOT EXISTS claims_ref.observation_code (
 -- ----------------------------------------------------------------------------------------------------------
 -- 4.10 TYPE DICTIONARIES
 -- ----------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS claims_ref.activity_type (
-  type_code   TEXT PRIMARY KEY,
-  description TEXT
-);
+--CREATE TABLE IF NOT EXISTS claims_ref.activity_type (
+--  type_code   TEXT PRIMARY KEY,
+--  description TEXT
+--);
 
 CREATE TABLE IF NOT EXISTS claims_ref.encounter_type (
   type_code   TEXT PRIMARY KEY,
@@ -339,10 +339,10 @@ CREATE TABLE IF NOT EXISTS claims_ref.encounter_type (
 --  description TEXT
 --);
 
-CREATE TABLE IF NOT EXISTS claims_ref.resubmission_type (
-  type_code   TEXT PRIMARY KEY,
-  description TEXT
-);
+--CREATE TABLE IF NOT EXISTS claims_ref.resubmission_type (
+--  type_code   TEXT PRIMARY KEY,
+--  description TEXT
+--);
 
 -- ----------------------------------------------------------------------------------------------------------
 -- 4.11 BOOTSTRAP STATUS
@@ -428,17 +428,17 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_error_retryable ON claims.ingestion_err
 CREATE TABLE IF NOT EXISTS claims.claim_key (
   id          BIGSERIAL PRIMARY KEY,
   claim_id    TEXT NOT NULL UNIQUE,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ
 );
 
 COMMENT ON TABLE claims.claim_key IS 'Canonical claim identifier (Claim/ID appears in both roots)';
 
 CREATE INDEX IF NOT EXISTS idx_claim_key_claim_id ON claims.claim_key(claim_id);
 
-CREATE TRIGGER trg_claim_key_updated_at
-  BEFORE UPDATE ON claims.claim_key
-  FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
+--CREATE TRIGGER trg_claim_key_updated_at
+  --BEFORE UPDATE ON claims.claim_key
+  --FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
 
 -- ----------------------------------------------------------------------------------------------------------
 -- 5.4 SUBMISSION PROCESSING
@@ -656,11 +656,10 @@ CREATE TABLE IF NOT EXISTS claims.remittance_claim (
   claim_key_id          BIGINT NOT NULL REFERENCES claims.claim_key(id) ON DELETE RESTRICT,
   id_payer              TEXT NOT NULL,
   provider_id           TEXT,
-  denial_code           TEXT,
+  comments              TEXT,
   payment_reference     TEXT NOT NULL,
   date_settlement       TIMESTAMPTZ,
   facility_id           TEXT,
-  denial_code_ref_id    BIGINT,
   payer_ref_id          BIGINT,
   provider_ref_id       BIGINT,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -673,8 +672,8 @@ COMMENT ON TABLE claims.remittance_claim IS 'Remittance claims with payment info
 CREATE INDEX IF NOT EXISTS idx_remittance_claim_key ON claims.remittance_claim(claim_key_id);
 CREATE INDEX IF NOT EXISTS idx_remittance_claim_payer ON claims.remittance_claim(id_payer);
 CREATE INDEX IF NOT EXISTS idx_remittance_claim_provider ON claims.remittance_claim(provider_id);
+CREATE INDEX IF NOT EXISTS idx_remittance_claim_comments ON claims.remittance_claim(comments);
 CREATE INDEX IF NOT EXISTS idx_remittance_claim_payment_ref ON claims.remittance_claim(payment_reference);
-CREATE INDEX IF NOT EXISTS idx_remit_claim_denial ON claims.remittance_claim(denial_code);
 CREATE INDEX IF NOT EXISTS idx_remit_claim_payer_ref ON claims.remittance_claim(payer_ref_id);
 CREATE INDEX IF NOT EXISTS idx_remit_claim_provider_ref ON claims.remittance_claim(provider_ref_id);
 CREATE INDEX IF NOT EXISTS idx_remit_claim_settle ON claims.remittance_claim(date_settlement);
@@ -702,6 +701,9 @@ CREATE TABLE IF NOT EXISTS claims.remittance_activity (
   patient_share         NUMERIC(14,2),
   payment_amount        NUMERIC(14,2) NOT NULL CHECK (payment_amount >= 0),
   denial_code           TEXT,
+  denial_code_ref_id    BIGINT,
+  activity_code_ref_id  BIGINT,
+  clinician_ref_id      BIGINT,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_remittance_activity UNIQUE (remittance_claim_id, activity_id)
@@ -714,6 +716,7 @@ CREATE INDEX IF NOT EXISTS idx_remittance_activity_code ON claims.remittance_act
 CREATE INDEX IF NOT EXISTS idx_remittance_activity_clinician ON claims.remittance_activity(clinician);
 CREATE INDEX IF NOT EXISTS idx_remit_act_start ON claims.remittance_activity(start_at);
 CREATE INDEX IF NOT EXISTS idx_remit_act_type ON claims.remittance_activity(type);
+CREATE INDEX IF NOT EXISTS idx_remittance_activity_code_ref ON claims.remittance_activity(activity_code_ref_id);
 
 CREATE TRIGGER trg_remittance_activity_updated_at
   BEFORE UPDATE ON claims.remittance_activity
@@ -772,6 +775,7 @@ COMMENT ON TABLE claims.claim_event_activity IS 'Activity snapshot at claim even
 CREATE INDEX IF NOT EXISTS idx_claim_event_activity_event ON claims.claim_event_activity(claim_event_id);
 CREATE INDEX IF NOT EXISTS idx_claim_event_activity_ref ON claims.claim_event_activity(activity_id_ref);
 CREATE INDEX IF NOT EXISTS idx_claim_event_activity_remit_ref ON claims.claim_event_activity(remittance_activity_id_ref);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_claim_event_activity_key ON claims.claim_event_activity(claim_event_id, activity_id_at_event);
 
 -- ----------------------------------------------------------------------------------------------------------
 -- 5.15 CLAIM STATUS TIMELINE
@@ -1260,7 +1264,7 @@ BEGIN
   
   -- Remittance claim reference data FKs
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_remittance_denial_ref') THEN
-    ALTER TABLE claims.remittance_claim ADD CONSTRAINT fk_remittance_denial_ref FOREIGN KEY (denial_code_ref_id) REFERENCES claims_ref.denial_code(id);
+    ALTER TABLE claims.remittance_activity ADD CONSTRAINT fk_remittance_activity_denial_ref FOREIGN KEY (denial_code_ref_id) REFERENCES claims_ref.denial_code(id);
   END IF;
   
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_remittance_payer_ref') THEN
@@ -1269,6 +1273,15 @@ BEGIN
   
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_remittance_provider_ref') THEN
     ALTER TABLE claims.remittance_claim ADD CONSTRAINT fk_remittance_provider_ref FOREIGN KEY (provider_ref_id) REFERENCES claims_ref.provider(id);
+  END IF;
+  
+  -- Remittance activity reference data FKs
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_remittance_activity_code_ref') THEN
+    ALTER TABLE claims.remittance_activity ADD CONSTRAINT fk_remittance_activity_code_ref FOREIGN KEY (activity_code_ref_id) REFERENCES claims_ref.activity_code(id);
+  END IF;
+  
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_remittance_activity_clinician_ref') THEN
+    ALTER TABLE claims.remittance_activity ADD CONSTRAINT fk_remittance_activity_clinician_ref FOREIGN KEY (clinician_ref_id) REFERENCES claims_ref.clinician(id);
   END IF;
 END$$;
 
@@ -1294,7 +1307,8 @@ CREATE INDEX IF NOT EXISTS idx_encounter_facility_ref ON claims.encounter(facili
 CREATE INDEX IF NOT EXISTS idx_activity_clinician_ref ON claims.activity(clinician_ref_id);
 CREATE INDEX IF NOT EXISTS idx_activity_code_ref ON claims.activity(activity_code_ref_id);
 CREATE INDEX IF NOT EXISTS idx_diagnosis_code_ref ON claims.diagnosis(diagnosis_code_ref_id);
-CREATE INDEX IF NOT EXISTS idx_remittance_denial_ref ON claims.remittance_claim(denial_code_ref_id);
+CREATE INDEX IF NOT EXISTS idx_remittance_activity_denial_ref ON claims.remittance_activity(denial_code_ref_id);
+CREATE INDEX IF NOT EXISTS idx_remittance_activity_clinician_ref ON claims.remittance_activity(clinician_ref_id);
 CREATE INDEX IF NOT EXISTS idx_remittance_payer_ref ON claims.remittance_claim(payer_ref_id);
 CREATE INDEX IF NOT EXISTS idx_remittance_provider_ref ON claims.remittance_claim(provider_ref_id);
 

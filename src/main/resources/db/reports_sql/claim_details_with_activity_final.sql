@@ -325,96 +325,96 @@ CREATE OR REPLACE FUNCTION claims.get_claim_details_with_activity(
 BEGIN
     RETURN QUERY
     SELECT
-        cdwa.claim_id,
-        cdwa.claim_db_id,
-        cdwa.payer_id,
-        cdwa.provider_id,
-        cdwa.member_id,
-        cdwa.emirates_id_number,
-        cdwa.gross,
-        cdwa.patient_share,
-        cdwa.initial_net_amount,
-        cdwa.comments,
-        cdwa.submission_date,
-        cdwa.provider_name,
-        cdwa.receiver_id,
-        cdwa.payer_name,
-        cdwa.payer_code,
-        cdwa.facility_id,
-        cdwa.encounter_type,
-        cdwa.patient_id,
-        cdwa.encounter_start,
-        cdwa.encounter_end_date,
-        cdwa.facility_name,
-        cdwa.facility_group,
-        cdwa.submission_id,
-        cdwa.submission_transaction_date,
-        cdwa.remittance_claim_id,
-        cdwa.id_payer,
-        cdwa.payment_reference,
-        cdwa.initial_date_settlement,
-        cdwa.initial_denial_code,
-        cdwa.remittance_date,
-        cdwa.remittance_id,
-        cdwa.claim_activity_number,
-        cdwa.activity_start_date,
-        cdwa.activity_type,
-        cdwa.cpt_code,
-        cdwa.quantity,
-        cdwa.activity_net_amount,
-        cdwa.clinician,
-        cdwa.prior_authorization_id,
-        cdwa.clinician_name,
-        cdwa.activity_description,
-        cdwa.primary_diagnosis,
-        cdwa.secondary_diagnosis,
-        cdwa.last_submission_file,
-        cdwa.last_submission_transaction_date,
-        cdwa.last_remittance_file,
-        cdwa.last_remittance_transaction_date,
-        cdwa.claim_status,
-        cdwa.claim_status_time,
-        cdwa.payment_status,
-        cdwa.remitted_amount,
-        cdwa.settled_amount,
-        cdwa.rejected_amount,
-        cdwa.unprocessed_amount,
-        cdwa.initial_rejected_amount,
-        cdwa.last_denial_code,
-        cdwa.remittance_comments,
-        cdwa.denial_comment,
-        cdwa.resubmission_type,
-        cdwa.resubmission_comment,
-        cdwa.net_collection_rate,
-        cdwa.denial_rate,
-        cdwa.turnaround_time_days,
-        cdwa.resubmission_effectiveness,
-        cdwa.created_at,
-        cdwa.updated_at
-    FROM claims.v_claim_details_with_activity cdwa
+        mv.claim_id,
+        mv.claim_db_id,
+        mv.payer_id,
+        mv.provider_id,
+        mv.member_id,
+        mv.emirates_id_number,
+        mv.gross,
+        mv.patient_share,
+        mv.initial_net_amount,
+        mv.comments,
+        mv.submission_date,
+        mv.provider_name,
+        mv.receiver_id,
+        mv.payer_name,
+        mv.payer_code,
+        mv.facility_id,
+        mv.encounter_type,
+        mv.patient_id,
+        mv.encounter_start,
+        mv.encounter_end_date,
+        mv.facility_name,
+        mv.facility_group,
+        mv.submission_id,
+        mv.submission_transaction_date,
+        mv.remittance_claim_id,
+        mv.id_payer,
+        mv.payment_reference,
+        mv.initial_date_settlement,
+        mv.initial_denial_code,
+        mv.remittance_date,
+        mv.remittance_id,
+        mv.claim_activity_number,
+        mv.activity_start_date,
+        mv.activity_type,
+        mv.cpt_code,
+        mv.quantity,
+        mv.activity_net_amount,
+        mv.clinician,
+        mv.prior_authorization_id,
+        mv.clinician_name,
+        mv.activity_description,
+        mv.primary_diagnosis,
+        mv.secondary_diagnosis,
+        mv.last_submission_file,
+        mv.last_submission_transaction_date,
+        mv.last_remittance_file,
+        mv.last_remittance_transaction_date,
+        mv.claim_status,
+        mv.claim_status_time,
+        mv.payment_status,
+        mv.remitted_amount,
+        mv.settled_amount,
+        mv.rejected_amount,
+        mv.unprocessed_amount,
+        mv.initial_rejected_amount,
+        mv.last_denial_code,
+        mv.remittance_comments,
+        mv.denial_comment,
+        mv.resubmission_type,
+        mv.resubmission_comment,
+        mv.net_collection_rate,
+        mv.denial_rate,
+        mv.turnaround_time_days,
+        mv.resubmission_effectiveness,
+        mv.created_at,
+        mv.updated_at
+    FROM claims.mv_claim_details_complete mv
     WHERE
-        (p_facility_code IS NULL OR cdwa.facility_id = p_facility_code)
-        AND (p_receiver_id IS NULL OR cdwa.receiver_id = p_receiver_id)
-        AND (p_payer_code IS NULL OR cdwa.payer_code = p_payer_code)
-        AND (p_clinician IS NULL OR cdwa.clinician = p_clinician)
-        AND (p_claim_id IS NULL OR cdwa.claim_id = p_claim_id)
-        AND (p_patient_id IS NULL OR cdwa.patient_id = p_patient_id)
-        AND (p_cpt_code IS NULL OR cdwa.cpt_code = p_cpt_code)
-        AND (p_claim_status IS NULL OR cdwa.claim_status = p_claim_status)
-        AND (p_payment_status IS NULL OR cdwa.payment_status = p_payment_status)
-        AND (p_encounter_type IS NULL OR cdwa.encounter_type = p_encounter_type)
-        AND (p_resub_type IS NULL OR cdwa.resubmission_type = p_resub_type)
-        AND (p_denial_code IS NULL OR cdwa.last_denial_code = p_denial_code)
-        AND (p_member_id IS NULL OR cdwa.member_id = p_member_id)
-        AND (p_payer_ref_id IS NULL OR cdwa.payer_ref_id = p_payer_ref_id)
-        AND (p_provider_ref_id IS NULL OR cdwa.provider_ref_id = p_provider_ref_id OR cdwa.remittance_provider_ref_id = p_provider_ref_id)
-        AND (p_facility_ref_id IS NULL OR cdwa.facility_ref_id = p_facility_ref_id)
-        AND (p_clinician_ref_id IS NULL OR cdwa.clinician_ref_id = p_clinician_ref_id)
-        AND (p_activity_code_ref_id IS NULL OR cdwa.activity_code_ref_id = p_activity_code_ref_id)
-        AND (p_denial_code_ref_id IS NULL OR cdwa.denial_code_ref_id = p_denial_code_ref_id)
-        AND (p_from_date IS NULL OR cdwa.submission_date >= p_from_date)
-        AND (p_to_date IS NULL OR cdwa.submission_date <= p_to_date)
-    ORDER BY cdwa.submission_date DESC, cdwa.claim_id
+        (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+        AND (p_receiver_id IS NULL OR mv.receiver_id = p_receiver_id)
+        AND (p_payer_code IS NULL OR mv.payer_code = p_payer_code)
+        AND (p_clinician IS NULL OR mv.clinician = p_clinician)
+        AND (p_claim_id IS NULL OR mv.claim_id = p_claim_id)
+        AND (p_patient_id IS NULL OR mv.patient_id = p_patient_id)
+        AND (p_cpt_code IS NULL OR mv.cpt_code = p_cpt_code)
+        AND (p_claim_status IS NULL OR mv.claim_status = p_claim_status)
+        AND (p_payment_status IS NULL OR mv.payment_status = p_payment_status)
+        AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
+        AND (p_resub_type IS NULL OR mv.resubmission_type = p_resub_type)
+        AND (p_denial_code IS NULL OR mv.last_denial_code = p_denial_code)
+        AND (p_member_id IS NULL OR mv.member_id = p_member_id)
+        AND (p_payer_ref_id IS NULL OR mv.payer_ref_id = p_payer_ref_id)
+        AND (p_provider_ref_id IS NULL OR mv.provider_ref_id = p_provider_ref_id OR mv.remittance_provider_ref_id = p_provider_ref_id)
+        AND (p_facility_ref_id IS NULL OR mv.facility_ref_id = p_facility_ref_id)
+        AND (p_clinician_ref_id IS NULL OR mv.clinician_ref_id = p_clinician_ref_id)
+        AND (p_activity_code_ref_id IS NULL OR mv.activity_code_ref_id = p_activity_code_ref_id)
+        AND (p_denial_code_ref_id IS NULL OR mv.denial_code_ref_id = p_denial_code_ref_id)
+        AND (p_from_date IS NULL OR mv.submission_date >= p_from_date)
+        AND (p_to_date IS NULL OR mv.submission_date <= p_to_date)
+    ORDER BY mv.submission_date DESC, mv.claim_id
     LIMIT p_limit OFFSET p_offset;
 END;
 $$ LANGUAGE plpgsql;
@@ -452,26 +452,26 @@ BEGIN
     RETURN QUERY
     WITH filtered_data AS (
         SELECT
-            cdwa.claim_id,
-            cdwa.initial_net_amount,
-            cdwa.remitted_amount,
-            cdwa.rejected_amount,
-            cdwa.unprocessed_amount,
-            cdwa.net_collection_rate,
-            cdwa.denial_rate,
-            cdwa.turnaround_time_days,
-            cdwa.payment_status,
-            cdwa.resubmission_type,
-            cdwa.patient_id,
-            cdwa.provider_id,
-            cdwa.facility_id
-        FROM claims.v_claim_details_with_activity cdwa
+            mv.claim_id,
+            mv.initial_net_amount,
+            mv.remitted_amount,
+            mv.rejected_amount,
+            mv.unprocessed_amount,
+            mv.net_collection_rate,
+            mv.denial_rate,
+            mv.turnaround_time_days,
+            mv.payment_status,
+            mv.resubmission_type,
+            mv.patient_id,
+            mv.provider_id,
+            mv.facility_id
+        FROM claims.mv_claim_details_complete mv
         WHERE
-            (p_facility_code IS NULL OR cdwa.facility_id = p_facility_code)
-            AND (p_receiver_id IS NULL OR cdwa.receiver_id = p_receiver_id)
-            AND (p_payer_code IS NULL OR cdwa.payer_code = p_payer_code)
-            AND (p_from_date IS NULL OR cdwa.submission_date >= p_from_date)
-            AND (p_to_date IS NULL OR cdwa.submission_date <= p_to_date)
+            (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+            AND (p_receiver_id IS NULL OR mv.receiver_id = p_receiver_id)
+            AND (p_payer_code IS NULL OR mv.payer_code = p_payer_code)
+            AND (p_from_date IS NULL OR mv.submission_date >= p_from_date)
+            AND (p_to_date IS NULL OR mv.submission_date <= p_to_date)
     ),
     claim_level AS (
         SELECT

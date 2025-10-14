@@ -3,6 +3,7 @@ spring:
     name: claims-app
   main:
     allow-bean-definition-overriding: false   # fail fast if a bean is defined twice
+    allow-circular-references: true            # allow circular references for monitoring
   jpa:
     open-in-view: false
     hibernate:
@@ -45,6 +46,22 @@ logging:
     org.hibernate.orm.jdbc.bind: INFO
 
 claims:
+  ingestion:
+    mode: localfs
+    stage-to-disk: false
+    poll:
+      fixedDelayMs: 1000
+    queue:
+      capacity: 512
+    concurrency:
+      parserWorkers: 8
+    ack:
+      enabled: false
+    localfs:
+      readyDir: data/ready
+      archiveOkDir: data/archive/done
+      archiveFailDir: data/archive/error
+
   refdata:
     bootstrap:
       enabled: false                           # profiles override
@@ -53,6 +70,43 @@ claims:
       delimiter: ','
       batch-size: 500
     auto-insert: true                          # profiles override
+  
+  monitoring:
+    database:
+      enabled: true                            # Enable database monitoring
+      interval: PT5M                           # Monitoring interval (5 minutes)
+      log-daily: true                          # Enable daily log files
+      collect-query-stats: true                # Collect query performance stats
+      collect-table-stats: true                # Collect table statistics
+    
+    application:
+      enabled: true                             # Enable application health monitoring
+      interval: PT5M                           # Monitoring interval (5 minutes)
+      log-daily: true                          # Enable daily log files
+      collect-jvm-metrics: true                 # Collect JVM metrics
+      collect-gc-metrics: true                 # Collect garbage collection metrics
+      collect-thread-metrics: true              # Collect thread metrics
+  
+  backup:
+    enabled: true                               # Enable automated backups
+    database:
+      enabled: true                            # Enable database backups
+    files:
+      enabled: true                             # Enable file system backups
+    retention:
+      days: 30                                  # Backup retention period
+    path: /backups                              # Backup storage path
+  
+  secrets:
+    enabled: true                               # Enable secrets management
+    encryption:
+      enabled: true                            # Enable encryption for secrets
+    key:
+      file: ./config/secrets.key                # Encryption key file path
+    vault:
+      enabled: false                            # Enable HashiCorp Vault integration
+      url: ""                                   # Vault server URL
+      token: ""                                 # Vault authentication token
   
   security:
     enabled: false                           # Enable security for API endpoints only
@@ -80,3 +134,87 @@ claims:
       username: "admin"
       password: "admin123"
       email: "admin@claims.local"
+
+# Parser defaults (used by ClaimXmlParserStax)
+claims.parser:
+  allowNonSchemaAttachments: false
+  maxAttachmentBytes: 33554432
+  failOnXsdError: false
+
+# Staging defaults for SOAP downloads
+claims.fetch:
+  stageToDisk:
+    force: false
+    sizeThresholdBytes: 26214400
+    latencyThresholdMs: 8000
+    readyDir: data/ready
+
+# DHPO client defaults (used by DhpoClientProperties)
+dhpo:
+  client:
+    getNewEnabled: false
+    searchDaysBack: 100
+    retriesOnMinus4: 3
+    connectTimeoutMs: 6000
+    readTimeoutMs: 15000
+    downloadTimeoutMs: 120000
+    stageToDiskThresholdMb: 25
+
+---
+# Test profile embedded (replaces application-test.yml)
+spring:
+  config:
+    activate:
+      on-profile: test
+  # Prevent accidental DB auto-config when tests don't supply a datasource
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none  # matches base; tests/E2E keep schema management manual
+
+logging:
+  level:
+    com.acme.claims: DEBUG
+    org.springframework.scheduling: INFO
+    org.hibernate.SQL: INFO
+    org.hibernate.orm.jdbc.bind: INFO
+
+flyway:
+  enabled: false
+
+claims:
+  ingestion:
+    executor:
+      core-pool-size: 2
+      max-pool-size: 4
+      queue-capacity: 32
+    poll:
+      fixedDelayMs: 200
+    ack:
+      enabled: false
+  fetch:
+    stageToDisk:
+      force: false
+      sizeThresholdBytes: 26214400
+      latencyThresholdMs: 8000
+      readyDir: "target/test-ready"
+  security:
+    ame:
+      enabled: false
+  soap:
+    endpoint: "http://localhost:0/soap"
+    soap12: false
+    connectTimeoutMs: 1500
+    readTimeoutMs: 3000
+    retry:
+      maxAttempts: 2
+      backoffMs: 200
+
+dhpo:
+  soap:
+    baseUrl: "http://localhost:0/soap"

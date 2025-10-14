@@ -28,6 +28,9 @@ public class RemittanceActivity {
     @Column(name="patient_share", precision=14, scale=2) private BigDecimal patientShare;
     @Column(name="payment_amount", nullable=false, precision=14, scale=2) private BigDecimal paymentAmount;
     @Column(name="denial_code") private String denialCode;
+    @Column(name="denial_code_ref_id") private Long denialCodeRefId;
+    @Column(name="activity_code_ref_id") private Long activityCodeRefId;
+    @Column(name="clinician_ref_id") private Long clinicianRefId;
     @Column(name="created_at", nullable=false) private OffsetDateTime createdAt = OffsetDateTime.now();
     // getters/setters…
     public Long getId(){return id;} public void setId(Long id){this.id=id;}
@@ -46,5 +49,8 @@ public class RemittanceActivity {
     public BigDecimal getPatientShare(){return patientShare;} public void setPatientShare(BigDecimal v){this.patientShare=v;}
     public BigDecimal getPaymentAmount(){return paymentAmount;} public void setPaymentAmount(BigDecimal v){this.paymentAmount=v;}
     public String getDenialCode(){return denialCode;} public void setDenialCode(String v){this.denialCode=v;}
+    public Long getDenialCodeRefId(){return denialCodeRefId;} public void setDenialCodeRefId(Long v){this.denialCodeRefId=v;}
+    public Long getActivityCodeRefId(){return activityCodeRefId;} public void setActivityCodeRefId(Long v){this.activityCodeRefId=v;}
+    public Long getClinicianRefId(){return clinicianRefId;} public void setClinicianRefId(Long v){this.clinicianRefId=v;}
     public OffsetDateTime getCreatedAt(){return createdAt;} public void setCreatedAt(OffsetDateTime v){this.createdAt=v;}
 }

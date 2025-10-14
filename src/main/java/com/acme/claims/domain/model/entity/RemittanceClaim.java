@@ -42,7 +42,8 @@ public class RemittanceClaim {
     private Long payerRefId;
     @Column(name ="provider_ref_id")
     private Long providerRefId;
-
+    @Column(name = "comments")
+    private String comments;
     // getters/setters…
     public Long getId() {
         return id;
@@ -146,5 +147,13 @@ public class RemittanceClaim {
 
     public void setProviderRefId(Long providerRefId) {
         this.providerRefId = providerRefId;
+    }
+
+    public String getComments() {
+        return comments;
+    }
+
+    public void setComments(String v) {
+        this.comments = v;
     }
 }

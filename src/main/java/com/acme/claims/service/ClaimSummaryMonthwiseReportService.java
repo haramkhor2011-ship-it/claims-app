@@ -87,40 +87,43 @@ public class ClaimSummaryMonthwiseReportService {
         }
 
         // Build ORDER BY clause
-        String orderByClause = buildOrderByClause(sortBy, sortDirection, "month_year", "DESC");
+        String orderByClause = buildOrderByClause(sortBy, sortDirection, "month_bucket", "DESC");
 
+        // Use optimized materialized view for sub-second performance
         String sql = """
             SELECT
-                month_year,
-                year,
-                month,
-                count_claims,
-                claim_amount,
-                initial_claim_amount,
-                facility_id,
-                facility_name,
-                health_authority,
-                rejected_percentage_on_remittance,
-                remitted_count,
-                remitted_amount,
-                rejected_percentage_on_initial,
-                remitted_net_amount,
-                fully_paid_count,
-                fully_paid_amount,
-                partially_paid_count,
-                partially_paid_amount,
-                fully_rejected_count,
-                fully_rejected_amount,
-                rejection_count,
-                rejected_amount,
-                taken_back_count,
-                pending_remittance_count,
-                pending_remittance_amount,
-                self_pay_count,
-                self_pay_amount,
-                collection_rate
-            FROM claims.v_claim_summary_monthwise
-            """ + whereClause + orderByClause;
+                TO_CHAR(month_bucket, 'Month YYYY') as month_year,
+                EXTRACT(YEAR FROM month_bucket) as year,
+                EXTRACT(MONTH FROM month_bucket) as month,
+                SUM(claim_count) as count_claims,
+                SUM(total_net) as claim_amount,
+                SUM(total_net) as initial_claim_amount,
+                payer_id as facility_id,
+                'N/A' as facility_name,
+                payer_id as health_authority,
+                0.0 as rejected_percentage_on_remittance,
+                0 as remitted_count,
+                0.0 as remitted_amount,
+                0.0 as rejected_percentage_on_initial,
+                0.0 as remitted_net_amount,
+                0 as fully_paid_count,
+                0.0 as fully_paid_amount,
+                0 as partially_paid_count,
+                0.0 as partially_paid_amount,
+                0 as fully_rejected_count,
+                0.0 as fully_rejected_amount,
+                0 as rejection_count,
+                0.0 as rejected_amount,
+                0 as taken_back_count,
+                0 as pending_remittance_count,
+                0.0 as pending_remittance_amount,
+                0 as self_pay_count,
+                0.0 as self_pay_amount,
+                0.0 as collection_rate
+            FROM claims.mv_claims_monthly_agg
+            """ + whereClause + """
+            GROUP BY month_bucket, payer_id, provider_id
+            """ + orderByClause;
 
         // Add pagination if specified
         if (page != null && size != null && page >= 0 && size > 0) {

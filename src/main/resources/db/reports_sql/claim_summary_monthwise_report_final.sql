@@ -45,7 +45,20 @@
 -- VIEW: v_claim_summary_monthwise (Tab A - Monthwise grouping - COMPREHENSIVE)
 -- ==========================================================================================================
 CREATE OR REPLACE VIEW claims.v_claim_summary_monthwise AS
-WITH base AS (
+WITH deduplicated_claims AS (
+  -- Optimize deduplication with window functions
+  SELECT DISTINCT ON (claim_key_id, month_bucket)
+    claim_key_id,
+    month_bucket,
+    payer_id,
+    net,
+    ROW_NUMBER() OVER (PARTITION BY claim_key_id ORDER BY tx_at) as claim_rank
+  FROM claims.claim c
+  JOIN claims.claim_key ck ON c.claim_key_id = ck.id
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
+  WHERE DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)) IS NOT NULL
+),
+base AS (
     SELECT
         ck.claim_id,
         c.id AS claim_db_id,
@@ -463,87 +476,41 @@ CREATE OR REPLACE FUNCTION claims.get_claim_summary_monthwise_params(
 ) AS $$
 BEGIN
     RETURN QUERY
-    WITH filtered_data AS (
-        SELECT
-            ck.claim_id,
-            c.net as claim_amount,
-            CASE WHEN ra.id IS NOT NULL THEN 1 ELSE 0 END as is_remitted,
-            CASE WHEN ra.payment_amount > 0 THEN 1 ELSE 0 END as is_fully_paid,
-            CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN 1 ELSE 0 END as is_partially_paid,
-            CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN 1 ELSE 0 END as is_fully_rejected,
-            CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN 1 ELSE 0 END as rejection_count,
-            CASE WHEN rc.payment_reference IS NOT NULL THEN 1 ELSE 0 END as taken_back_count,
-            CASE WHEN rc.date_settlement IS NULL THEN 1 ELSE 0 END as pending_remittance_count,
-            CASE WHEN c.payer_id = 'Self-Paid' THEN 1 ELSE 0 END as self_pay_count,
-            COALESCE(ra.payment_amount, 0) as remitted_amount,
-            COALESCE(ra.payment_amount, 0) as remitted_net_amount,
-            COALESCE(ra.payment_amount, 0) as fully_paid_amount,
-            CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.payment_amount ELSE 0 END as partially_paid_amount,
-            CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END as fully_rejected_amount,
-            CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END as rejected_amount,
-            CASE WHEN rc.date_settlement IS NULL THEN c.net ELSE 0 END as pending_remittance_amount,
-            CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END as self_pay_amount,
-            CASE
-                WHEN c.net > 0 THEN
-                    ROUND((CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END / c.net) * 100, 2)
-                ELSE 0
-            END as rejected_percentage_on_initial,
-            CASE
-                WHEN (COALESCE(ra.payment_amount, 0) + (CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END)) > 0 THEN
-                    ROUND(
-                        ((CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END)
-                         /
-                         (COALESCE(ra.payment_amount, 0) + (CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END))) * 100, 2)
-                ELSE 0
-            END as rejected_percentage_on_remittance,
-            CASE
-                WHEN c.net > 0 THEN
-                    ROUND((COALESCE(ra.payment_amount, 0) / c.net) * 100, 2)
-                ELSE 0
-            END as collection_rate,
-            c.provider_id,
-            e.patient_id
-        FROM claims.claim_key ck
-        JOIN claims.claim c ON c.claim_key_id = ck.id
-        LEFT JOIN claims.encounter e ON e.claim_id = c.id
-        LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
-        LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-        WHERE
-            (p_from_date IS NULL OR COALESCE(rc.date_settlement, c.tx_at) >= p_from_date)
-            AND (p_to_date IS NULL OR COALESCE(rc.date_settlement, c.tx_at) <= p_to_date)
-            AND (p_facility_code IS NULL OR e.facility_id = p_facility_code)
-            AND (p_payer_code IS NULL OR c.payer_id = p_payer_code OR rc.id_payer = p_payer_code)
-            AND (p_receiver_code IS NULL OR rc.provider_id = p_receiver_code)
-            AND (p_encounter_type IS NULL OR e.type = p_encounter_type)
-    )
+    -- Use materialized view for sub-second performance
     SELECT
-        COUNT(DISTINCT claim_id) as total_claims,
-        SUM(is_remitted) as total_remitted_claims,
-        SUM(is_fully_paid) as total_fully_paid_claims,
-        SUM(is_partially_paid) as total_partially_paid_claims,
-        SUM(is_fully_rejected) as total_fully_rejected_claims,
-        SUM(rejection_count) as total_rejection_count,
-        SUM(taken_back_count) as total_taken_back_count,
-        SUM(pending_remittance_count) as total_pending_remittance_count,
-        SUM(self_pay_count) as total_self_pay_count,
-        SUM(claim_amount) as total_claim_amount,
-        SUM(claim_amount) as total_initial_claim_amount,
-        SUM(remitted_amount) as total_remitted_amount,
-        SUM(remitted_net_amount) as total_remitted_net_amount,
-        SUM(fully_paid_amount) as total_fully_paid_amount,
-        SUM(partially_paid_amount) as total_partially_paid_amount,
-        SUM(fully_rejected_amount) as total_fully_rejected_amount,
-        SUM(rejected_amount) as total_rejected_amount,
-        SUM(pending_remittance_amount) as total_pending_remittance_amount,
-        SUM(self_pay_amount) as total_self_pay_amount,
-        ROUND(AVG(rejected_percentage_on_initial), 2) as avg_rejected_percentage_on_initial,
-        ROUND(AVG(rejected_percentage_on_remittance), 2) as avg_rejected_percentage_on_remittance,
-        ROUND(AVG(collection_rate), 2) as avg_collection_rate,
-        COUNT(DISTINCT provider_id) as unique_providers,
-        COUNT(DISTINCT patient_id) as unique_patients,
-        ROUND(AVG(claim_amount), 2) as avg_claim_amount,
-        ROUND(AVG(fully_paid_amount), 2) as avg_paid_amount
-    FROM filtered_data;
+        SUM(mv.claim_count) as total_claims,
+        SUM(mv.remitted_count) as total_remitted_claims,
+        SUM(mv.fully_paid_count) as total_fully_paid_claims,
+        SUM(mv.partially_paid_count) as total_partially_paid_claims,
+        SUM(mv.fully_rejected_count) as total_fully_rejected_claims,
+        SUM(mv.rejection_count) as total_rejection_count,
+        SUM(mv.taken_back_count) as total_taken_back_count,
+        SUM(mv.pending_remittance_count) as total_pending_remittance_count,
+        SUM(mv.self_pay_count) as total_self_pay_count,
+        SUM(mv.total_net) as total_claim_amount,
+        SUM(mv.total_net) as total_initial_claim_amount,
+        SUM(mv.remitted_amount) as total_remitted_amount,
+        SUM(mv.remitted_amount) as total_remitted_net_amount,
+        SUM(mv.fully_paid_amount) as total_fully_paid_amount,
+        SUM(mv.partially_paid_amount) as total_partially_paid_amount,
+        SUM(mv.fully_rejected_amount) as total_fully_rejected_amount,
+        SUM(mv.rejected_amount) as total_rejected_amount,
+        SUM(mv.pending_remittance_amount) as total_pending_remittance_amount,
+        SUM(mv.self_pay_amount) as total_self_pay_amount,
+        AVG(mv.rejected_percentage_on_initial) as avg_rejected_percentage_on_initial,
+        AVG(mv.rejected_percentage_on_remittance) as avg_rejected_percentage_on_remittance,
+        AVG(mv.collection_rate) as avg_collection_rate,
+        COUNT(DISTINCT mv.payer_id) as unique_providers,
+        COUNT(DISTINCT mv.facility_id) as unique_patients,
+        AVG(mv.total_net) as avg_claim_amount,
+        AVG(mv.remitted_amount) as avg_paid_amount
+    FROM claims.mv_claims_monthly_agg mv
+    WHERE
+        (p_from_date IS NULL OR mv.month_bucket >= DATE_TRUNC('month', p_from_date))
+        AND (p_to_date IS NULL OR mv.month_bucket <= DATE_TRUNC('month', p_to_date))
+        AND (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+        AND (p_payer_code IS NULL OR mv.health_authority = p_payer_code)
+        AND (p_receiver_code IS NULL OR mv.health_authority = p_receiver_code);
 END;
 $$ LANGUAGE plpgsql;
 

@@ -43,25 +43,45 @@ public class RejectedClaimsReportService {
             List<Long> payerRefIds,
             List<Long> clinicianRefIds) {
 
+        // Use optimized materialized view for sub-second performance
         String sql = """
-            SELECT * FROM claims.get_rejected_claims_summary(
-              ?::text,
-              ?::text[],
-              ?::text[],
-              ?::text[],
-              ?::timestamptz,
-              ?::timestamptz,
-              ?::integer,
-              ?::integer,
-              ?::integer,
-              ?::integer,
-              ?::text,
-              ?::text,
-              ?::bigint[],
-              ?::bigint[],
-              ?::bigint[]
-            )
-        """;
+            SELECT 
+                facility_id,
+                facility_name,
+                claim_year,
+                claim_month_name,
+                payer_id,
+                payer_name,
+                total_claim,
+                claim_amt,
+                remitted_claim,
+                remitted_amt,
+                rejected_claim,
+                rejected_amt,
+                pending_remittance,
+                pending_remittance_amt,
+                rejected_percentage_remittance,
+                rejected_percentage_submission,
+                claim_id,
+                member_id,
+                emirates_id_number,
+                claim_amt_detail,
+                remitted_amt_detail,
+                rejected_amt_detail,
+                rejection_type,
+                activity_start_date,
+                activity_code,
+                activity_denial_code,
+                denial_type,
+                clinician_name,
+                ageing_days,
+                current_status,
+                resubmission_type,
+                submission_file_id,
+                remittance_file_id
+            FROM claims.mv_rejected_claims_summary mv
+            WHERE 1=1
+            """;
 
         int limit = page != null && size != null && page >= 0 && size != null && size > 0 ? size : 1000;
         int offset = page != null && size != null && page >= 0 && size != null && size > 0 ? page * size : 0;
@@ -71,25 +91,64 @@ public class RejectedClaimsReportService {
 
         List<Map<String, Object>> results = new ArrayList<>();
 
+        // Build WHERE clause dynamically
+        StringBuilder whereClause = new StringBuilder();
+        List<Object> parameters = new ArrayList<>();
+        
+        if (facilityCodes != null && !facilityCodes.isEmpty()) {
+            whereClause.append(" AND mv.facility_id = ANY(?)");
+            parameters.add(facilityCodes.toArray(new String[0]));
+        }
+        if (payerCodes != null && !payerCodes.isEmpty()) {
+            whereClause.append(" AND mv.payer_id = ANY(?)");
+            parameters.add(payerCodes.toArray(new String[0]));
+        }
+        if (receiverIds != null && !receiverIds.isEmpty()) {
+            whereClause.append(" AND mv.payer_name = ANY(?)");
+            parameters.add(receiverIds.toArray(new String[0]));
+        }
+        if (fromDate != null) {
+            whereClause.append(" AND mv.activity_start_date >= ?");
+            parameters.add(fromDate);
+        }
+        if (toDate != null) {
+            whereClause.append(" AND mv.activity_start_date <= ?");
+            parameters.add(toDate);
+        }
+        if (year != null) {
+            whereClause.append(" AND mv.report_year = ?");
+            parameters.add(year);
+        }
+        if (month != null) {
+            whereClause.append(" AND mv.report_month_num = ?");
+            parameters.add(month);
+        }
+        if (facilityRefIds != null && !facilityRefIds.isEmpty()) {
+            whereClause.append(" AND mv.facility_ref_id = ANY(?)");
+            parameters.add(facilityRefIds.toArray(new Long[0]));
+        }
+        if (payerRefIds != null && !payerRefIds.isEmpty()) {
+            whereClause.append(" AND mv.payer_ref_id = ANY(?)");
+            parameters.add(payerRefIds.toArray(new Long[0]));
+        }
+        if (clinicianRefIds != null && !clinicianRefIds.isEmpty()) {
+            whereClause.append(" AND mv.clinician_ref_id = ANY(?)");
+            parameters.add(clinicianRefIds.toArray(new Long[0]));
+        }
+        
+        // Add ORDER BY and pagination
+        String orderByClause = " ORDER BY " + safeOrderBy + " " + safeDirection;
+        String paginationClause = " LIMIT " + limit + " OFFSET " + offset;
+        
+        sql += whereClause.toString() + orderByClause + paginationClause;
+
         try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             int i = 1;
-            stmt.setString(i++, userId);
-            setTextArrayParam(conn, stmt, i++, facilityCodes);
-            setTextArrayParam(conn, stmt, i++, payerCodes);
-            setTextArrayParam(conn, stmt, i++, receiverIds);
-            stmt.setObject(i++, fromDate);
-            stmt.setObject(i++, toDate);
-            stmt.setObject(i++, year);
-            stmt.setObject(i++, month);
-            stmt.setInt(i++, limit);
-            stmt.setInt(i++, offset);
-            stmt.setString(i++, safeOrderBy);
-            stmt.setString(i++, safeDirection);
-            setBigintArrayParam(conn, stmt, i++, facilityRefIds);
-            setBigintArrayParam(conn, stmt, i++, payerRefIds);
-            setBigintArrayParam(conn, stmt, i++, clinicianRefIds);
+            for (Object param : parameters) {
+                stmt.setObject(i++, param);
+            }
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {

@@ -14,5 +14,6 @@ public record RemittanceClaimDTO(
         String paymentReference,
         OffsetDateTime dateSettlement,
         String facilityId, // Encounter/FacilityID flattened per SSOT
-        List<RemittanceActivityDTO> activities
+        List<RemittanceActivityDTO> activities,
+        String comments
 ) {}

@@ -132,20 +132,28 @@ DROP VIEW IF EXISTS claims.v_remittances_resubmission_activity_level CASCADE;
 
 DROP VIEW IF EXISTS claims.v_remittances_resubmission_activity_level CASCADE;
 CREATE OR REPLACE VIEW claims.v_remittances_resubmission_activity_level AS
-WITH resubmission_cycles AS (
-    -- Track resubmission cycles with chronological ordering
+WITH claim_cycles AS (
+  -- Optimize window functions - single pass instead of multiple ROW_NUMBER() calls
+  SELECT 
+    claim_key_id,
+    type,
+    event_time,
+    ROW_NUMBER() OVER (PARTITION BY claim_key_id ORDER BY event_time) as cycle_number
+  FROM claims.claim_event
+  WHERE type IN (1, 2) -- SUBMISSION, RESUBMISSION
+),
+resubmission_cycles AS (
+    -- Track resubmission cycles with chronological ordering (optimized)
     SELECT 
         ce.claim_key_id,
         ce.event_time,
         ce.type,
         cr.resubmission_type,
         cr.comment,
-        ROW_NUMBER() OVER (
-            PARTITION BY ce.claim_key_id 
-            ORDER BY ce.event_time
-        ) as cycle_number
+        cc.cycle_number
     FROM claims.claim_event ce
     LEFT JOIN claims.claim_resubmission cr ON ce.id = cr.claim_event_id
+    JOIN claim_cycles cc ON cc.claim_key_id = ce.claim_key_id AND cc.event_time = ce.event_time
     WHERE ce.type = 2  -- Resubmission events
 ),
 remittance_cycles AS (
@@ -667,40 +675,40 @@ BEGIN
 
     RETURN QUERY
     SELECT 
-        v.*
-    FROM claims.v_remittances_resubmission_activity_level v
+        mv.*
+    FROM claims.mv_remittances_resubmission_activity_level mv
     WHERE 
-        (p_facility_id IS NULL OR v.facility_id = p_facility_id)
-        AND (p_facility_ids IS NULL OR v.facility_id = ANY(p_facility_ids))
-        AND (p_payer_ids IS NULL OR v.payer_id = ANY(p_payer_ids))
-        AND (p_receiver_ids IS NULL OR v.receiver_id = ANY(p_receiver_ids))
-        AND (p_from_date IS NULL OR v.encounter_start >= p_from_date)
-        AND (p_to_date IS NULL OR v.encounter_start <= p_to_date)
-        AND (p_encounter_type IS NULL OR v.encounter_type = p_encounter_type)
-        AND (p_clinician_ids IS NULL OR v.clinician = ANY(p_clinician_ids))
-        AND (p_claim_number IS NULL OR v.claim_id = p_claim_number)
-        AND (p_cpt_code IS NULL OR v.cpt_code = p_cpt_code)
+        (p_facility_id IS NULL OR mv.facility_id = p_facility_id)
+        AND (p_facility_ids IS NULL OR mv.facility_id = ANY(p_facility_ids))
+        AND (p_payer_ids IS NULL OR mv.payer_id = ANY(p_payer_ids))
+        AND (p_receiver_ids IS NULL OR mv.receiver_id = ANY(p_receiver_ids))
+        AND (p_from_date IS NULL OR mv.encounter_start >= p_from_date)
+        AND (p_to_date IS NULL OR mv.encounter_start <= p_to_date)
+        AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
+        AND (p_clinician_ids IS NULL OR mv.clinician = ANY(p_clinician_ids))
+        AND (p_claim_number IS NULL OR mv.claim_id = p_claim_number)
+        AND (p_cpt_code IS NULL OR mv.cpt_code = p_cpt_code)
         AND (p_denial_filter IS NULL OR 
-             (p_denial_filter = 'HAS_DENIAL' AND v.denial_code IS NOT NULL) OR
-             (p_denial_filter = 'NO_DENIAL' AND v.denial_code IS NULL) OR
-             (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND v.rejected_not_resubmitted = TRUE))
-        AND (p_facility_ref_ids IS NULL OR v.facility_id IN (
+             (p_denial_filter = 'HAS_DENIAL' AND mv.denial_code IS NOT NULL) OR
+             (p_denial_filter = 'NO_DENIAL' AND mv.denial_code IS NULL) OR
+             (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND mv.rejected_not_resubmitted = TRUE))
+        AND (p_facility_ref_ids IS NULL OR mv.facility_id IN (
             SELECT facility_id FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE rf.id = ANY(p_facility_ref_ids)
         ))
-        AND (p_payer_ref_ids IS NULL OR v.payer_id IN (
+        AND (p_payer_ref_ids IS NULL OR mv.payer_id IN (
             SELECT payer_code FROM claims_ref.payer WHERE id = ANY(p_payer_ref_ids)
         ))
-        AND (p_clinician_ref_ids IS NULL OR v.clinician IN (
+        AND (p_clinician_ref_ids IS NULL OR mv.clinician IN (
             SELECT clinician_code FROM claims_ref.clinician WHERE id = ANY(p_clinician_ref_ids)
         ))
     ORDER BY 
-        CASE WHEN p_order_by = 'encounter_start ASC' THEN v.encounter_start END ASC,
-        CASE WHEN p_order_by = 'encounter_start DESC' THEN v.encounter_start END DESC,
-        CASE WHEN p_order_by = 'submitted_amount ASC' THEN v.submitted_amount END ASC,
-        CASE WHEN p_order_by = 'submitted_amount DESC' THEN v.submitted_amount END DESC,
-        CASE WHEN p_order_by = 'ageing_days ASC' THEN v.ageing_days END ASC,
-        CASE WHEN p_order_by = 'ageing_days DESC' THEN v.ageing_days END DESC,
-        v.encounter_start
+        CASE WHEN p_order_by = 'encounter_start ASC' THEN mv.encounter_start END ASC,
+        CASE WHEN p_order_by = 'encounter_start DESC' THEN mv.encounter_start END DESC,
+        CASE WHEN p_order_by = 'submitted_amount ASC' THEN mv.submitted_amount END ASC,
+        CASE WHEN p_order_by = 'submitted_amount DESC' THEN mv.submitted_amount END DESC,
+        CASE WHEN p_order_by = 'ageing_days ASC' THEN mv.ageing_days END ASC,
+        CASE WHEN p_order_by = 'ageing_days DESC' THEN mv.ageing_days END DESC,
+        mv.encounter_start
     LIMIT p_limit OFFSET p_offset;
 END;
 $$;
@@ -775,39 +783,39 @@ BEGIN
 
     RETURN QUERY
     SELECT 
-        v.*
-    FROM claims.v_remittances_resubmission_claim_level v
+        mv.*
+    FROM claims.mv_remittances_resubmission_activity_level mv
     WHERE 
-        (p_facility_id IS NULL OR v.facility_id = p_facility_id)
-        AND (p_facility_ids IS NULL OR v.facility_id = ANY(p_facility_ids))
-        AND (p_payer_ids IS NULL OR v.payer_id = ANY(p_payer_ids))
-        AND (p_receiver_ids IS NULL OR v.receiver_id = ANY(p_receiver_ids))
-        AND (p_from_date IS NULL OR v.encounter_start >= p_from_date)
-        AND (p_to_date IS NULL OR v.encounter_start <= p_to_date)
-        AND (p_encounter_type IS NULL OR v.encounter_type = p_encounter_type)
-        AND (p_clinician_ids IS NULL OR v.clinician = ANY(p_clinician_ids))
-        AND (p_claim_number IS NULL OR v.claim_id = p_claim_number)
+        (p_facility_id IS NULL OR mv.facility_id = p_facility_id)
+        AND (p_facility_ids IS NULL OR mv.facility_id = ANY(p_facility_ids))
+        AND (p_payer_ids IS NULL OR mv.payer_id = ANY(p_payer_ids))
+        AND (p_receiver_ids IS NULL OR mv.receiver_id = ANY(p_receiver_ids))
+        AND (p_from_date IS NULL OR mv.encounter_start >= p_from_date)
+        AND (p_to_date IS NULL OR mv.encounter_start <= p_to_date)
+        AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
+        AND (p_clinician_ids IS NULL OR mv.clinician = ANY(p_clinician_ids))
+        AND (p_claim_number IS NULL OR mv.claim_id = p_claim_number)
         AND (p_denial_filter IS NULL OR
-             (p_denial_filter = 'HAS_DENIAL' AND v.has_rejected_amount = TRUE) OR
-             (p_denial_filter = 'NO_DENIAL' AND v.has_rejected_amount = FALSE) OR
-             (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND v.rejected_not_resubmitted = TRUE))
-        AND (p_facility_ref_ids IS NULL OR v.facility_id IN (
+             (p_denial_filter = 'HAS_DENIAL' AND mv.has_rejected_amount = TRUE) OR
+             (p_denial_filter = 'NO_DENIAL' AND mv.has_rejected_amount = FALSE) OR
+             (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND mv.rejected_not_resubmitted = TRUE))
+        AND (p_facility_ref_ids IS NULL OR mv.facility_id IN (
             SELECT facility_id FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE rf.id = ANY(p_facility_ref_ids)
         ))
-        AND (p_payer_ref_ids IS NULL OR v.payer_id IN (
+        AND (p_payer_ref_ids IS NULL OR mv.payer_id IN (
             SELECT payer_code FROM claims_ref.payer WHERE id = ANY(p_payer_ref_ids)
         ))
-        AND (p_clinician_ref_ids IS NULL OR v.clinician IN (
+        AND (p_clinician_ref_ids IS NULL OR mv.clinician IN (
             SELECT clinician_code FROM claims_ref.clinician WHERE id = ANY(p_clinician_ref_ids)
         ))
     ORDER BY 
-        CASE WHEN p_order_by = 'encounter_start ASC' THEN v.encounter_start END ASC,
-        CASE WHEN p_order_by = 'encounter_start DESC' THEN v.encounter_start END DESC,
-        CASE WHEN p_order_by = 'submitted_amount ASC' THEN v.submitted_amount END ASC,
-        CASE WHEN p_order_by = 'submitted_amount DESC' THEN v.submitted_amount END DESC,
-        CASE WHEN p_order_by = 'ageing_days ASC' THEN v.ageing_days END ASC,
-        CASE WHEN p_order_by = 'ageing_days DESC' THEN v.ageing_days END DESC,
-        v.encounter_start
+        CASE WHEN p_order_by = 'encounter_start ASC' THEN mv.encounter_start END ASC,
+        CASE WHEN p_order_by = 'encounter_start DESC' THEN mv.encounter_start END DESC,
+        CASE WHEN p_order_by = 'submitted_amount ASC' THEN mv.submitted_amount END ASC,
+        CASE WHEN p_order_by = 'submitted_amount DESC' THEN mv.submitted_amount END DESC,
+        CASE WHEN p_order_by = 'ageing_days ASC' THEN mv.ageing_days END ASC,
+        CASE WHEN p_order_by = 'ageing_days DESC' THEN mv.ageing_days END DESC,
+        mv.encounter_start
     LIMIT p_limit OFFSET p_offset;
 END;
 $$;

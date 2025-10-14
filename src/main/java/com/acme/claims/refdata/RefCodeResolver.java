@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
@@ -23,7 +24,7 @@ public class RefCodeResolver {
     /* ========= Public API: return DB surrogate ids (or text PK note) ========= */
 
     /** Return payer.id for PayerID (e.g., INS025); creates row if missing. */
-    @Transactional
+    @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Long> resolvePayer(String payerCode, String name, String actor, Long ingestionFileId, String claimExternalId) {
         return resolveId(
                 "select id from claims_ref.payer where payer_code=?",
@@ -39,7 +40,7 @@ public class RefCodeResolver {
     }
 
     /** Return provider.id for ProviderID (often same format as facility). */
-    @Transactional
+    @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Long> resolveProvider(String providerCode, String name, String actor, Long ingestionFileId, String claimExternalId) {
         return resolveId(
                 "select id from claims_ref.provider where provider_code=?",
@@ -55,7 +56,7 @@ public class RefCodeResolver {
     }
 
     /** Return facility.id for Encounter.FacilityID (e.g., DHA-F-0045446). */
-    @Transactional
+    @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Long> resolveFacility(String facilityCode, String name, String city, String country,
                                           String actor, Long ingestionFileId, String claimExternalId) {
         return resolveId(
@@ -75,7 +76,7 @@ public class RefCodeResolver {
     }
 
     /** Return clinician.id for Activity.Clinician (e.g., DHA-P-0228312). */
-    @Transactional
+    @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Long> resolveClinician(String clinicianCode, String name, String specialty,
                                            String actor, Long ingestionFileId, String claimExternalId) {
         return resolveId(
@@ -93,27 +94,26 @@ public class RefCodeResolver {
         );
     }
 
-    /** Return activity_code.id for (code, system) (e.g., 83036, CPT). */
-    @Transactional
+    /** Return activity_code.id for (code, type) (e.g., 83036, CPT-3,4,5...). */
+    @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Long> resolveActivityCode(String code, String system, String description,
                                               String actor, Long ingestionFileId, String claimExternalId) {
-        String sys = Optional.ofNullable(system).filter(s -> !s.isBlank()).orElse("LOCAL");
         return resolveId(
-                "select id from claims_ref.activity_code where code=? and code_system=?",
-                ps -> { ps.setString(1, code); ps.setString(2, sys); },
+                "select id from claims_ref.activity_code where code=? and type=?",
+                ps -> { ps.setString(1, code); ps.setString(2, system); },
                 () -> jdbc.queryForObject("""
-                        insert into claims_ref.activity_code(code, code_system, description, status)
+                        insert into claims_ref.activity_code(code, type, description, status)
                         values (?,?,?, 'ACTIVE')
-                        on conflict (code, code_system) do update
+                        on conflict (code, type) do update
                           set description = coalesce(excluded.description, claims_ref.activity_code.description)
                         returning id
-                        """, Long.class, code, sys, description),
-                "claims_ref.activity_code", code, sys, actor, ingestionFileId, claimExternalId
+                        """, Long.class, code, system, description),
+                "claims_ref.activity_code", code, system, actor, ingestionFileId, claimExternalId
         );
     }
 
     /** Return diagnosis_code.id for (code, system) (default ICD-10). */
-    @Transactional
+    @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Long> resolveDiagnosisCode(String code, String system, String description,
                                                String actor, Long ingestionFileId, String claimExternalId) {
         String sys = Optional.ofNullable(system).filter(s -> !s.isBlank()).orElse("ICD-10");
@@ -137,7 +137,7 @@ public class RefCodeResolver {
      *  (a) add a bigserial id + unique(code) (recommended), or
      *  (b) change return type to Optional<String> and wire FK as TEXT.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Long> resolveDenialCode(String code, String description, String payerCode,
                                             String actor, Long ingestionFileId, String claimExternalId) {
         // Preferred schema: claims_ref.denial_code(id bigserial PK, code unique)
@@ -158,8 +158,8 @@ public class RefCodeResolver {
         );
     }
 
-    /** Return contract_package.package_name (text PK) as confirmation that it exists; we don’t use numeric id. */
-    @Transactional
+    /** Return contract_package.package_name (text PK) as confirmation that it exists; we don't use numeric id. */
+    @Transactional(propagation = Propagation.MANDATORY)
     public boolean ensureContractPackage(String packageName, String description,
                                          String actor, Long ingestionFileId, String claimExternalId) {
         Integer present = jdbc.query(

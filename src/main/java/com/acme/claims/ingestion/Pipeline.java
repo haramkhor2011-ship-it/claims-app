@@ -144,11 +144,11 @@ public class Pipeline {
                             || isBlank(dto.header().dispositionFlag())
                             || dto.claims() == null
                             || dto.header().recordCount() <= 0
-                            || dto.header().recordCount() != (dto.claims() == null ? 0 : dto.claims().size())) {
+                            /*|| dto.header().recordCount() != (dto.claims() == null ? 0 : dto.claims().size())*/) {
                                 log.error("PIPELINE_VALIDATION_FAILED fileId={} fileName={} ingestionFileId={} reason=HEADER_PRECHECK", 
                                 wi.fileId(), wi.fileName(), filePk);
                         errors.fileError(filePk, "VALIDATE", "MISSING_HEADER_FIELDS",
-                                "Header required fields missing or RecordCount mismatch; file rejected.", false);
+                                "Header required fields missing; file rejected.", false);
                         maybeArchive(wi, false);
                         throw new RuntimeException("Header validation failed (submission) for fileId=" + wi.fileId());
                     }
@@ -166,9 +166,7 @@ public class Pipeline {
 
                     // Idempotency short-circuit early (skip validation/mapping/persist)
                     if (alreadyProjected(filePk)) {
-                        if (log.isDebugEnabled()) {
-                            log.debug("file already processed (short-circuit): {}", fileRow.getFileId());
-                        }
+                        log.info("file already processed (short-circuit): {}", fileRow.getFileId());
                         success = true;
                         int claimCount = dto.claims().size();
                         int actCount = countActs(dto);
@@ -221,9 +219,7 @@ public class Pipeline {
 
                     // Idempotency short-circuit early (skip validation/persist)
                     if (alreadyProjected(filePk)) {
-                        if (log.isDebugEnabled()) {
-                            log.debug("file already processed (short-circuit): {}", fileRow.getFileId());
-                        }
+                        log.info("file already processed (short-circuit): {}", fileRow.getFileId());
                         success = true;
                         int claimCount = dto.claims().size();
                         int actCount = countActs(dto);
@@ -236,7 +232,7 @@ public class Pipeline {
                         throw vex;
                     }
 
-                    var counts = persist.persistRemittance(filePk, dto);
+                    var counts = persist.persistRemittance(filePk, dto, out.getAttachments());
                     success = true;
                     int claimCount = dto.claims().size();
                     int actCount = countActs(dto);

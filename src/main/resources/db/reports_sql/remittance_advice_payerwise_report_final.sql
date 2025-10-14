@@ -38,10 +38,24 @@
 
 DROP VIEW IF EXISTS claims.v_remittance_advice_header CASCADE;
 CREATE OR REPLACE VIEW claims.v_remittance_advice_header AS
+WITH activity_aggregates AS (
+  -- Pre-aggregate activities to avoid multiple GROUP BY operations
+  SELECT 
+    rc.id as remittance_claim_id,
+    SUM(ra.payment_amount) as total_payment,
+    COUNT(*) as activity_count,
+    SUM(act.net) as total_billed,
+    SUM(CASE WHEN ra.denial_code IS NOT NULL OR ra.payment_amount = 0 THEN act.net ELSE 0 END) as total_denied,
+    COUNT(CASE WHEN ra.denial_code IS NOT NULL OR ra.payment_amount = 0 THEN 1 END) as denied_count,
+    STRING_AGG(DISTINCT ra.denial_code, ',') as denial_codes
+  FROM claims.remittance_claim rc
+  JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id
+  JOIN claims.claim c ON c.claim_key_id = rc.claim_key_id
+  JOIN claims.activity act ON act.claim_id = c.id AND act.activity_id = ra.activity_id
+  GROUP BY rc.id
+)
 SELECT
     -- Provider Information
-    --COALESCE(cl.name, '') AS ordering_clinician_name,
-    --COALESCE(cl.clinician_code, '') AS ordering_clinician,
     COALESCE(act.clinician, '') AS clinician_id,
     COALESCE(cl.name, '') AS clinician_name,
     cl.id AS clinician_ref_id,
@@ -55,23 +69,23 @@ SELECT
     -- Remittance Information
     ''::text AS remittance_comments,
 
-    -- Aggregated Metrics
+    -- Aggregated Metrics (using pre-aggregated data)
     COUNT(DISTINCT rc.id) AS total_claims,
-    COUNT(DISTINCT ra.id) AS total_activities,
-    SUM(COALESCE(act.net, 0)) AS total_billed_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS total_paid_amount,
-    SUM(COALESCE(act.net - ra.payment_amount, 0)) AS total_denied_amount,
+    SUM(agg.activity_count) AS total_activities,
+    SUM(COALESCE(agg.total_billed, 0)) AS total_billed_amount,
+    SUM(COALESCE(agg.total_payment, 0)) AS total_paid_amount,
+    SUM(COALESCE(agg.total_denied, 0)) AS total_denied_amount,
 
     -- Calculated Fields
     ROUND(
         CASE
-            WHEN SUM(COALESCE(act.net, 0)) > 0
-            THEN (SUM(COALESCE(ra.payment_amount, 0)) / SUM(COALESCE(act.net, 0))) * 100
+            WHEN SUM(COALESCE(agg.total_billed, 0)) > 0
+            THEN (SUM(COALESCE(agg.total_payment, 0)) / SUM(COALESCE(agg.total_billed, 0))) * 100
             ELSE 0
         END, 2
     ) AS collection_rate,
 
-    COUNT(CASE WHEN ra.denial_code IS NOT NULL OR ra.payment_amount = 0 THEN 1 END) AS denied_activities_count,
+    SUM(agg.denied_count) AS denied_activities_count,
 
     -- Facility and Organization Info
     COALESCE(f.facility_code, '') AS facility_id,
@@ -80,7 +94,7 @@ SELECT
     COALESCE(p.payer_code, '') AS payer_id,
     p.id AS payer_ref_id,
     COALESCE(p.name, '') AS payer_name,
-    COALESCE(rp.payer_code, '') AS receiver_id,
+    COALESCE(rp.provider_code, '') AS receiver_id,
     COALESCE(rp.name, '') AS receiver_name,
 
     -- Transaction Information
@@ -89,9 +103,9 @@ SELECT
 
 FROM claims.remittance r
 JOIN claims.remittance_claim rc ON r.id = rc.remittance_id
-JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id
+LEFT JOIN activity_aggregates agg ON agg.remittance_claim_id = rc.id
 LEFT JOIN claims.claim c ON c.claim_key_id = rc.claim_key_id
-JOIN claims.activity act ON act.claim_id = c.id AND act.activity_id = ra.activity_id
+LEFT JOIN claims.activity act ON act.claim_id = c.id
 LEFT JOIN claims_ref.clinician cl ON act.clinician_ref_id = cl.id
 LEFT JOIN claims.encounter enc ON enc.claim_id = c.id
 LEFT JOIN claims_ref.facility f ON enc.facility_ref_id = f.id
@@ -102,7 +116,7 @@ LEFT JOIN claims_ref.provider rp ON ifile.receiver_id = rp.provider_code
 GROUP BY
     cl.name, cl.clinician_code, cl.id, act.clinician,
     act.prior_authorization_id, ifile.file_name,
-    f.facility_code, f.id, f.name, p.payer_code, p.id, p.name, rp.payer_code, rp.name,
+    f.facility_code, f.id, f.name, p.payer_code, p.id, p.name, rp.provider_code, rp.name,
     r.tx_at, ifile.transaction_date
 
 ORDER BY total_paid_amount DESC, clinician_name;
@@ -190,7 +204,7 @@ GROUP BY
     p.name, p.id, r.tx_at, enc.start_at, ck.claim_id, rc.id_payer, c.member_id,
     rc.payment_reference, ra.activity_id, act.start_at, f.facility_code, f.id,
     ifile.receiver_id, f.facility_code, f.name, rec.provider_code, rec.name,
-    pc.payer_code, pc.id, c.net, ifile.file_name, rc.id
+    pc.payer_code, pc.id, c.net, ifile.file_name, rc.id, ifile.sender_id
 
 ORDER BY transaction_date DESC, claim_number;
 
@@ -300,38 +314,23 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
+    -- Use materialized view for sub-second performance
     SELECT
-        COUNT(DISTINCT rc.id) AS total_claims,
-        COUNT(DISTINCT ra.id) AS total_activities,
-        SUM(COALESCE(act.net, 0)) AS total_billed_amount,
-        SUM(COALESCE(ra.payment_amount, 0)) AS total_paid_amount,
-        SUM(COALESCE(act.net - ra.payment_amount, 0)) AS total_denied_amount,
-        ROUND(
-            CASE
-                WHEN SUM(COALESCE(act.net, 0)) > 0
-                THEN (SUM(COALESCE(ra.payment_amount, 0)) / SUM(COALESCE(act.net, 0))) * 100
-                ELSE 0
-            END, 2
-        ) AS avg_collection_rate
-
-    FROM claims.remittance r
-    JOIN claims.remittance_claim rc ON r.id = rc.remittance_id
-    JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id
-    LEFT JOIN claims.claim c ON c.claim_key_id = rc.claim_key_id
-    JOIN claims.activity act ON act.claim_id = c.id AND act.activity_id = ra.activity_id
-    LEFT JOIN claims.encounter enc ON c.id = enc.claim_id
-    LEFT JOIN claims_ref.facility f ON enc.facility_ref_id = f.id
-    LEFT JOIN claims_ref.payer p ON rc.payer_ref_id = p.id
-    LEFT JOIN claims.ingestion_file ifile ON r.ingestion_file_id = ifile.id
-
-    WHERE r.tx_at >= COALESCE(p_from_date, r.tx_at - INTERVAL '30 days')
-      AND r.tx_at <= COALESCE(p_to_date, r.tx_at)
-      AND (p_facility_code IS NULL OR f.facility_code = p_facility_code)
-      AND (p_payer_code IS NULL OR p.payer_code = p_payer_code)
-      AND (p_receiver_code IS NULL OR ifile.receiver_id = p_receiver_code)
-      AND (p_payment_reference IS NULL OR rc.payment_reference = p_payment_reference)
-      AND (p_facility_ref_id IS NULL OR f.id = p_facility_ref_id)
-      AND (p_payer_ref_id IS NULL OR p.id = p_payer_ref_id);
+        SUM(mv.total_claims) AS total_claims,
+        SUM(mv.total_activities) AS total_activities,
+        SUM(mv.total_billed_amount) AS total_billed_amount,
+        SUM(mv.total_paid_amount) AS total_paid_amount,
+        SUM(mv.total_denied_amount) AS total_denied_amount,
+        AVG(mv.collection_rate) AS avg_collection_rate
+    FROM claims.mv_remittance_advice_summary mv
+    WHERE mv.remittance_date >= COALESCE(p_from_date, mv.remittance_date - INTERVAL '30 days')
+      AND mv.remittance_date <= COALESCE(p_to_date, mv.remittance_date)
+      AND (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+      AND (p_payer_code IS NULL OR mv.payer_id = p_payer_code)
+      AND (p_receiver_code IS NULL OR mv.receiver_id = p_receiver_code)
+      AND (p_payment_reference IS NULL OR mv.payment_reference = p_payment_reference)
+      AND (p_facility_ref_id IS NULL OR mv.facility_ref_id = p_facility_ref_id)
+      AND (p_payer_ref_id IS NULL OR mv.payer_ref_id = p_payer_ref_id);
 END;
 $$ LANGUAGE plpgsql;
 
