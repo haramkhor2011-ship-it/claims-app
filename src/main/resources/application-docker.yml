@@ -1,0 +1,90 @@
+spring:
+  profiles:
+    include: ingestion,prod,soap
+  datasource:
+    url: jdbc:postgresql://postgres:5432/claims
+    username: ${DB_USER:claims_user}
+    password: ${DB_PASSWORD:securepass}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      auto-commit: false
+      connection-timeout: 30000
+      leak-detection-threshold: 60000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+  flyway:
+    enabled: false  # We use init container instead
+
+logging:
+  level:
+    com.acme.claims: INFO
+    org.springframework.scheduling: INFO
+  file:
+    name: /app/logs/application.log
+  pattern:
+    console: "%d{ISO8601} %-5level [%thread] %logger{36} - %msg%n"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,loggers,env,threaddump
+
+claims:
+  ingestion:
+    mode: soap  # SOAP fetcher active
+    localfs:
+      readyDir: /app/data/ready
+      archiveOkDir: /app/data/archive/done
+      archiveFailDir: /app/data/archive/error
+    poll:
+      fixedDelayMs: 10000  # 10 seconds
+    queue:
+      capacity: 512
+    concurrency:
+      parserWorkers: 8
+    ack:
+      enabled: true
+  
+  refdata:
+    bootstrap:
+      enabled: true
+      strict: false
+      location: classpath:refdata/
+      batch-size: 500
+    auto-insert: true
+  
+  soap:
+    endpoint: ${DHPO_SOAP_ENDPOINT:https://qa.eclaimlink.ae/dhpo/ValidateTransactions.asmx}
+    soap12: false
+    connectTimeoutMs: 15000
+    readTimeoutMs: 120000
+    poll:
+      fixedDelayMs: ${SOAP_POLL_INTERVAL_MS:1800000}  # 30 minutes default
+    downloadConcurrency: 16
+  
+  security:
+    ame:
+      enabled: true
+      keystore:
+        type: PKCS12
+        path: file:/app/config/claims.p12
+        alias: claims-ame
+        passwordEnv: CLAIMS_AME_STORE_PASS
+      crypto:
+        kekRotationAllowed: true
+        gcmTagBits: 128
+        keyId: claims-ame.v1
+
+dhpo:
+  client:
+    getNewEnabled: false
+    searchDaysBack: 100
+    retriesOnMinus4: 3
+    connectTimeoutMs: 6000
+    readTimeoutMs: 15000
+    downloadTimeoutMs: 120000
+    stageToDiskThresholdMb: 25
