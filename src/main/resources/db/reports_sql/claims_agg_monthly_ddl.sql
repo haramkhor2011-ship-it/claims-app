@@ -354,7 +354,7 @@ BEGIN
     FULL JOIN d6 ON TRUE
     FULL JOIN d7 ON TRUE
   )
-  -- Rebuild monthly_claim_summary
+  -- ENHANCED: Rebuild monthly_claim_summary using claim_payment and payer_performance_summary tables
   INSERT INTO claims_agg.monthly_claim_summary (
     month_bucket, year, month,
     facility_ref_id, payer_ref_id, encounter_type,
@@ -373,21 +373,28 @@ BEGIN
     SELECT
       ck.claim_id,
       c.id AS claim_db_id,
-      DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))::DATE AS month_bucket,
+      DATE_TRUNC('month', cp.tx_at)::DATE AS month_bucket,
       e.facility_ref_id,
-      COALESCE(c.payer_ref_id, rc.payer_ref_id) AS payer_ref_id,
+      c.payer_ref_id,
       e.type AS encounter_type,
-      c.net AS claim_net,
-      ra.net AS ra_net,
-      ra.payment_amount,
-      rc.payment_reference
+      -- === ENHANCED: Use claim_payment for financial metrics ===
+      cp.total_submitted_amount AS claim_net,
+      cp.total_paid_amount AS payment_amount,
+      cp.total_rejected_amount AS rejected_amount,
+      cp.payment_status,
+      cp.remittance_count,
+      cp.resubmission_count,
+      -- === ENHANCED: Use payer_performance_summary for payer metrics ===
+      pps.payment_rate,
+      pps.rejection_rate,
+      pps.avg_processing_days
     FROM claims.claim_key ck
     JOIN claims.claim c ON c.claim_key_id = ck.id
+    JOIN claims.claim_payment cp ON cp.claim_key_id = ck.id
     LEFT JOIN claims.encounter e ON e.claim_id = c.id
-    LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
-    LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
-    LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-    WHERE DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))::DATE BETWEEN v_start AND v_end
+    LEFT JOIN claims.payer_performance_summary pps ON pps.payer_ref_id = c.payer_ref_id 
+      AND pps.month_bucket = DATE_TRUNC('month', cp.tx_at)::DATE
+    WHERE DATE_TRUNC('month', cp.tx_at)::DATE BETWEEN v_start AND v_end
   ), dedup_claim AS (
     SELECT
       claim_db_id,
@@ -404,37 +411,30 @@ BEGIN
     e.payer_ref_id,
     COALESCE(e.encounter_type, 'Unknown') AS encounter_type,
     COUNT(DISTINCT e.claim_id) AS count_claims,
-    COUNT(DISTINCT CASE WHEN e.payment_amount IS NOT NULL THEN e.claim_id END) AS remitted_count,
-    COUNT(DISTINCT CASE WHEN e.payment_amount > 0 AND e.payment_amount = e.ra_net THEN e.claim_id END) AS fully_paid_count,
-    COUNT(DISTINCT CASE WHEN e.payment_amount > 0 AND e.payment_amount < e.ra_net THEN e.claim_id END) AS partially_paid_count,
-    COUNT(DISTINCT CASE WHEN e.payment_amount = 0 OR e.payment_amount IS NULL OR e.ra_net IS NULL AND e.payment_amount = 0 THEN e.claim_id END) AS fully_rejected_count,
-    COUNT(DISTINCT CASE WHEN e.payment_amount = 0 OR e.payment_amount IS NULL OR e.ra_net IS NULL AND e.payment_amount = 0 THEN e.claim_id END) AS rejection_count,
+    -- === ENHANCED: Use payment_status for accurate counts ===
+    COUNT(DISTINCT CASE WHEN e.payment_status IN ('FULLY_PAID', 'PARTIALLY_PAID') THEN e.claim_id END) AS remitted_count,
+    COUNT(DISTINCT CASE WHEN e.payment_status = 'FULLY_PAID' THEN e.claim_id END) AS fully_paid_count,
+    COUNT(DISTINCT CASE WHEN e.payment_status = 'PARTIALLY_PAID' THEN e.claim_id END) AS partially_paid_count,
+    COUNT(DISTINCT CASE WHEN e.payment_status = 'REJECTED' THEN e.claim_id END) AS fully_rejected_count,
+    COUNT(DISTINCT CASE WHEN e.payment_status = 'REJECTED' THEN e.claim_id END) AS rejection_count,
     COUNT(DISTINCT CASE WHEN e.payment_amount < 0 THEN e.claim_id END) AS taken_back_count,
-    COUNT(DISTINCT CASE WHEN e.payment_amount IS NULL OR e.payment_amount = 0 THEN e.claim_id END) AS pending_remittance_count,
-    COUNT(DISTINCT CASE WHEN c.claim_net_once IS NOT NULL AND e.payer_ref_id IS NULL AND e.payment_amount IS NULL THEN e.claim_id END) AS self_pay_count,
-    -- Amounts
-    (SELECT COALESCE(SUM(c2.claim_net_once), 0) FROM dedup_claim c2 WHERE c2.month_bucket = b.month_bucket) AS claim_amount,
-    (SELECT COALESCE(SUM(c2.claim_net_once), 0) FROM dedup_claim c2 WHERE c2.month_bucket = b.month_bucket) AS initial_claim_amount,
+    COUNT(DISTINCT CASE WHEN e.payment_status = 'PENDING' THEN e.claim_id END) AS pending_remittance_count,
+    COUNT(DISTINCT CASE WHEN e.payer_ref_id IS NULL THEN e.claim_id END) AS self_pay_count,
+    -- === ENHANCED: Use claim_payment amounts ===
+    COALESCE(SUM(e.claim_net), 0) AS claim_amount,
+    COALESCE(SUM(e.claim_net), 0) AS initial_claim_amount,
     COALESCE(SUM(e.payment_amount), 0) AS remitted_amount,
     COALESCE(SUM(e.payment_amount), 0) AS remitted_net_amount,
-    COALESCE(SUM(CASE WHEN e.payment_amount > 0 AND e.payment_amount = e.ra_net THEN e.payment_amount ELSE 0 END), 0) AS fully_paid_amount,
-    COALESCE(SUM(CASE WHEN e.payment_amount > 0 AND e.payment_amount < e.ra_net THEN e.payment_amount ELSE 0 END), 0) AS partially_paid_amount,
-    COALESCE(SUM(CASE WHEN e.payment_amount = 0 OR e.payment_amount IS NULL THEN e.ra_net ELSE 0 END), 0) AS fully_rejected_amount,
-    COALESCE(SUM(CASE WHEN e.payment_amount = 0 OR e.payment_amount IS NULL THEN e.ra_net ELSE 0 END), 0) AS rejected_amount,
-    COALESCE(SUM(CASE WHEN e.payment_amount IS NULL OR e.payment_amount = 0 THEN e.claim_net ELSE 0 END), 0) AS pending_remittance_amount,
+    COALESCE(SUM(CASE WHEN e.payment_status = 'FULLY_PAID' THEN e.payment_amount ELSE 0 END), 0) AS fully_paid_amount,
+    COALESCE(SUM(CASE WHEN e.payment_status = 'PARTIALLY_PAID' THEN e.payment_amount ELSE 0 END), 0) AS partially_paid_amount,
+    COALESCE(SUM(CASE WHEN e.payment_status = 'REJECTED' THEN e.rejected_amount ELSE 0 END), 0) AS fully_rejected_amount,
+    COALESCE(SUM(CASE WHEN e.payment_status = 'REJECTED' THEN e.rejected_amount ELSE 0 END), 0) AS rejected_amount,
+    COALESCE(SUM(CASE WHEN e.payment_status = 'PENDING' THEN e.claim_net ELSE 0 END), 0) AS pending_remittance_amount,
     COALESCE(SUM(CASE WHEN e.payer_ref_id IS NULL THEN e.claim_net ELSE 0 END), 0) AS self_pay_amount,
-    -- Percentages
-    CASE WHEN COALESCE(SUM(e.claim_net), 0) > 0
-         THEN ROUND((COALESCE(SUM(CASE WHEN e.payment_amount = 0 OR e.payment_amount IS NULL THEN e.ra_net ELSE 0 END), 0) / SUM(e.claim_net)) * 100, 2)
-         ELSE 0 END AS rejected_percentage_on_initial,
-    CASE WHEN (COALESCE(SUM(e.payment_amount), 0) + COALESCE(SUM(CASE WHEN e.payment_amount = 0 OR e.payment_amount IS NULL THEN e.ra_net ELSE 0 END), 0)) > 0
-         THEN ROUND((COALESCE(SUM(CASE WHEN e.payment_amount = 0 OR e.payment_amount IS NULL THEN e.ra_net ELSE 0 END), 0)
-                    /
-                    (COALESCE(SUM(e.payment_amount), 0) + COALESCE(SUM(CASE WHEN e.payment_amount = 0 OR e.payment_amount IS NULL THEN e.ra_net ELSE 0 END), 0))) * 100, 2)
-         ELSE 0 END AS rejected_percentage_on_remittance,
-    CASE WHEN COALESCE(SUM(e.claim_net), 0) > 0
-         THEN ROUND((COALESCE(SUM(e.payment_amount), 0) / SUM(e.claim_net)) * 100, 2)
-         ELSE 0 END AS collection_rate
+    -- === ENHANCED: Use payer_performance_summary for percentages ===
+    COALESCE(AVG(e.rejection_rate), 0) AS rejected_percentage_on_initial,
+    COALESCE(AVG(e.rejection_rate), 0) AS rejected_percentage_on_remittance,
+    COALESCE(AVG(e.payment_rate), 0) AS collection_rate
   FROM buckets b
   JOIN base e ON e.month_bucket = b.month_bucket
   LEFT JOIN dedup_claim c ON c.month_bucket = b.month_bucket AND c.claim_db_id = e.claim_db_id

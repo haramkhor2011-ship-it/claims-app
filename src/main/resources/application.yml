@@ -57,6 +57,11 @@ claims:
       parserWorkers: 8
     ack:
       enabled: false
+    audit:
+      enabled: true
+      run-tracking: true
+      file-tracking: true
+      error-isolation: true
     localfs:
       readyDir: data/ready
       archiveOkDir: data/archive/done

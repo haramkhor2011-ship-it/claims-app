@@ -77,8 +77,8 @@ SELECT
     ck.claim_id,
     
     -- Payer information
-    c.id_payer AS payer_id,
-    COALESCE(p.name, c.id_payer, 'Unknown Payer') AS payer_name,
+    c.payer_id AS payer_id,
+    COALESCE(p.name, c.payer_id, 'Unknown Payer') AS payer_name,
     c.payer_ref_id AS payer_ref_id,
     
     -- Patient information

@@ -285,6 +285,41 @@ Legend: PK=primary key, FK=foreign key, TX=transactional timestamp, SSOT=single 
   - Diagnosis code: `diagnosis.diagnosis_code_ref_id = claims_ref.diagnosis_code.id` (fallback: `diagnosis.code`)
   - Denial code (remittance): `remittance_claim.denial_code_ref_id = claims_ref.denial_code.id` (fallback: `remittance_claim.denial_code`)
 
+### Payer ID Field Mapping and Consistency
+
+#### **Critical Understanding: Payer ID Fields**
+- **`claims.claim.payer_id`**: Real payer code from submission claim (business payer identifier)
+- **`claims.remittance_claim.id_payer`**: Real payer code from remittance claim - **This should match `claims.claim.payer_id`**
+- **`claims.claim.id_payer`**: Claim header IDPayer (different field, not the main payer code)
+
+#### **Correct Payer Matching Logic**
+When looking for the same payer across submission and remittance:
+```sql
+-- CORRECT: Match submission and remittance payers
+COALESCE(rc.id_payer, c.payer_id, 'Unknown') as payer_id
+
+-- INCORRECT: Using wrong submission field
+COALESCE(rc.id_payer, c.id_payer, 'Unknown') as payer_id  -- ❌ Wrong field mapping
+```
+
+#### **Materialized View Payer ID Usage Patterns**
+**✅ Correct Usage (Consistent)**:
+- `mv_remittance_advice_summary`: Uses `rc.id_payer` (remittance level)
+- `mv_doctor_denial_summary`: Uses `rc.id_payer` (remittance level)  
+- `mv_balance_amount_summary`: Uses `c.payer_id` (submission level)
+- `mv_claims_monthly_agg`: Uses `c.payer_id` (submission level)
+
+**⚠️ Inconsistent Usage (Needs Review)**:
+- `mv_rejected_claims_summary`: Uses `c.id_payer` (should use `c.payer_id`)
+- `mv_claim_summary_payerwise`: Uses `COALESCE(rc.id_payer, c.id_payer, 'Unknown')` (should use `c.payer_id`)
+- `mv_claim_summary_encounterwise`: Uses `COALESCE(rc.id_payer, c.id_payer, 'Unknown')` (should use `c.payer_id`)
+
+#### **Best Practice for Payer ID in MVs**
+1. **For remittance-focused reports**: Use `rc.id_payer` (remittance level)
+2. **For submission-focused reports**: Use `c.payer_id` (submission level)  
+3. **For comprehensive reports**: Use `COALESCE(rc.id_payer, c.payer_id, 'Unknown')` (prefer remittance, fallback to submission)
+4. **Never use**: `c.id_payer` - this is a different field (claim header IDPayer)
+
 ### Transaction Date Handling (TX vs Audit Timestamps)
 
 #### **Business Transaction Time (TX) - From XML Headers**

@@ -796,7 +796,270 @@ CREATE INDEX IF NOT EXISTS idx_claim_status_timeline_status ON claims.claim_stat
 CREATE INDEX IF NOT EXISTS idx_claim_status_timeline_time ON claims.claim_status_timeline(status_time);
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.16 CLAIM RESUBMISSION
+-- 5.16 CLAIM PAYMENT (AGGREGATED FINANCIAL SUMMARY)
+-- ----------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS claims.claim_payment (
+  id                         BIGSERIAL PRIMARY KEY,
+  claim_key_id               BIGINT NOT NULL REFERENCES claims.claim_key(id) ON DELETE CASCADE,
+  
+  -- === FINANCIAL SUMMARY (aggregated from all remittances) ===
+  total_submitted_amount     NUMERIC(15,2) NOT NULL DEFAULT 0,
+  total_paid_amount          NUMERIC(15,2) NOT NULL DEFAULT 0,
+  total_remitted_amount      NUMERIC(15,2) NOT NULL DEFAULT 0,
+  total_rejected_amount      NUMERIC(15,2) NOT NULL DEFAULT 0,
+  total_denied_amount        NUMERIC(15,2) NOT NULL DEFAULT 0,
+  
+  -- === ACTIVITY COUNTS ===
+  total_activities           INTEGER NOT NULL DEFAULT 0,
+  paid_activities            INTEGER NOT NULL DEFAULT 0,
+  partially_paid_activities  INTEGER NOT NULL DEFAULT 0,
+  rejected_activities        INTEGER NOT NULL DEFAULT 0,
+  pending_activities         INTEGER NOT NULL DEFAULT 0,
+  
+  -- === LIFECYCLE TRACKING ===
+  remittance_count           INTEGER NOT NULL DEFAULT 0,
+  resubmission_count         INTEGER NOT NULL DEFAULT 0,
+  
+  -- === CURRENT STATUS ===
+  payment_status             VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  
+  -- === LIFECYCLE DATES ===
+  first_submission_date      DATE,
+  last_submission_date       DATE,
+  first_remittance_date      DATE,
+  last_remittance_date       DATE,
+  first_payment_date         DATE,
+  last_payment_date          DATE,
+  latest_settlement_date     DATE,
+  
+  -- === LIFECYCLE METRICS ===
+  days_to_first_payment      INTEGER,
+  days_to_final_settlement   INTEGER,
+  processing_cycles          INTEGER NOT NULL DEFAULT 1,
+  
+  -- === PAYMENT REFERENCES ===
+  latest_payment_reference   VARCHAR(100),
+  payment_references         TEXT[],
+  
+  -- === BUSINESS TRANSACTION TIME ===
+  tx_at                      TIMESTAMPTZ NOT NULL,
+  
+  -- === AUDIT TIMESTAMPS ===
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  -- === CONSTRAINTS ===
+  CONSTRAINT uq_claim_payment_claim_key UNIQUE (claim_key_id),
+  CONSTRAINT ck_claim_payment_status CHECK (payment_status IN ('FULLY_PAID', 'PARTIALLY_PAID', 'REJECTED', 'PENDING')),
+  CONSTRAINT ck_claim_payment_amounts CHECK (
+    total_paid_amount >= 0 AND 
+    total_remitted_amount >= 0 AND 
+    total_rejected_amount >= 0 AND
+    total_denied_amount >= 0 AND
+    total_submitted_amount >= 0
+  ),
+  CONSTRAINT ck_claim_payment_activities CHECK (
+    total_activities >= 0 AND
+    paid_activities >= 0 AND
+    partially_paid_activities >= 0 AND
+    rejected_activities >= 0 AND
+    pending_activities >= 0 AND
+    (paid_activities + partially_paid_activities + rejected_activities + pending_activities) = total_activities
+  ),
+  CONSTRAINT ck_claim_payment_dates CHECK (
+    (first_submission_date IS NULL OR first_submission_date <= CURRENT_DATE + INTERVAL '30 days') AND
+    (first_payment_date IS NULL OR first_payment_date <= CURRENT_DATE + INTERVAL '30 days') AND
+    (first_submission_date IS NULL OR last_submission_date IS NULL OR first_submission_date <= last_submission_date) AND
+    (first_payment_date IS NULL OR last_payment_date IS NULL OR first_payment_date <= last_payment_date)
+  )
+);
+
+COMMENT ON TABLE claims.claim_payment IS 'Aggregated financial summary and lifecycle tracking for claims - ONE ROW PER CLAIM';
+COMMENT ON COLUMN claims.claim_payment.claim_key_id IS 'Canonical claim identifier - UNIQUE constraint ensures one row per claim';
+COMMENT ON COLUMN claims.claim_payment.total_submitted_amount IS 'Total amount submitted across all activities';
+COMMENT ON COLUMN claims.claim_payment.total_paid_amount IS 'Total amount paid across all remittances';
+COMMENT ON COLUMN claims.claim_payment.total_remitted_amount IS 'Total amount remitted (may differ from paid)';
+COMMENT ON COLUMN claims.claim_payment.total_rejected_amount IS 'Total amount rejected/denied';
+COMMENT ON COLUMN claims.claim_payment.payment_status IS 'Current payment status: FULLY_PAID, PARTIALLY_PAID, REJECTED, PENDING';
+COMMENT ON COLUMN claims.claim_payment.processing_cycles IS 'Total submission + resubmission cycles';
+COMMENT ON COLUMN claims.claim_payment.payment_references IS 'Array of all payment references from remittances';
+COMMENT ON COLUMN claims.claim_payment.tx_at IS 'Business transaction time from XML header';
+
+-- === INDEXES FOR PERFORMANCE ===
+CREATE INDEX IF NOT EXISTS idx_claim_payment_claim_key ON claims.claim_payment(claim_key_id);
+CREATE INDEX IF NOT EXISTS idx_claim_payment_status ON claims.claim_payment(payment_status);
+CREATE INDEX IF NOT EXISTS idx_claim_payment_tx_at ON claims.claim_payment(tx_at);
+CREATE INDEX IF NOT EXISTS idx_claim_payment_dates ON claims.claim_payment(first_payment_date, last_payment_date);
+CREATE INDEX IF NOT EXISTS idx_claim_payment_settlement ON claims.claim_payment(latest_settlement_date);
+CREATE INDEX IF NOT EXISTS idx_claim_payment_amounts ON claims.claim_payment(total_submitted_amount, total_paid_amount);
+CREATE INDEX IF NOT EXISTS idx_claim_payment_cycles ON claims.claim_payment(processing_cycles, resubmission_count);
+
+-- === TRIGGERS ===
+CREATE TRIGGER trg_claim_payment_updated_at
+  BEFORE UPDATE ON claims.claim_payment
+  FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
+
+-- ----------------------------------------------------------------------------------------------------------
+-- 5.17 CLAIM ACTIVITY SUMMARY (ACTIVITY-LEVEL FINANCIAL TRACKING)
+-- ----------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS claims.claim_activity_summary (
+  id                         BIGSERIAL PRIMARY KEY,
+  claim_key_id               BIGINT NOT NULL REFERENCES claims.claim_key(id) ON DELETE CASCADE,
+  activity_id                TEXT NOT NULL,
+  
+  -- === FINANCIAL METRICS PER ACTIVITY ===
+  submitted_amount           NUMERIC(15,2) NOT NULL DEFAULT 0,
+  paid_amount               NUMERIC(15,2) NOT NULL DEFAULT 0,
+  rejected_amount           NUMERIC(15,2) NOT NULL DEFAULT 0,
+  denied_amount             NUMERIC(15,2) NOT NULL DEFAULT 0,
+  
+  -- === ACTIVITY STATUS ===
+  activity_status           VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  
+  -- === LIFECYCLE TRACKING ===
+  remittance_count          INTEGER NOT NULL DEFAULT 0,
+  denial_codes              TEXT[],
+  
+  -- === DATES ===
+  first_payment_date        DATE,
+  last_payment_date         DATE,
+  days_to_first_payment     INTEGER,
+  
+  -- === BUSINESS TRANSACTION TIME ===
+  tx_at                     TIMESTAMPTZ NOT NULL,
+  
+  -- === AUDIT TIMESTAMPS ===
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  -- === CONSTRAINTS ===
+  CONSTRAINT uq_activity_summary UNIQUE (claim_key_id, activity_id),
+  CONSTRAINT ck_activity_status CHECK (activity_status IN ('FULLY_PAID', 'PARTIALLY_PAID', 'REJECTED', 'PENDING')),
+  CONSTRAINT ck_activity_amounts CHECK (
+    paid_amount >= 0 AND 
+    rejected_amount >= 0 AND
+    denied_amount >= 0 AND
+    submitted_amount >= 0
+  )
+);
+
+COMMENT ON TABLE claims.claim_activity_summary IS 'Activity-level financial summary and tracking - ONE ROW PER ACTIVITY';
+COMMENT ON COLUMN claims.claim_activity_summary.claim_key_id IS 'Canonical claim identifier';
+COMMENT ON COLUMN claims.claim_activity_summary.activity_id IS 'Business activity identifier';
+COMMENT ON COLUMN claims.claim_activity_summary.activity_status IS 'Activity payment status: FULLY_PAID, PARTIALLY_PAID, REJECTED, PENDING';
+COMMENT ON COLUMN claims.claim_activity_summary.denial_codes IS 'Array of denial codes for this activity';
+
+-- === INDEXES ===
+CREATE INDEX IF NOT EXISTS idx_activity_summary_claim_key ON claims.claim_activity_summary(claim_key_id);
+CREATE INDEX IF NOT EXISTS idx_activity_summary_activity_id ON claims.claim_activity_summary(activity_id);
+CREATE INDEX IF NOT EXISTS idx_activity_summary_status ON claims.claim_activity_summary(activity_status);
+CREATE INDEX IF NOT EXISTS idx_activity_summary_amounts ON claims.claim_activity_summary(submitted_amount, paid_amount);
+
+-- === TRIGGERS ===
+CREATE TRIGGER trg_activity_summary_updated_at
+  BEFORE UPDATE ON claims.claim_activity_summary
+  FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
+
+-- ----------------------------------------------------------------------------------------------------------
+-- 5.18 CLAIM FINANCIAL TIMELINE (EVENT-BASED FINANCIAL HISTORY)
+-- ----------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS claims.claim_financial_timeline (
+  id                         BIGSERIAL PRIMARY KEY,
+  claim_key_id               BIGINT NOT NULL REFERENCES claims.claim_key(id) ON DELETE CASCADE,
+  event_type                 VARCHAR(20) NOT NULL,
+  event_date                 DATE NOT NULL,
+  
+  -- === FINANCIAL IMPACT ===
+  amount                     NUMERIC(15,2) NOT NULL,
+  cumulative_paid            NUMERIC(15,2) NOT NULL,
+  cumulative_rejected        NUMERIC(15,2) NOT NULL,
+  
+  -- === EVENT DETAILS ===
+  payment_reference          VARCHAR(100),
+  denial_code                VARCHAR(50),
+  event_description          TEXT,
+  
+  -- === BUSINESS TRANSACTION TIME ===
+  tx_at                      TIMESTAMPTZ NOT NULL,
+  
+  -- === AUDIT TIMESTAMPS ===
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  -- === CONSTRAINTS ===
+  CONSTRAINT ck_financial_timeline_event_type CHECK (event_type IN ('SUBMISSION', 'PAYMENT', 'DENIAL', 'RESUBMISSION')),
+  CONSTRAINT ck_financial_timeline_amounts CHECK (
+    amount >= 0 AND 
+    cumulative_paid >= 0 AND
+    cumulative_rejected >= 0
+  )
+);
+
+COMMENT ON TABLE claims.claim_financial_timeline IS 'Event-based financial timeline for claims - ONE ROW PER FINANCIAL EVENT';
+COMMENT ON COLUMN claims.claim_financial_timeline.claim_key_id IS 'Canonical claim identifier';
+COMMENT ON COLUMN claims.claim_financial_timeline.event_type IS 'Type of financial event: SUBMISSION, PAYMENT, DENIAL, RESUBMISSION';
+COMMENT ON COLUMN claims.claim_financial_timeline.cumulative_paid IS 'Cumulative paid amount up to this event';
+COMMENT ON COLUMN claims.claim_financial_timeline.cumulative_rejected IS 'Cumulative rejected amount up to this event';
+
+-- === INDEXES ===
+CREATE INDEX IF NOT EXISTS idx_financial_timeline_claim_key ON claims.claim_financial_timeline(claim_key_id);
+CREATE INDEX IF NOT EXISTS idx_financial_timeline_date ON claims.claim_financial_timeline(event_date);
+CREATE INDEX IF NOT EXISTS idx_financial_timeline_type ON claims.claim_financial_timeline(event_type);
+CREATE INDEX IF NOT EXISTS idx_financial_timeline_tx_at ON claims.claim_financial_timeline(tx_at);
+
+-- ----------------------------------------------------------------------------------------------------------
+-- 5.19 PAYER PERFORMANCE SUMMARY (PAYER PERFORMANCE METRICS)
+-- ----------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS claims.payer_performance_summary (
+  id                         BIGSERIAL PRIMARY KEY,
+  payer_ref_id               BIGINT NOT NULL REFERENCES claims_ref.payer(id) ON DELETE CASCADE,
+  month_bucket               DATE NOT NULL,
+  
+  -- === PERFORMANCE METRICS ===
+  total_claims               INTEGER NOT NULL DEFAULT 0,
+  total_submitted_amount     NUMERIC(15,2) NOT NULL DEFAULT 0,
+  total_paid_amount          NUMERIC(15,2) NOT NULL DEFAULT 0,
+  total_rejected_amount      NUMERIC(15,2) NOT NULL DEFAULT 0,
+  
+  -- === PERFORMANCE RATES ===
+  payment_rate               NUMERIC(5,2) NOT NULL DEFAULT 0,
+  rejection_rate             NUMERIC(5,2) NOT NULL DEFAULT 0,
+  avg_processing_days        NUMERIC(5,2) NOT NULL DEFAULT 0,
+  
+  -- === AUDIT TIMESTAMPS ===
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  -- === CONSTRAINTS ===
+  CONSTRAINT uq_payer_performance UNIQUE (payer_ref_id, month_bucket),
+  CONSTRAINT ck_payer_performance_amounts CHECK (
+    total_submitted_amount >= 0 AND 
+    total_paid_amount >= 0 AND
+    total_rejected_amount >= 0
+  ),
+  CONSTRAINT ck_payer_performance_rates CHECK (
+    payment_rate >= 0 AND payment_rate <= 100 AND
+    rejection_rate >= 0 AND rejection_rate <= 100
+  )
+);
+
+COMMENT ON TABLE claims.payer_performance_summary IS 'Payer performance metrics - ONE ROW PER PAYER PER MONTH';
+COMMENT ON COLUMN claims.payer_performance_summary.payer_ref_id IS 'Reference to payer master data';
+COMMENT ON COLUMN claims.payer_performance_summary.month_bucket IS 'Month bucket for performance tracking';
+COMMENT ON COLUMN claims.payer_performance_summary.payment_rate IS 'Payment rate percentage (0-100)';
+COMMENT ON COLUMN claims.payer_performance_summary.rejection_rate IS 'Rejection rate percentage (0-100)';
+
+-- === INDEXES ===
+CREATE INDEX IF NOT EXISTS idx_payer_performance_payer ON claims.payer_performance_summary(payer_ref_id);
+CREATE INDEX IF NOT EXISTS idx_payer_performance_month ON claims.payer_performance_summary(month_bucket);
+CREATE INDEX IF NOT EXISTS idx_payer_performance_rates ON claims.payer_performance_summary(payment_rate, rejection_rate);
+
+-- === TRIGGERS ===
+CREATE TRIGGER trg_payer_performance_updated_at
+  BEFORE UPDATE ON claims.payer_performance_summary
+  FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
+
+-- ----------------------------------------------------------------------------------------------------------
+-- 5.20 CLAIM RESUBMISSION
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.claim_resubmission (
   id                 BIGSERIAL PRIMARY KEY,
@@ -818,7 +1081,7 @@ CREATE TRIGGER trg_claim_resubmission_updated_at
   FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.17 CLAIM CONTRACT
+-- 5.21 CLAIM CONTRACT
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.claim_contract (
   id           BIGSERIAL PRIMARY KEY,
@@ -837,7 +1100,7 @@ CREATE TRIGGER trg_claim_contract_updated_at
   FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.18 CLAIM ATTACHMENT
+-- 5.22 CLAIM ATTACHMENT
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.claim_attachment (
   id             BIGSERIAL PRIMARY KEY,
@@ -858,7 +1121,7 @@ CREATE INDEX IF NOT EXISTS idx_claim_attachment_event ON claims.claim_attachment
 CREATE UNIQUE INDEX IF NOT EXISTS uq_claim_attachment_key_event_file ON claims.claim_attachment(claim_key_id, claim_event_id, COALESCE(file_name, ''));
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.19 EVENT OBSERVATION
+-- 5.23 EVENT OBSERVATION
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.event_observation (
   id                        BIGSERIAL PRIMARY KEY,
@@ -878,7 +1141,7 @@ CREATE INDEX IF NOT EXISTS idx_event_observation_type ON claims.event_observatio
 CREATE INDEX IF NOT EXISTS idx_event_observation_code ON claims.event_observation(obs_code);
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.20 CODE DISCOVERY AUDIT
+-- 5.24 CODE DISCOVERY AUDIT
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.code_discovery_audit (
   id                 BIGSERIAL PRIMARY KEY,
@@ -899,7 +1162,7 @@ CREATE INDEX IF NOT EXISTS idx_code_discovery_audit_code ON claims.code_discover
 CREATE INDEX IF NOT EXISTS idx_code_discovery_audit_discovered ON claims.code_discovery_audit(discovered_at);
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.21 FACILITY DHPO CONFIG
+-- 5.25 FACILITY DHPO CONFIG
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.facility_dhpo_config (
   id                    BIGSERIAL PRIMARY KEY,
@@ -925,7 +1188,7 @@ CREATE TRIGGER trg_facility_dhpo_config_updated_at
   FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.22 INTEGRATION TOGGLE
+-- 5.26 INTEGRATION TOGGLE
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.integration_toggle (
   code       TEXT PRIMARY KEY,
@@ -940,7 +1203,7 @@ CREATE TRIGGER trg_integration_toggle_updated_at
   FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.23 VERIFICATION RULE
+-- 5.27 VERIFICATION RULE
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.verification_rule (
   id          BIGSERIAL PRIMARY KEY,
@@ -959,7 +1222,7 @@ CREATE INDEX IF NOT EXISTS idx_verification_rule_active ON claims.verification_r
 CREATE INDEX IF NOT EXISTS idx_verification_rule_severity ON claims.verification_rule(severity);
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.24 VERIFICATION RUN
+-- 5.28 VERIFICATION RUN
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.verification_run (
   id                 BIGSERIAL PRIMARY KEY,
@@ -976,7 +1239,7 @@ CREATE INDEX IF NOT EXISTS idx_verification_run_file ON claims.verification_run(
 CREATE INDEX IF NOT EXISTS idx_verification_run_started ON claims.verification_run(started_at);
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.25 VERIFICATION RESULT
+-- 5.29 VERIFICATION RESULT
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.verification_result (
   id                 BIGSERIAL PRIMARY KEY,
@@ -996,7 +1259,7 @@ CREATE INDEX IF NOT EXISTS idx_verification_result_ok ON claims.verification_res
 
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.27 INGESTION FILE AUDIT
+-- 5.30 INGESTION FILE AUDIT
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.ingestion_file_audit (
   id                          BIGSERIAL PRIMARY KEY,
@@ -1041,7 +1304,7 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_status ON claims.ingestion_f
 CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_validation ON claims.ingestion_file_audit(validation_ok);
 
 -- ----------------------------------------------------------------------------------------------------------
--- 5.28 INGESTION RUN
+-- 5.31 INGESTION RUN
 -- ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claims.ingestion_run (
   id                   BIGSERIAL PRIMARY KEY,
@@ -1127,6 +1390,10 @@ COMMENT ON VIEW claims.v_ingestion_kpis IS 'Hourly KPIs for ingestion processing
 -- - claims.verification_rule_id_seq
 -- - claims.verification_run_id_seq
 -- - claims.claim_resubmission_id_seq
+-- - claims.claim_payment_id_seq
+-- - claims.claim_activity_summary_id_seq
+-- - claims.claim_financial_timeline_id_seq
+-- - claims.payer_performance_summary_id_seq
 
 -- ==========================================================================================================
 -- 8. TRIGGERS
@@ -1151,6 +1418,9 @@ COMMENT ON VIEW claims.v_ingestion_kpis IS 'Hourly KPIs for ingestion processing
 -- - trg_ingestion_file_updated_at
 -- - trg_submission_updated_at
 -- - trg_submission_tx_at
+-- - trg_claim_payment_updated_at
+-- - trg_activity_summary_updated_at
+-- - trg_payer_performance_updated_at
 
 -- ==========================================================================================================
 -- 6. INITIAL DATA AND SEEDING
@@ -1311,6 +1581,10 @@ CREATE INDEX IF NOT EXISTS idx_remittance_activity_denial_ref ON claims.remittan
 CREATE INDEX IF NOT EXISTS idx_remittance_activity_clinician_ref ON claims.remittance_activity(clinician_ref_id);
 CREATE INDEX IF NOT EXISTS idx_remittance_payer_ref ON claims.remittance_claim(payer_ref_id);
 CREATE INDEX IF NOT EXISTS idx_remittance_provider_ref ON claims.remittance_claim(provider_ref_id);
+
+-- Additional indexes for claim_payment table
+CREATE INDEX IF NOT EXISTS idx_claim_payment_status_active ON claims.claim_payment(payment_status) WHERE payment_status != 'PENDING';
+CREATE INDEX IF NOT EXISTS idx_claim_payment_financial_summary ON claims.claim_payment(total_submitted_amount, total_paid_amount, total_rejected_amount);
 
 -- ==========================================================================================================
 -- 10. FINAL NOTES

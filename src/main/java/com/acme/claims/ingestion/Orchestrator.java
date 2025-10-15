@@ -114,6 +114,8 @@
 package com.acme.claims.ingestion;
 
 import com.acme.claims.ingestion.ack.Acker;
+import com.acme.claims.ingestion.audit.IngestionAudit;
+import com.acme.claims.ingestion.audit.RunContext;
 import com.acme.claims.ingestion.config.IngestionProperties;
 import com.acme.claims.ingestion.fetch.Fetcher;
 import com.acme.claims.ingestion.fetch.WorkItem;
@@ -145,6 +147,7 @@ public class Orchestrator {
     private final Pipeline pipeline;
     private final VerifyService verifyService;
     private final Acker acker;
+    private final IngestionAudit audit;
 
     /**
      * # processingFiles - Thread-Safe File Deduplication Set
@@ -178,7 +181,9 @@ public class Orchestrator {
                         @Qualifier("ingestionQueue") BlockingQueue<WorkItem> queue,
                         @Qualifier("ingestionExecutor") TaskExecutor executor,
                         Pipeline pipeline,
-                        VerifyService verifyService, @Qualifier("soapAckerAdapter") Acker acker) {
+                        VerifyService verifyService, 
+                        @Qualifier("soapAckerAdapter") Acker acker,
+                        IngestionAudit audit) {
         this.fetcher = fetcher;
         this.props = props;
         this.queue = queue;
@@ -186,6 +191,7 @@ public class Orchestrator {
         this.pipeline = pipeline;
         this.verifyService = verifyService;
         this.acker = acker;
+        this.audit = audit;
     }
 
     /**
@@ -282,33 +288,54 @@ public class Orchestrator {
     @Scheduled(initialDelayString = "0", fixedDelayString = "${claims.ingestion.poll.fixedDelayMs}")
     public void drain() {
         log.debug("Drain cycle start; queued={}", queue.size());
-        int workers = Math.max(1, props.getConcurrency().getParserWorkers());
-        int capacityHint = Math.max(1, queue.size());
-        int burst = Math.min(workers, capacityHint);
-        int submitted = 0;
-        long deadlineNanos = System.nanoTime() + 2_000_000L; // ~2ms budget
-        // Add more detailed logging in Orchestrator
-        log.info("QUEUE STATUS: size={}, remaining={}, workers={}",
-                queue.size(), queue.remainingCapacity(), workers);
+        
+        // Start ingestion run tracking
+        Long runId = audit.startRunSafely(
+            props.getProfile() != null ? props.getProfile() : "ingestion",
+            fetcher.getClass().getSimpleName(),
+            acker != null ? acker.getClass().getSimpleName() : "NoopAcker",
+            "SCHEDULED_DRAIN"
+        );
+        
+        try {
+            // Set run context for this thread
+            RunContext.setCurrentRunId(runId);
+            
+            int workers = Math.max(1, props.getConcurrency().getParserWorkers());
+            int capacityHint = Math.max(1, queue.size());
+            int burst = Math.min(workers, capacityHint);
+            int submitted = 0;
+            long deadlineNanos = System.nanoTime() + 2_000_000L; // ~2ms budget
+            
+            log.info("QUEUE STATUS: size={}, remaining={}, workers={}, runId={}",
+                    queue.size(), queue.remainingCapacity(), workers, runId);
 
-        while (submitted < burst && System.nanoTime() < deadlineNanos) {
-            WorkItem wi = queue.poll();
-            if (wi == null) break;
-            try {
-                executor.execute(() -> processOne(wi));
-                submitted++;
-            } catch (java.util.concurrent.RejectedExecutionException rex) {
-                boolean requeued = queue.offer(wi);
-                log.warn("Executor saturated; requeued={}, queueSize={}", requeued, queue.size());
-                try { fetcher.pause(); } catch (Exception ignore) {}
-                break;
+            while (submitted < burst && System.nanoTime() < deadlineNanos) {
+                WorkItem wi = queue.poll();
+                if (wi == null) break;
+                try {
+                    executor.execute(() -> processOne(wi));
+                    submitted++;
+                } catch (java.util.concurrent.RejectedExecutionException rex) {
+                    boolean requeued = queue.offer(wi);
+                    log.warn("Executor saturated; requeued={}, queueSize={}", requeued, queue.size());
+                    try { fetcher.pause(); } catch (Exception ignore) {}
+                    break;
+                }
+            }
+
+            if (queue.remainingCapacity() > (workers * 2)) {
+                try { fetcher.resume(); } catch (Exception ignore) {}
+            }
+            log.debug("Drain cycle end; dispatched={}, runId={}", submitted, runId);
+            
+        } finally {
+            // Always clear run context and end the run
+            RunContext.clear();
+            if (runId != null) {
+                audit.endRunSafely(runId);
             }
         }
-
-        if (queue.remainingCapacity() > (workers * 2)) {
-            try { fetcher.resume(); } catch (Exception ignore) {}
-        }
-        log.debug("Drain cycle end; dispatched={}", submitted);
     }
 
     /**
@@ -361,6 +388,7 @@ public class Orchestrator {
      */
     private void processOne(WorkItem wi) {
         final String fileId = wi.fileId();
+        final Long currentRunId = RunContext.getCurrentRunId();
 
         // Check for duplicate processing - prevent multiple threads from processing same file
         if (!processingFiles.add(fileId)) {
@@ -371,16 +399,26 @@ public class Orchestrator {
 
         boolean success = false;
         long t0 = System.nanoTime();
+        Long ingestionFileId = null;
+        
         try (org.slf4j.MDC.MDCCloseable ignored = org.slf4j.MDC.putCloseable("fileId", fileId);
              org.slf4j.MDC.MDCCloseable ignored2 = org.slf4j.MDC.putCloseable("fileName", wi.fileName());
              org.slf4j.MDC.MDCCloseable ignored3 = org.slf4j.MDC.putCloseable("source", wi.source())) {
 
-            log.info("ORCHESTRATOR_PROCESS_START fileId={} fileName={} source={}",
-                fileId, wi.fileName(), wi.source());
+            log.info("ORCHESTRATOR_PROCESS_START fileId={} fileName={} source={} runId={}",
+                fileId, wi.fileName(), wi.source(), currentRunId);
 
             var result = pipeline.process(wi);
-            boolean verified = verifyService.verifyFile(result.ingestionFileId(), fileId);
+            ingestionFileId = result.ingestionFileId();
+            boolean verified = verifyService.verifyFile(ingestionFileId, fileId);
             success = verified;
+
+            // Audit successful file processing
+            if (currentRunId != null && ingestionFileId != null) {
+                audit.fileOkSafely(currentRunId, ingestionFileId, verified, 
+                    result.parsedClaims(), result.persistedClaims(),
+                    result.parsedActivities(), result.persistedActivities());
+            }
 
             long ms = (System.nanoTime() - t0) / 1_000_000;
             if (ms > 2000) {
@@ -396,6 +434,12 @@ public class Orchestrator {
             log.error("ORCHESTRATOR_PROCESS_FAIL fileId={} fileName={} source={} : {}",
                 fileId, wi.fileName(), wi.source(), ex.getMessage(), ex);
             success = false;
+            
+            // Audit failed file processing
+            if (currentRunId != null && ingestionFileId != null) {
+                audit.fileFailSafely(currentRunId, ingestionFileId, 
+                    ex.getClass().getSimpleName(), ex.getMessage());
+            }
         } finally {
             // Always remove from processing set, regardless of success/failure
             processingFiles.remove(fileId);
