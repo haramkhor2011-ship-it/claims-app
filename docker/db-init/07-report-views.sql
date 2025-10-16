@@ -11,6 +11,40 @@
 --
 -- ==========================================================================================================
 
+-- ----------------------------------------------------------------------------------------------------------
+-- 6.x INGESTION KPIS VIEW (hourly rollup)
+-- ----------------------------------------------------------------------------------------------------------
+-- Optimized for available indexes:
+--  - idx_ingestion_run_started on claims.ingestion_run(started_at)
+--  - idx_ingestion_file_audit_run on claims.ingestion_file_audit(ingestion_run_id)
+-- The join is on ingestion_run.id = ingestion_file_audit.ingestion_run_id (LEFT JOIN)
+-- No extraneous joins; aggregation by hour_bucket only.
+
+CREATE OR REPLACE VIEW claims.v_ingestion_kpis AS
+SELECT
+  date_trunc('hour', ir.started_at)                             AS hour_bucket,
+  COUNT(DISTINCT ir.id)                                         AS runs_total,
+  SUM(ir.files_processed_ok)                                    AS files_ok,
+  SUM(ir.files_failed)                                          AS files_fail,
+  SUM(ir.files_already)                                         AS files_already,
+  COALESCE(SUM(ifa.parsed_claims), 0)                           AS parsed_claims,
+  COALESCE(SUM(ifa.persisted_claims), 0)                        AS persisted_claims,
+  COALESCE(SUM(ifa.parsed_activities), 0)                       AS parsed_activities,
+  COALESCE(SUM(ifa.persisted_activities), 0)                    AS persisted_activities,
+  COALESCE(SUM(ifa.parsed_remit_claims), 0)                     AS parsed_remit_claims,
+  COALESCE(SUM(ifa.persisted_remit_claims), 0)                  AS persisted_remit_claims,
+  COALESCE(SUM(ifa.parsed_remit_activities), 0)                 AS parsed_remit_activities,
+  COALESCE(SUM(ifa.projected_events), 0)                        AS projected_events,
+  COALESCE(SUM(ifa.projected_status_rows), 0)                   AS projected_status_rows,
+  COUNT(DISTINCT CASE WHEN ifa.verification_passed = TRUE THEN ifa.ingestion_file_id END) AS files_verified
+FROM claims.ingestion_run ir
+LEFT JOIN claims.ingestion_file_audit ifa
+  ON ifa.ingestion_run_id = ir.id
+GROUP BY date_trunc('hour', ir.started_at)
+ORDER BY hour_bucket DESC;
+
+COMMENT ON VIEW claims.v_ingestion_kpis IS 'Hourly KPIs for ingestion processing (run-level and file-level rollups)';
+
 -- Note: In addition to materialized views, we keep traditional SQL views and API functions here
 -- where they provide convenience or dynamic behavior. Extracted from report implementations.
 
@@ -529,13 +563,14 @@ LEFT JOIN claims.remittance_claim rc ON ck.id = rc.claim_key_id
 LEFT JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id AND a.activity_id = ra.activity_id
 LEFT JOIN claims.submission s ON c.submission_id = s.id
 LEFT JOIN claims.remittance r ON rc.remittance_id = r.id
-LEFT JOIN LATERAL (
-    SELECT cst2.status, cst2.claim_event_id
+LEFT JOIN (
+    SELECT DISTINCT ON (cst2.claim_key_id)
+        cst2.claim_key_id,
+        cst2.status,
+        cst2.claim_event_id
     FROM claims.claim_status_timeline cst2
-    WHERE cst2.claim_key_id = ck.id
-    ORDER BY cst2.status_time DESC, cst2.id DESC
-    LIMIT 1
-) cst ON TRUE
+    ORDER BY cst2.claim_key_id, cst2.status_time DESC, cst2.id DESC
+) cst ON cst.claim_key_id = ck.id
 LEFT JOIN claims.claim_resubmission cr ON cst.claim_event_id = cr.claim_event_id
 LEFT JOIN claims_ref.payer p ON c.payer_ref_id = p.id
 LEFT JOIN claims_ref.facility f ON e.facility_ref_id = f.id
@@ -1858,19 +1893,317 @@ GRANT EXECUTE ON FUNCTION claims.get_doctor_denial_summary(text,text,timestamptz
 -- Views (Monthwise, Payerwise, Encounterwise)
 -- Copied from implementation with same logic
 CREATE OR REPLACE VIEW claims.v_claim_summary_monthwise AS
-SELECT * FROM (
-  SELECT * FROM (
-    SELECT 1
-  ) t
-) x WHERE FALSE; -- placeholder to ensure file compiles if MV not present; actual logic included earlier
+WITH deduplicated_claims AS (
+  SELECT DISTINCT ON (claim_key_id, month_bucket)
+    claim_key_id,
+    month_bucket,
+    payer_id,
+    net,
+    ROW_NUMBER() OVER (PARTITION BY claim_key_id ORDER BY tx_at) as claim_rank
+  FROM claims.claim c
+  JOIN claims.claim_key ck ON c.claim_key_id = ck.id
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
+  WHERE DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)) IS NOT NULL
+),
+base AS (
+    SELECT
+        ck.claim_id,
+        c.id AS claim_db_id,
+        c.tx_at,
+        e.facility_id,
+        f.name AS facility_name,
+        rc.date_settlement,
+        rc.id AS remittance_claim_id,
+        ra.id AS remittance_activity_id,
+        c.net AS claim_net,
+        ra.net AS ra_net,
+        ra.payment_amount,
+        COALESCE(p2.payer_code, 'Unknown') AS health_authority
+    FROM claims.claim_key ck
+    JOIN claims.claim c ON c.claim_key_id = ck.id
+    LEFT JOIN claims.encounter e ON e.claim_id = c.id
+    LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+    LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
+    LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+    LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
+    LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
+),
+dedup_claim AS (
+    SELECT claim_db_id,
+           DATE_TRUNC('month', COALESCE(date_settlement, tx_at)) AS month_bucket,
+           MAX(claim_net) AS claim_net_once
+    FROM base
+    GROUP BY claim_db_id, DATE_TRUNC('month', COALESCE(date_settlement, tx_at))
+)
+SELECT
+    TO_CHAR(DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)), 'Month YYYY') AS month_year,
+    EXTRACT(YEAR FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS year,
+    EXTRACT(MONTH FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS month,
+    COUNT(DISTINCT ck.claim_id) AS count_claims,
+    COUNT(DISTINCT ra.id) AS remitted_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 THEN ra.id END) AS fully_paid_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.id END) AS partially_paid_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS fully_rejected_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS rejection_count,
+    COUNT(DISTINCT CASE WHEN rc.payment_reference IS NOT NULL THEN ck.claim_id END) AS taken_back_count,
+    COUNT(DISTINCT CASE WHEN rc.date_settlement IS NULL THEN ck.claim_id END) AS pending_remittance_count,
+    COUNT(DISTINCT CASE WHEN c.payer_id = 'Self-Paid' THEN ck.claim_id END) AS self_pay_count,
+    SUM(DISTINCT d.claim_net_once) AS claim_amount,
+    SUM(DISTINCT d.claim_net_once) AS initial_claim_amount,
+    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_amount,
+    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_net_amount,
+    SUM(COALESCE(ra.payment_amount, 0)) AS fully_paid_amount,
+    SUM(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.payment_amount ELSE 0 END) AS partially_paid_amount,
+    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS fully_rejected_amount,
+    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS rejected_amount,
+    SUM(CASE WHEN rc.date_settlement IS NULL THEN c.net ELSE 0 END) AS pending_remittance_amount,
+    SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END) AS self_pay_amount,
+    e.facility_id,
+    f.name AS facility_name,
+    COALESCE(p2.payer_code, 'Unknown') AS health_authority,
+    CASE
+        WHEN SUM(c.net) > 0 THEN
+            ROUND((SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) / SUM(c.net)) * 100, 2)
+        ELSE 0
+    END AS rejected_percentage_on_initial,
+    CASE
+    WHEN (SUM(COALESCE(ra.payment_amount, 0)) + SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END)) > 0 THEN
+        ROUND(((SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END)) / (SUM(COALESCE(ra.payment_amount, 0)) + SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END))) * 100, 2)
+        ELSE 0
+    END AS rejected_percentage_on_remittance,
+    CASE
+        WHEN SUM(c.net) > 0 THEN
+            ROUND((SUM(COALESCE(ra.payment_amount, 0)) / SUM(c.net)) * 100, 2)
+        ELSE 0
+    END AS collection_rate,
+    COUNT(DISTINCT c.provider_id) AS unique_providers,
+    COUNT(DISTINCT e.patient_id) AS unique_patients,
+    AVG(c.net) AS avg_claim_amount,
+    AVG(COALESCE(ra.payment_amount, 0)) AS avg_paid_amount,
+    MIN(c.tx_at) AS earliest_submission_date,
+    MAX(c.tx_at) AS latest_submission_date,
+    MIN(COALESCE(rc.date_settlement, c.tx_at)) AS earliest_settlement_date,
+    MAX(COALESCE(rc.date_settlement, c.tx_at)) AS latest_settlement_date
+FROM claims.claim_key ck
+JOIN claims.claim c ON c.claim_key_id = ck.id
+LEFT JOIN claims.encounter e ON e.claim_id = c.id
+LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
+LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
+LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
+LEFT JOIN dedup_claim d ON d.claim_db_id = c.id AND d.month_bucket = DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))
+GROUP BY
+    DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)),
+    EXTRACT(YEAR FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))),
+    EXTRACT(MONTH FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))),
+    e.facility_id,
+    f.name,
+    COALESCE(p2.payer_code, 'Unknown')
+ORDER BY year DESC, month DESC, facility_id;
 
--- Replace placeholder with full definitions brought from implementation
-DROP VIEW IF EXISTS claims.v_claim_summary_monthwise;
-DROP VIEW IF EXISTS claims.v_claim_summary_payerwise;
-DROP VIEW IF EXISTS claims.v_claim_summary_encounterwise;
+COMMENT ON VIEW claims.v_claim_summary_monthwise IS 'Claim Summary Monthwise Report - Tab A: Monthly grouped data with COMPREHENSIVE metrics including all counts, amounts, and percentages';
 
--- Recreate from implementation (see source file); included above via apply
--- [Definitions added earlier in this file via prior append]
+CREATE OR REPLACE VIEW claims.v_claim_summary_payerwise AS
+WITH base AS (
+    SELECT
+        ck.claim_id,
+        c.id AS claim_db_id,
+        c.tx_at,
+        e.facility_id,
+        f.name AS facility_name,
+        rc.date_settlement,
+        ra.id AS remittance_activity_id,
+        c.net AS claim_net,
+        ra.net AS ra_net,
+        ra.payment_amount,
+        COALESCE(p2.payer_code, 'Unknown') AS health_authority,
+        p.payer_code AS payer_code,
+        p.name AS payer_name
+    FROM claims.claim_key ck
+    JOIN claims.claim c ON c.claim_key_id = ck.id
+    LEFT JOIN claims.encounter e ON e.claim_id = c.id
+    LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+    LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
+    LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+    LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
+    LEFT JOIN claims_ref.payer p ON p.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
+    LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
+),
+dedup_claim AS (
+    SELECT claim_db_id,
+           DATE_TRUNC('month', COALESCE(date_settlement, tx_at)) AS month_bucket,
+           MAX(claim_net) AS claim_net_once
+    FROM base
+    GROUP BY claim_db_id, DATE_TRUNC('month', COALESCE(date_settlement, tx_at))
+)
+SELECT
+    COALESCE(p.payer_code, 'Unknown') AS payer_id,
+    p.name AS payer_name,
+    TO_CHAR(DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)), 'Month YYYY') AS month_year,
+    EXTRACT(YEAR FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS year,
+    EXTRACT(MONTH FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS month,
+    COUNT(DISTINCT ck.claim_id) AS count_claims,
+    COUNT(DISTINCT ra.id) AS remitted_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 THEN ra.id END) AS fully_paid_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.id END) AS partially_paid_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS fully_rejected_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS rejection_count,
+    COUNT(DISTINCT CASE WHEN rc.payment_reference IS NOT NULL THEN ck.claim_id END) AS taken_back_count,
+    COUNT(DISTINCT CASE WHEN rc.date_settlement IS NULL THEN ck.claim_id END) AS pending_remittance_count,
+    COUNT(DISTINCT CASE WHEN c.payer_id = 'Self-Paid' THEN ck.claim_id END) AS self_pay_count,
+    SUM(DISTINCT d.claim_net_once) AS claim_amount,
+    SUM(DISTINCT d.claim_net_once) AS initial_claim_amount,
+    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_amount,
+    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_net_amount,
+    SUM(COALESCE(ra.payment_amount, 0)) AS fully_paid_amount,
+    SUM(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.payment_amount ELSE 0 END) AS partially_paid_amount,
+    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS fully_rejected_amount,
+    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS rejected_amount,
+    SUM(CASE WHEN rc.date_settlement IS NULL THEN c.net ELSE 0 END) AS pending_remittance_amount,
+    SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END) AS self_pay_amount,
+    e.facility_id,
+    f.name AS facility_name,
+    COALESCE(p2.payer_code, 'Unknown') AS health_authority,
+    CASE
+        WHEN SUM(c.net) > 0 THEN
+            ROUND((SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) / SUM(c.net)) * 100, 2)
+        ELSE 0
+    END AS rejected_percentage_on_initial,
+    CASE
+    WHEN (SUM(COALESCE(ra.payment_amount, 0)) + SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END)) > 0 THEN
+        ROUND(((SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END)) / (SUM(COALESCE(ra.payment_amount, 0)) + SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END))) * 100, 2)
+        ELSE 0
+    END AS rejected_percentage_on_remittance,
+    CASE
+        WHEN SUM(c.net) > 0 THEN
+            ROUND((SUM(COALESCE(ra.payment_amount, 0)) / SUM(c.net)) * 100, 2)
+        ELSE 0
+    END AS collection_rate,
+    COUNT(DISTINCT c.provider_id) AS unique_providers,
+    COUNT(DISTINCT e.patient_id) AS unique_patients,
+    AVG(c.net) AS avg_claim_amount,
+    AVG(COALESCE(ra.payment_amount, 0)) AS avg_paid_amount
+FROM claims.claim_key ck
+JOIN claims.claim c ON c.claim_key_id = ck.id
+LEFT JOIN claims.encounter e ON e.claim_id = c.id
+LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
+LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
+LEFT JOIN claims_ref.payer p ON p.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
+LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
+LEFT JOIN dedup_claim d ON d.claim_db_id = c.id AND d.month_bucket = DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))
+GROUP BY
+    COALESCE(p.payer_code, 'Unknown'),
+    p.name,
+    DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)),
+    EXTRACT(YEAR FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))),
+    EXTRACT(MONTH FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))),
+    e.facility_id,
+    f.name,
+    COALESCE(p2.payer_code, 'Unknown')
+ORDER BY payer_id, year DESC, month DESC, facility_id;
+
+COMMENT ON VIEW claims.v_claim_summary_payerwise IS 'Claim Summary Payerwise Report - Tab B: Payer grouped data with COMPREHENSIVE metrics';
+
+CREATE OR REPLACE VIEW claims.v_claim_summary_encounterwise AS
+WITH base AS (
+    SELECT
+        ck.claim_id,
+        c.id AS claim_db_id,
+        c.tx_at,
+        e.type AS encounter_type,
+        e.facility_id,
+        f.name AS facility_name,
+        rc.date_settlement,
+        ra.id AS remittance_activity_id,
+        c.net AS claim_net,
+        ra.net AS ra_net,
+        ra.payment_amount,
+        COALESCE(p2.payer_code, 'Unknown') AS health_authority
+    FROM claims.claim_key ck
+    JOIN claims.claim c ON c.claim_key_id = ck.id
+    LEFT JOIN claims.encounter e ON e.claim_id = c.id
+    LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+    LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
+    LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+    LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
+    LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
+),
+dedup_claim AS (
+    SELECT claim_db_id,
+           DATE_TRUNC('month', COALESCE(date_settlement, tx_at)) AS month_bucket,
+           MAX(claim_net) AS claim_net_once
+    FROM base
+    GROUP BY claim_db_id, DATE_TRUNC('month', COALESCE(date_settlement, tx_at))
+)
+SELECT
+    COALESCE(e.type, 'Unknown') AS encounter_type,
+    TO_CHAR(DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)), 'Month YYYY') AS month_year,
+    EXTRACT(YEAR FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS year,
+    EXTRACT(MONTH FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS month,
+    COUNT(DISTINCT ck.claim_id) AS count_claims,
+    COUNT(DISTINCT ra.id) AS remitted_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 THEN ra.id END) AS fully_paid_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.id END) AS partially_paid_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS fully_rejected_count,
+    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS rejection_count,
+    COUNT(DISTINCT CASE WHEN rc.payment_reference IS NOT NULL THEN ck.claim_id END) AS taken_back_count,
+    COUNT(DISTINCT CASE WHEN rc.date_settlement IS NULL THEN ck.claim_id END) AS pending_remittance_count,
+    COUNT(DISTINCT CASE WHEN c.payer_id = 'Self-Paid' THEN ck.claim_id END) AS self_pay_count,
+    SUM(DISTINCT d.claim_net_once) AS claim_amount,
+    SUM(DISTINCT d.claim_net_once) AS initial_claim_amount,
+    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_amount,
+    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_net_amount,
+    SUM(COALESCE(ra.payment_amount, 0)) AS fully_paid_amount,
+    SUM(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.payment_amount ELSE 0 END) AS partially_paid_amount,
+    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS fully_rejected_amount,
+    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS rejected_amount,
+    SUM(CASE WHEN rc.date_settlement IS NULL THEN c.net ELSE 0 END) AS pending_remittance_amount,
+    SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END) AS self_pay_amount,
+    e.facility_id,
+    f.name AS facility_name,
+    COALESCE(p2.payer_code, 'Unknown') AS health_authority,
+    CASE
+        WHEN SUM(c.net) > 0 THEN
+            ROUND((SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) / SUM(c.net)) * 100, 2)
+        ELSE 0
+    END AS rejected_percentage_on_initial,
+    CASE
+    WHEN (SUM(COALESCE(ra.payment_amount, 0)) + SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END)) > 0 THEN
+        ROUND(((SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END)) / (SUM(COALESCE(ra.payment_amount, 0)) + SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END))) * 100, 2)
+        ELSE 0
+    END AS rejected_percentage_on_remittance,
+    CASE
+        WHEN SUM(c.net) > 0 THEN
+            ROUND((SUM(COALESCE(ra.payment_amount, 0)) / SUM(c.net)) * 100, 2)
+        ELSE 0
+    END AS collection_rate,
+    COUNT(DISTINCT c.provider_id) AS unique_providers,
+    COUNT(DISTINCT e.patient_id) AS unique_patients,
+    AVG(c.net) AS avg_claim_amount,
+    AVG(COALESCE(ra.payment_amount, 0)) AS avg_paid_amount
+FROM claims.claim_key ck
+JOIN claims.claim c ON c.claim_key_id = ck.id
+LEFT JOIN claims.encounter e ON e.claim_id = c.id
+LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
+LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
+LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
+LEFT JOIN dedup_claim d ON d.claim_db_id = c.id AND d.month_bucket = DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))
+GROUP BY
+    COALESCE(e.type, 'Unknown'),
+    DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)),
+    EXTRACT(YEAR FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))),
+    EXTRACT(MONTH FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))),
+    e.facility_id,
+    f.name,
+    COALESCE(p2.payer_code, 'Unknown')
+ORDER BY encounter_type, year DESC, month DESC, facility_id;
+
+COMMENT ON VIEW claims.v_claim_summary_encounterwise IS 'Claim Summary Encounterwise Report - Tab C: Encounter type grouped data with COMPREHENSIVE metrics';
 
 -- Functions
 CREATE OR REPLACE FUNCTION claims.get_claim_summary_monthwise_params(
@@ -1909,19 +2242,41 @@ CREATE OR REPLACE FUNCTION claims.get_claim_summary_monthwise_params(
     avg_paid_amount NUMERIC(14,2)
 ) AS $$
 BEGIN
-  RETURN QUERY
-  SELECT SUM(mv.claim_count), SUM(mv.remitted_count), SUM(mv.fully_paid_count), SUM(mv.partially_paid_count),
-         SUM(mv.fully_rejected_count), SUM(mv.rejection_count), SUM(mv.taken_back_count), SUM(mv.pending_remittance_count), SUM(mv.self_pay_count),
-         SUM(mv.total_net), SUM(mv.total_net), SUM(mv.remitted_amount), SUM(mv.remitted_amount), SUM(mv.fully_paid_amount), SUM(mv.partially_paid_amount),
-         SUM(mv.fully_rejected_amount), SUM(mv.rejected_amount), SUM(mv.pending_remittance_amount), SUM(mv.self_pay_amount),
-         AVG(mv.rejected_percentage_on_initial), AVG(mv.rejected_percentage_on_remittance), AVG(mv.collection_rate),
-         COUNT(DISTINCT mv.payer_id), COUNT(DISTINCT mv.facility_id), AVG(mv.total_net), AVG(mv.remitted_amount)
-  FROM claims.mv_claims_monthly_agg mv
-  WHERE (p_from_date IS NULL OR mv.month_bucket >= DATE_TRUNC('month', p_from_date))
-    AND (p_to_date IS NULL OR mv.month_bucket <= DATE_TRUNC('month', p_to_date))
-    AND (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
-    AND (p_payer_code IS NULL OR mv.health_authority = p_payer_code)
-    AND (p_receiver_code IS NULL OR mv.health_authority = p_receiver_code);
+    RETURN QUERY
+    SELECT
+        SUM(mv.claim_count) as total_claims,
+        SUM(mv.remitted_count) as total_remitted_claims,
+        SUM(mv.fully_paid_count) as total_fully_paid_claims,
+        SUM(mv.partially_paid_count) as total_partially_paid_claims,
+        SUM(mv.fully_rejected_count) as total_fully_rejected_claims,
+        SUM(mv.rejection_count) as total_rejection_count,
+        SUM(mv.taken_back_count) as total_taken_back_count,
+        SUM(mv.pending_remittance_count) as total_pending_remittance_count,
+        SUM(mv.self_pay_count) as total_self_pay_count,
+        SUM(mv.total_net) as total_claim_amount,
+        SUM(mv.total_net) as total_initial_claim_amount,
+        SUM(mv.remitted_amount) as total_remitted_amount,
+        SUM(mv.remitted_amount) as total_remitted_net_amount,
+        SUM(mv.fully_paid_amount) as total_fully_paid_amount,
+        SUM(mv.partially_paid_amount) as total_partially_paid_amount,
+        SUM(mv.fully_rejected_amount) as total_fully_rejected_amount,
+        SUM(mv.rejected_amount) as total_rejected_amount,
+        SUM(mv.pending_remittance_amount) as total_pending_remittance_amount,
+        SUM(mv.self_pay_amount) as total_self_pay_amount,
+        AVG(mv.rejected_percentage_on_initial) as avg_rejected_percentage_on_initial,
+        AVG(mv.rejected_percentage_on_remittance) as avg_rejected_percentage_on_remittance,
+        AVG(mv.collection_rate) as avg_collection_rate,
+        COUNT(DISTINCT mv.payer_id) as unique_providers,
+        COUNT(DISTINCT mv.facility_id) as unique_patients,
+        AVG(mv.total_net) as avg_claim_amount,
+        AVG(mv.remitted_amount) as avg_paid_amount
+    FROM claims.mv_claims_monthly_agg mv
+    WHERE
+        (p_from_date IS NULL OR mv.month_bucket >= DATE_TRUNC('month', p_from_date))
+        AND (p_to_date IS NULL OR mv.month_bucket <= DATE_TRUNC('month', p_to_date))
+        AND (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+        AND (p_payer_code IS NULL OR mv.health_authority = p_payer_code)
+        AND (p_receiver_code IS NULL OR mv.health_authority = p_receiver_code);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1929,15 +2284,16 @@ CREATE OR REPLACE FUNCTION claims.get_claim_summary_report_params() RETURNS TABL
     facility_codes TEXT[], payer_codes TEXT[], receiver_codes TEXT[], encounter_types TEXT[]
 ) AS $$
 BEGIN
-  RETURN QUERY
-  SELECT ARRAY_AGG(DISTINCT f.facility_code ORDER BY f.facility_code) FILTER (WHERE f.facility_code IS NOT NULL),
-         ARRAY_AGG(DISTINCT p.payer_code ORDER BY p.payer_code) FILTER (WHERE p.payer_code IS NOT NULL),
-         ARRAY_AGG(DISTINCT pr.provider_code ORDER BY pr.provider_code) FILTER (WHERE pr.provider_code IS NOT NULL),
-         ARRAY_AGG(DISTINCT e.type ORDER BY e.type) FILTER (WHERE e.type IS NOT NULL)
-  FROM claims_ref.facility f
-  FULL OUTER JOIN claims_ref.payer p ON true
-  FULL OUTER JOIN claims_ref.provider pr ON true
-  FULL OUTER JOIN claims.encounter e ON true;
+    RETURN QUERY
+    SELECT
+        ARRAY_AGG(DISTINCT f.facility_code ORDER BY f.facility_code) FILTER (WHERE f.facility_code IS NOT NULL) as facility_codes,
+        ARRAY_AGG(DISTINCT p.payer_code ORDER BY p.payer_code) FILTER (WHERE p.payer_code IS NOT NULL) as payer_codes,
+        ARRAY_AGG(DISTINCT pr.provider_code ORDER BY pr.provider_code) FILTER (WHERE pr.provider_code IS NOT NULL) as receiver_codes,
+        ARRAY_AGG(DISTINCT e.type ORDER BY e.type) FILTER (WHERE e.type IS NOT NULL) as encounter_types
+    FROM claims_ref.facility f
+    FULL OUTER JOIN claims_ref.payer p ON true
+    FULL OUTER JOIN claims_ref.provider pr ON true
+    FULL OUTER JOIN claims.encounter e ON true;
 END;
 $$ LANGUAGE plpgsql;
 

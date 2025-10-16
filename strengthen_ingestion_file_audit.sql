@@ -9,58 +9,58 @@
 -- =====================================================================================
 
 -- Add processing timing fields
-ALTER TABLE claims.ingestion_file_audit ADD COLUMN IF NOT EXISTS
-  processing_started_at        TIMESTAMPTZ,
-  processing_ended_at          TIMESTAMPTZ,
-  processing_duration_ms       INTEGER;
+ALTER TABLE claims.ingestion_file_audit 
+  ADD COLUMN IF NOT EXISTS processing_started_at        TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS processing_ended_at          TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS processing_duration_ms       INTEGER;
 
 -- Add file and processing context fields
-ALTER TABLE claims.ingestion_file_audit ADD COLUMN IF NOT EXISTS
-  file_size_bytes              BIGINT,
-  processing_mode              TEXT, -- 'MEM' or 'DISK'
-  worker_thread_name           TEXT,
-  retry_count                  INTEGER DEFAULT 0,
-  source_file_path             TEXT;
+ALTER TABLE claims.ingestion_file_audit 
+  ADD COLUMN IF NOT EXISTS file_size_bytes              BIGINT,
+  ADD COLUMN IF NOT EXISTS processing_mode              TEXT, -- 'MEM' or 'DISK'
+  ADD COLUMN IF NOT EXISTS worker_thread_name           TEXT,
+  ADD COLUMN IF NOT EXISTS retry_count                  INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS source_file_path             TEXT;
 
 -- Add missing audit fields that exist in DDL but not populated
-ALTER TABLE claims.ingestion_file_audit ADD COLUMN IF NOT EXISTS
-  verification_passed          BOOLEAN DEFAULT FALSE,
-  ack_attempted                BOOLEAN DEFAULT FALSE,
-  ack_sent                     BOOLEAN DEFAULT FALSE,
-  verification_failed_count    INTEGER DEFAULT 0,
-  projected_events             INTEGER DEFAULT 0,
-  projected_status_rows        INTEGER DEFAULT 0;
+ALTER TABLE claims.ingestion_file_audit 
+  ADD COLUMN IF NOT EXISTS verification_passed          BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS ack_attempted                BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS ack_sent                     BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS verification_failed_count    INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS projected_events             INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS projected_status_rows        INTEGER DEFAULT 0;
 
 -- Add retry tracking fields
-ALTER TABLE claims.ingestion_file_audit ADD COLUMN IF NOT EXISTS
-  retry_reasons                TEXT[], -- Array of retry reasons
-  retry_error_codes            TEXT[], -- Array of error codes that caused retries
-  first_attempt_at             TIMESTAMPTZ,
-  last_attempt_at              TIMESTAMPTZ;
+ALTER TABLE claims.ingestion_file_audit 
+  ADD COLUMN IF NOT EXISTS retry_reasons                TEXT[], -- Array of retry reasons
+  ADD COLUMN IF NOT EXISTS retry_error_codes            TEXT[], -- Array of error codes that caused retries
+  ADD COLUMN IF NOT EXISTS first_attempt_at             TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_attempt_at              TIMESTAMPTZ;
 
 -- Add business metrics fields
-ALTER TABLE claims.ingestion_file_audit ADD COLUMN IF NOT EXISTS
-  total_gross_amount           NUMERIC(15,2) DEFAULT 0,
-  total_net_amount             NUMERIC(15,2) DEFAULT 0,
-  total_patient_share          NUMERIC(15,2) DEFAULT 0,
-  unique_payers                INTEGER DEFAULT 0,
-  unique_providers             INTEGER DEFAULT 0;
+ALTER TABLE claims.ingestion_file_audit 
+  ADD COLUMN IF NOT EXISTS total_gross_amount           NUMERIC(15,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS total_net_amount             NUMERIC(15,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS total_patient_share          NUMERIC(15,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS unique_payers                INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS unique_providers             INTEGER DEFAULT 0;
 
 -- =====================================================================================
 -- 2. ADD CONSTRAINTS FOR DATA QUALITY
 -- =====================================================================================
 
 -- Add constraints to ensure data quality
-ALTER TABLE claims.ingestion_file_audit ADD CONSTRAINT IF NOT EXISTS
+ALTER TABLE claims.ingestion_file_audit ADD CONSTRAINT
   ck_processing_duration CHECK (processing_duration_ms >= 0);
 
-ALTER TABLE claims.ingestion_file_audit ADD CONSTRAINT IF NOT EXISTS
+ALTER TABLE claims.ingestion_file_audit ADD CONSTRAINT 
   ck_file_size CHECK (file_size_bytes >= 0);
 
-ALTER TABLE claims.ingestion_file_audit ADD CONSTRAINT IF NOT EXISTS
+ALTER TABLE claims.ingestion_file_audit ADD CONSTRAINT 
   ck_retry_count CHECK (retry_count >= 0);
 
-ALTER TABLE claims.ingestion_file_audit ADD CONSTRAINT IF NOT EXISTS
+ALTER TABLE claims.ingestion_file_audit ADD CONSTRAINT 
   ck_processing_mode CHECK (processing_mode IN ('MEM', 'DISK'));
 
 -- =====================================================================================

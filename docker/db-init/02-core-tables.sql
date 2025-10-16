@@ -568,6 +568,7 @@ CREATE TABLE IF NOT EXISTS claims.claim_resubmission (
   resubmission_type  TEXT NOT NULL,
   comment            TEXT NOT NULL,
   attachment         BYTEA,
+  tx_at              TIMESTAMPTZ NOT NULL,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -658,46 +659,106 @@ CREATE TABLE IF NOT EXISTS claims.verification_result (
 
 COMMENT ON TABLE claims.verification_result IS 'Individual verification rule results';
 
--- Ingestion file audit
 CREATE TABLE IF NOT EXISTS claims.ingestion_file_audit (
-  id                          BIGSERIAL PRIMARY KEY,
-  ingestion_run_id            BIGINT NOT NULL REFERENCES claims.ingestion_run(id) ON DELETE CASCADE,
-  ingestion_file_id           BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE CASCADE,
-  status                      SMALLINT NOT NULL,
-  reason                      TEXT,
-  claims_parsed               INTEGER NOT NULL DEFAULT 0,
-  claims_persisted            INTEGER NOT NULL DEFAULT 0,
-  activities_parsed           INTEGER NOT NULL DEFAULT 0,
-  activities_persisted        INTEGER NOT NULL DEFAULT 0,
-  observations_parsed         INTEGER NOT NULL DEFAULT 0,
-  observations_persisted      INTEGER NOT NULL DEFAULT 0,
-  encounters_parsed           INTEGER NOT NULL DEFAULT 0,
-  encounters_persisted        INTEGER NOT NULL DEFAULT 0,
-  diagnoses_parsed            INTEGER NOT NULL DEFAULT 0,
-  diagnoses_persisted         INTEGER NOT NULL DEFAULT 0,
-  remittance_claims_parsed    INTEGER NOT NULL DEFAULT 0,
-  remittance_claims_persisted INTEGER NOT NULL DEFAULT 0,
-  remittance_activities_parsed INTEGER NOT NULL DEFAULT 0,
-  remittance_activities_persisted INTEGER NOT NULL DEFAULT 0,
-  created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                           BIGSERIAL PRIMARY KEY,
+  ingestion_run_id             BIGINT NOT NULL REFERENCES claims.ingestion_run(id) ON DELETE CASCADE,
+  ingestion_file_id            BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE CASCADE,
+  status                       SMALLINT NOT NULL,                            -- 0=ALREADY,1=OK,2=FAIL
+  reason                       TEXT,
+  error_class                  TEXT,
+  error_message                TEXT,
+  validation_ok                BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Header echo
+  header_sender_id             TEXT NOT NULL,
+  header_receiver_id           TEXT NOT NULL,
+  header_transaction_date      TIMESTAMPTZ NOT NULL,
+  header_record_count          INTEGER NOT NULL,
+  header_disposition_flag      TEXT NOT NULL,
+  -- Parsed counters
+  parsed_claims                INTEGER DEFAULT 0,
+  parsed_encounters            INTEGER DEFAULT 0,
+  parsed_diagnoses             INTEGER DEFAULT 0,
+  parsed_activities            INTEGER DEFAULT 0,
+  parsed_observations          INTEGER DEFAULT 0,
+  parsed_remit_claims          INTEGER DEFAULT 0,
+  parsed_remit_activities      INTEGER DEFAULT 0,
+  -- Persisted counters
+  persisted_claims             INTEGER DEFAULT 0,
+  persisted_encounters         INTEGER DEFAULT 0,
+  persisted_diagnoses          INTEGER DEFAULT 0,
+  persisted_activities         INTEGER DEFAULT 0,
+  persisted_observations       INTEGER DEFAULT 0,
+  persisted_remit_claims       INTEGER DEFAULT 0,
+  -- Projection/verify/ack
+  projected_events             INTEGER,
+  projected_status_rows        INTEGER,
+  verification_failed_count    INTEGER,
+  verification_passed          BOOLEAN DEFAULT FALSE,
+  ack_attempted                BOOLEAN,
+  ack_sent                     BOOLEAN,
+  -- Processing context (performance & retries)
+  processing_started_at        TIMESTAMPTZ,
+  processing_ended_at          TIMESTAMPTZ,
+  processing_duration_ms       INTEGER,
+  file_size_bytes              BIGINT,
+  processing_mode              TEXT,
+  worker_thread_name           TEXT,
+  retry_count                  INTEGER DEFAULT 0,
+  retry_reasons                TEXT[],
+  retry_error_codes            TEXT[],
+  first_attempt_at             TIMESTAMPTZ,
+  last_attempt_at              TIMESTAMPTZ,
+  source_file_path             TEXT,
+  -- Business metrics
+  total_gross_amount           NUMERIC(15,2) DEFAULT 0,
+  total_net_amount             NUMERIC(15,2) DEFAULT 0,
+  total_patient_share          NUMERIC(15,2) DEFAULT 0,
+  unique_payers                INTEGER DEFAULT 0,
+  unique_providers             INTEGER DEFAULT 0,
+  -- Timestamps
+  created_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Constraints
+  CONSTRAINT uq_ingestion_file_audit UNIQUE (ingestion_run_id, ingestion_file_id),
+  CONSTRAINT ck_processing_duration CHECK (processing_duration_ms IS NULL OR processing_duration_ms >= 0),
+  CONSTRAINT ck_file_size CHECK (file_size_bytes IS NULL OR file_size_bytes >= 0),
+  CONSTRAINT ck_retry_count CHECK (retry_count >= 0),
+  CONSTRAINT ck_processing_mode CHECK (processing_mode IS NULL OR processing_mode IN ('MEM','DISK'))
 );
 
-COMMENT ON TABLE claims.ingestion_file_audit IS 'Per-file audit trail with parsed vs persisted counts';
+COMMENT ON TABLE claims.ingestion_file_audit IS 'Per-file audit + counters and processing metrics for ingestion monitoring';
+COMMENT ON COLUMN claims.ingestion_file_audit.status IS '0=ALREADY,1=OK,2=FAIL';
+COMMENT ON COLUMN claims.ingestion_file_audit.processing_mode IS 'Processing mode: MEM (in-memory) or DISK (staged to disk)';
 
--- Ingestion run tracking
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_run ON claims.ingestion_file_audit(ingestion_run_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_file ON claims.ingestion_file_audit(ingestion_file_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_status ON claims.ingestion_file_audit(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_validation ON claims.ingestion_file_audit(validation_ok);
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_processing_time ON claims.ingestion_file_audit(processing_started_at);
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_duration ON claims.ingestion_file_audit(processing_duration_ms);
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_file_size ON claims.ingestion_file_audit(file_size_bytes);
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_verification ON claims.ingestion_file_audit(verification_passed);
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_retry_count ON claims.ingestion_file_audit(retry_count);
+CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_processing_mode ON claims.ingestion_file_audit(processing_mode);
+
 CREATE TABLE IF NOT EXISTS claims.ingestion_run (
-  id                   BIGSERIAL PRIMARY KEY,
-  started_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  ended_at             TIMESTAMPTZ,
-  profile              TEXT NOT NULL,
-  fetcher_name         TEXT NOT NULL,
-  files_processed      INTEGER NOT NULL DEFAULT 0,
-  files_success        INTEGER NOT NULL DEFAULT 0,
-  files_failed         INTEGER NOT NULL DEFAULT 0,
-  claims_processed     INTEGER NOT NULL DEFAULT 0,
-  activities_processed INTEGER NOT NULL DEFAULT 0,
-  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                    BIGSERIAL PRIMARY KEY,
+  started_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ended_at              TIMESTAMPTZ,
+  profile               TEXT NOT NULL,
+  fetcher_name          TEXT NOT NULL,
+  acker_name            TEXT,
+  poll_reason           TEXT,
+  files_discovered      INTEGER NOT NULL DEFAULT 0,
+  files_pulled          INTEGER NOT NULL DEFAULT 0,
+  files_processed_ok    INTEGER NOT NULL DEFAULT 0,
+  files_failed          INTEGER NOT NULL DEFAULT 0,
+  files_already         INTEGER NOT NULL DEFAULT 0,
+  acks_sent             INTEGER NOT NULL DEFAULT 0
 );
+
+COMMENT ON TABLE claims.ingestion_run IS 'Tracking table for ingestion batch runs';
+CREATE INDEX IF NOT EXISTS idx_ingestion_run_started ON claims.ingestion_run(started_at);
+CREATE INDEX IF NOT EXISTS idx_ingestion_run_profile ON claims.ingestion_run(profile);
 
 COMMENT ON TABLE claims.ingestion_run IS 'Ingestion run summary metrics';
 

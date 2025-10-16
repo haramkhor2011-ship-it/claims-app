@@ -96,26 +96,14 @@ END$$;
 -- SECTION 3: TRIGGERS FOR AUTOMATIC TIMESTAMP SETTING
 -- ==========================================================================================================
 
--- Trigger for submission tx_at
+-- NOTE: Application sets submission.tx_at directly now; trigger disabled
 DROP TRIGGER IF EXISTS trigger_set_submission_tx_at ON claims.submission;
-CREATE TRIGGER trigger_set_submission_tx_at
-  BEFORE INSERT ON claims.submission
-  FOR EACH ROW
-  EXECUTE FUNCTION claims.set_submission_tx_at();
 
--- Trigger for remittance tx_at
+-- NOTE: Application sets remittance.tx_at directly now; trigger disabled
 DROP TRIGGER IF EXISTS trigger_set_remittance_tx_at ON claims.remittance;
-CREATE TRIGGER trigger_set_remittance_tx_at
-  BEFORE INSERT ON claims.remittance
-  FOR EACH ROW
-  EXECUTE FUNCTION claims.set_remittance_tx_at();
 
--- Trigger for claim tx_at
+-- NOTE: Application sets claim.tx_at directly now; trigger disabled
 DROP TRIGGER IF EXISTS trigger_set_claim_tx_at ON claims.claim;
-CREATE TRIGGER trigger_set_claim_tx_at
-  BEFORE INSERT ON claims.claim
-  FOR EACH ROW
-  EXECUTE FUNCTION claims.set_claim_tx_at();
 
 -- Trigger for claim_event_activity tx_at
 DROP TRIGGER IF EXISTS trigger_set_claim_event_activity_tx_at ON claims.claim_event_activity;
