@@ -746,7 +746,7 @@ SELECT
     diag_agg.secondary_diagnosis,
     
     -- Additional fields from JSON mapping (derived calculations)
-    c.id_payer,
+    c.payer_id,
     a.prior_authorization_id,
     -- REMOVED: rc.payment_reference, rc.date_settlement (caused duplicates)
     -- These fields are available in remittance_cycles CTE if needed

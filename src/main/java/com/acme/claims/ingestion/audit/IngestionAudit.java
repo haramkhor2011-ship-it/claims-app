@@ -35,8 +35,14 @@ public class IngestionAudit {
 
     public void fileAlready(long runId, long ingestionFileId){
         jdbc.update("""
-      insert into claims.ingestion_file_audit(ingestion_run_id, ingestion_file_id, status, reason, validation_ok, created_at)
-      values (?,?,0,'ALREADY',true,now())
+      insert into claims.ingestion_file_audit(
+        ingestion_run_id, ingestion_file_id, status, reason, validation_ok,
+        header_sender_id, header_receiver_id, header_transaction_date, header_record_count, header_disposition_flag,
+        created_at)
+      select ?, id, 0, 'ALREADY', true,
+             sender_id, receiver_id, transaction_date, record_count_declared, disposition_flag,
+             now()
+      from claims.ingestion_file where id=?
     """, runId, ingestionFileId);
         jdbc.update("update claims.ingestion_run set files_already = files_already + 1 where id=?", runId);
     }

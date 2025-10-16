@@ -144,13 +144,14 @@ LEFT JOIN claims.remittance_claim rc ON ck.id = rc.claim_key_id
 LEFT JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id AND a.activity_id = ra.activity_id
 LEFT JOIN claims.submission s ON c.submission_id = s.id
 LEFT JOIN claims.remittance r ON rc.remittance_id = r.id
-LEFT JOIN LATERAL (
-    SELECT cst2.status, cst2.claim_event_id
+LEFT JOIN (
+    SELECT DISTINCT ON (cst2.claim_key_id)
+        cst2.claim_key_id,
+        cst2.status,
+        cst2.claim_event_id
     FROM claims.claim_status_timeline cst2
-    WHERE cst2.claim_key_id = ck.id
-    ORDER BY cst2.status_time DESC, cst2.id DESC
-    LIMIT 1
-) cst ON TRUE
+    ORDER BY cst2.claim_key_id, cst2.status_time DESC, cst2.id DESC
+) cst ON cst.claim_key_id = ck.id
 LEFT JOIN claims.claim_resubmission cr ON cst.claim_event_id = cr.claim_event_id
 LEFT JOIN claims_ref.payer p ON c.payer_ref_id = p.id
 LEFT JOIN claims_ref.facility f ON e.facility_ref_id = f.id
@@ -790,13 +791,13 @@ CREATE INDEX IF NOT EXISTS idx_remittance_activity_remittance_claim_id ON claims
 CREATE INDEX IF NOT EXISTS idx_claim_status_timeline_claim_key_id ON claims.claim_status_timeline(claim_key_id);
 
 -- Indexes for filtering performance
-CREATE INDEX IF NOT EXISTS idx_claim_payer_id ON claims.claim(id_payer);
+CREATE INDEX IF NOT EXISTS idx_claim_payer_id ON claims.claim(payer_id);
 CREATE INDEX IF NOT EXISTS idx_encounter_facility_id ON claims.encounter(facility_id);
 CREATE INDEX IF NOT EXISTS idx_activity_start_at ON claims.activity(start_at);
 CREATE INDEX IF NOT EXISTS idx_remittance_activity_denial_code ON claims.remittance_activity(denial_code);
 
 -- Composite indexes for common query patterns
-CREATE INDEX IF NOT EXISTS idx_claim_encounter_facility ON claims.claim(id, id_payer) INCLUDE (net, tx_at);
+CREATE INDEX IF NOT EXISTS idx_claim_encounter_facility ON claims.claim(id, payer_id) INCLUDE (net, tx_at);
 CREATE INDEX IF NOT EXISTS idx_remittance_activity_payment ON claims.remittance_activity(remittance_claim_id, activity_id) INCLUDE (payment_amount, denial_code);
 
 -- ==========================================================================================================

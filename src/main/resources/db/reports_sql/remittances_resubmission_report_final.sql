@@ -352,7 +352,7 @@ SELECT
     d2.code AS secondary_diagnosis,
     
     -- Additional fields from JSON mapping (derived calculations)
-    c.id_payer,
+    c.payer_id,
     a.prior_authorization_id,
     -- FIXED: Proper JOIN for remittance_claim
     rc.payment_reference,

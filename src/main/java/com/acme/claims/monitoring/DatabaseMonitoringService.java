@@ -213,7 +213,8 @@ public class DatabaseMonitoringService {
             });
             
         } catch (Exception e) {
-            log.warn("Failed to collect query performance metrics (pg_stat_statements may not be enabled)", e);
+            // Gracefully skip metrics if extension is missing
+            log.warn("Failed to collect query performance metrics (pg_stat_statements may not be enabled)");
         }
     }
 
@@ -222,7 +223,7 @@ public class DatabaseMonitoringService {
             // Table statistics for claims schema
             String tableStatsQuery = "SELECT " +
                 "schemaname, " +
-                "tablename, " +
+                "relname as tablename, " +
                 "n_tup_ins as inserts, " +
                 "n_tup_upd as updates, " +
                 "n_tup_del as deletes, " +

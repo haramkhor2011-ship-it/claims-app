@@ -167,8 +167,8 @@ public class PersistService {
         final OffsetDateTime now = OffsetDateTime.now();
 
         final Long submissionId = jdbc.queryForObject(
-                "insert into claims.submission(ingestion_file_id) values (?) returning id",
-                Long.class, ingestionFileId
+                "insert into claims.submission(ingestion_file_id, tx_at) values (?, ?) returning id",
+                Long.class, ingestionFileId, file.header().transactionDate()
         );
         log.info("persistSubmission: created submission header id={} for ingestionFileId={}", submissionId, ingestionFileId);
 
@@ -427,8 +427,8 @@ public class PersistService {
     @Transactional
     public PersistCounts persistRemittance(long ingestionFileId, RemittanceAdviceDTO file, List<ParseOutcome.AttachmentRecord> attachments) {
         final Long remittanceId = jdbc.queryForObject(
-                "insert into claims.remittance(ingestion_file_id) values (?) returning id",
-                Long.class, ingestionFileId
+                "insert into claims.remittance(ingestion_file_id, tx_at) values (?, ?) returning id",
+                Long.class, ingestionFileId, file.header().transactionDate()
         );
 
         int rClaims = 0, rActs = 0, skippedInvalidRemitClaim = 0;
@@ -814,13 +814,13 @@ public class PersistService {
                             insert into claims.claim(
                               claim_key_id, submission_id,
                               id_payer, member_id, payer_id, provider_id, emirates_id_number, gross, patient_share, net,
-                              payer_ref_id, provider_ref_id, comments                                 -- PATCH: new columns
-                            ) values (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                              payer_ref_id, provider_ref_id, comments, tx_at
+                            ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             on conflict (claim_key_id) do nothing
                         """, claimKeyId, submissionId,
                 c.idPayer(), c.memberId(), c.payerId(), c.providerId(), c.emiratesIdNumber(),
                 c.gross(), c.patientShare(), c.net(),
-                payerRefId, providerRefId, c.comments()                                     // PATCH: new args
+                payerRefId, providerRefId, c.comments(), file.header().transactionDate()
         );
         return jdbc.queryForObject("select id from claims.claim where claim_key_id=?", Long.class, claimKeyId);
     }
@@ -987,10 +987,10 @@ public class PersistService {
     private void insertResubmission(long eventId, ResubmissionDTO r) {
         jdbc.update("""
                     insert into claims.claim_resubmission(
-                      claim_event_id, resubmission_type, comment, attachment
-                    ) values (?,?,?,?)
+                      claim_event_id, resubmission_type, comment, attachment, tx_at
+                    ) values (?,?,?,?,?)
                     on conflict do nothing
-                """, eventId, r.type(), r.comment(), r.attachment());
+                """, eventId, r.type(), r.comment(), r.attachment(), file.header().transactionDate());
     }
 
     private void insertStatusTimeline(long claimKeyId, short status, OffsetDateTime time, long eventId) {

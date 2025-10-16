@@ -13,6 +13,8 @@ import com.acme.claims.domain.model.dto.RemittanceAdviceDTO;
 import com.acme.claims.domain.model.dto.SubmissionDTO;
 import com.acme.claims.domain.model.entity.IngestionFile;
 import com.acme.claims.ingestion.audit.ErrorLogger;
+import com.acme.claims.ingestion.audit.IngestionAudit;
+import com.acme.claims.ingestion.audit.RunContext;
 import com.acme.claims.ingestion.config.IngestionProperties;
 import com.acme.claims.ingestion.fetch.WorkItem;
 import com.acme.claims.ingestion.parser.ParseOutcome;
@@ -66,6 +68,7 @@ public class Pipeline {
     private final StageParser parser;           // ClaimXmlParserStax implements this
     private final PersistService persist;
     private final ErrorLogger errors;
+    private final IngestionAudit audit;
     private final JdbcTemplate jdbc;
     private final DhpoMetrics dhpoMetrics;
     @Autowired
@@ -115,6 +118,13 @@ public class Pipeline {
                 if (log.isDebugEnabled()) {
                     log.debug("disk-staged file already processed (short-circuit): {}", wi.fileId());
                 }
+                // Audit: mark as already processed under current run (if available)
+                try {
+                    Long runId = RunContext.getCurrentRunId();
+                    if (runId != null) {
+                        audit.fileAlreadySafely(runId, filePk);
+                    }
+                } catch (Exception ignore) {}
                 success = true;
                 return new Result(filePk, rootType == ROOT_SUBMISSION ? 1 : 2, 0, 0, 0, 0, null);
             }
@@ -167,6 +177,13 @@ public class Pipeline {
                     // Idempotency short-circuit early (skip validation/mapping/persist)
                     if (alreadyProjected(filePk)) {
                         log.info("file already processed (short-circuit): {}", fileRow.getFileId());
+                        // Audit: mark as already processed under current run (if available)
+                        try {
+                            Long runId = RunContext.getCurrentRunId();
+                            if (runId != null) {
+                                audit.fileAlreadySafely(runId, filePk);
+                            }
+                        } catch (Exception ignore) {}
                         success = true;
                         int claimCount = dto.claims().size();
                         int actCount = countActs(dto);
@@ -220,6 +237,13 @@ public class Pipeline {
                     // Idempotency short-circuit early (skip validation/persist)
                     if (alreadyProjected(filePk)) {
                         log.info("file already processed (short-circuit): {}", fileRow.getFileId());
+                        // Audit: mark as already processed under current run (if available)
+                        try {
+                            Long runId = RunContext.getCurrentRunId();
+                            if (runId != null) {
+                                audit.fileAlreadySafely(runId, filePk);
+                            }
+                        } catch (Exception ignore) {}
                         success = true;
                         int claimCount = dto.claims().size();
                         int actCount = countActs(dto);

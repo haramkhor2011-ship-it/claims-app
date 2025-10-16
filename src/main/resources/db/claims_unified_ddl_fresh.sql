@@ -1067,6 +1067,7 @@ CREATE TABLE IF NOT EXISTS claims.claim_resubmission (
   resubmission_type  TEXT NOT NULL,
   comment            TEXT NOT NULL,
   attachment         BYTEA,
+  tx_at              TIMESTAMPTZ NOT NULL,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_claim_resubmission_event UNIQUE (claim_event_id)

@@ -127,6 +127,8 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.core.env.Environment;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -148,6 +150,8 @@ public class Orchestrator {
     private final VerifyService verifyService;
     private final Acker acker;
     private final IngestionAudit audit;
+    private final Environment env;
+    private final JdbcTemplate jdbc;
 
     /**
      * # processingFiles - Thread-Safe File Deduplication Set
@@ -183,7 +187,9 @@ public class Orchestrator {
                         Pipeline pipeline,
                         VerifyService verifyService, 
                         @Qualifier("soapAckerAdapter") Acker acker,
-                        IngestionAudit audit) {
+                        IngestionAudit audit,
+                        Environment env,
+                        JdbcTemplate jdbc) {
         this.fetcher = fetcher;
         this.props = props;
         this.queue = queue;
@@ -192,6 +198,8 @@ public class Orchestrator {
         this.verifyService = verifyService;
         this.acker = acker;
         this.audit = audit;
+        this.env = env;
+        this.jdbc = jdbc;
     }
 
     /**
@@ -290,8 +298,10 @@ public class Orchestrator {
         log.debug("Drain cycle start; queued={}", queue.size());
         
         // Start ingestion run tracking
+        String profiles = (env != null && env.getActiveProfiles() != null && env.getActiveProfiles().length > 0)
+                ? String.join(",", env.getActiveProfiles()) : "unknown";
         Long runId = audit.startRunSafely(
-            props.getProfile() != null ? props.getProfile() : "ingestion",
+            profiles,
             fetcher.getClass().getSimpleName(),
             acker != null ? acker.getClass().getSimpleName() : "NoopAcker",
             "SCHEDULED_DRAIN"
@@ -314,7 +324,16 @@ public class Orchestrator {
                 WorkItem wi = queue.poll();
                 if (wi == null) break;
                 try {
-                    executor.execute(() -> processOne(wi));
+                    final Long runIdForTask = runId; // bind runId to worker thread
+                    executor.execute(() -> {
+                        // Ensure runId is visible in worker thread
+                        RunContext.setCurrentRunId(runIdForTask);
+                        try {
+                            processOne(wi);
+                        } finally {
+                            RunContext.clear();
+                        }
+                    });
                     submitted++;
                 } catch (java.util.concurrent.RejectedExecutionException rex) {
                     boolean requeued = queue.offer(wi);
@@ -394,6 +413,15 @@ public class Orchestrator {
         if (!processingFiles.add(fileId)) {
             log.debug("ORCHESTRATOR_DUPLICATE_SKIP fileId={} fileName={} - already being processed by another thread",
                 fileId, wi.fileName());
+            // Audit as ALREADY if we can resolve ingestion_file_id
+            try {
+                if (currentRunId != null) {
+                    Long ingestionFileId = findIngestionFileIdByFileId(fileId);
+                    if (ingestionFileId != null) {
+                        audit.fileAlreadySafely(currentRunId, ingestionFileId);
+                    }
+                }
+            } catch (Exception ignore) {}
             return; // Skip this duplicate processing attempt
         }
 
@@ -454,6 +482,19 @@ public class Orchestrator {
                         fileId, wi.fileName(), ackEx.getMessage());
                 }
             }
+        }
+    }
+
+    // Best-effort lookup to resolve ingestion_file primary key from business fileId
+    private Long findIngestionFileIdByFileId(String fileId) {
+        try {
+            return jdbc.query(
+                "select id from claims.ingestion_file where file_id = ? order by id desc limit 1",
+                ps -> ps.setString(1, fileId),
+                rs -> rs.next() ? rs.getLong(1) : null
+            );
+        } catch (Exception e) {
+            return null;
         }
     }
 }
