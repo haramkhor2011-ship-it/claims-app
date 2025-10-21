@@ -90,7 +90,7 @@ public class DataFilteringController {
             context.put("isFacilityAdmin", userContext.isFacilityAdmin());
             context.put("isStaff", userContext.isStaff());
             context.put("facilities", userContext.getFacilities());
-            context.put("reports", userContext.getReportTypeNames());
+            context.put("reports", userContext.getReportCodes());
             context.put("primaryFacility", userContext.getPrimaryFacility());
             context.put("ipAddress", userContext.getIpAddress());
             context.put("sessionStartTime", userContext.getSessionStartTime());
@@ -271,7 +271,7 @@ public class DataFilteringController {
             result.put("canAccess", canAccess);
             result.put("multiTenancyEnabled", securityProperties.getMultiTenancy().isEnabled());
             result.put("user", userContext.getUsername());
-            result.put("userReports", userContext.getReportTypeNames());
+            result.put("userReports", userContext.getReportCodes());
             
             log.info("Report access test completed for user: {} (ID: {}) - Report: {}, CanAccess: {}", 
                     userContext.getUsername(), userContext.getUserId(), reportType, canAccess);

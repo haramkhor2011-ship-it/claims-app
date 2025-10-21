@@ -293,7 +293,7 @@ public class PersistService {
 
         log.info("persistSingleClaim: about to insert claim for claimId={} amounts[gross={}, patientShare={}, net={}]",
                 claimIdBiz, c.gross(), c.patientShare(), c.net());
-        final long claimId = upsertClaim(claimKeyId, submissionId, c, payerRefId, providerRefId);
+        final long claimId = upsertClaim(claimKeyId, submissionId, c, payerRefId, providerRefId, file);
         log.info("persistSingleClaim: inserted claim dbId={} for claimId={} (submissionId={})", claimId, claimIdBiz, submissionId);
 
         // Contract (optional)
@@ -357,7 +357,8 @@ public class PersistService {
         if (c.resubmission() != null) {
             long ev2 = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 2, submissionId, null);
             log.info("persistSingleClaim: inserted resubmission event id={} for claimId={} ingestionFileId={}", ev2, claimIdBiz, ingestionFileId);
-            insertResubmission(ev2, c.resubmission());
+            insertResubmission(ev2, c.resubmission(), file);
+            projectActivitiesToClaimEventFromSubmission(ev2, c.activities());
             insertStatusTimeline(claimKeyId, (short) 2, file.header().transactionDate(), ev2);
         }
 
@@ -809,7 +810,7 @@ public class PersistService {
 
 
     private long upsertClaim(long claimKeyId, long submissionId, SubmissionClaimDTO c,
-                             Long payerRefId, Long providerRefId) { // added ref IDs
+                             Long payerRefId, Long providerRefId, SubmissionDTO file) { // added ref IDs
         jdbc.update("""
                             insert into claims.claim(
                               claim_key_id, submission_id,
@@ -889,13 +890,16 @@ public class PersistService {
 
     private long insertClaimEvent(long claimKeyId, long ingestionFileId, OffsetDateTime time, short type,
                                   Long submissionId, Long remittanceId) {
+        // Use consistent constraint handling for all event types
+        // The uq_claim_event_dedup constraint ensures uniqueness on (claim_key_id, type, event_time)
+        // This prevents duplicate events for the same claim, type, and time
         return jdbc.queryForObject("""
                         WITH ins AS (
                           INSERT INTO claims.claim_event(
                             claim_key_id, ingestion_file_id, event_time, type, submission_id, remittance_id
                           )
                           VALUES (?,?,?,?,?,?)
-                          ON CONFLICT (claim_key_id, type, event_time) DO UPDATE
+                          ON CONFLICT ON CONSTRAINT uq_claim_event_dedup DO UPDATE
                             SET ingestion_file_id = EXCLUDED.ingestion_file_id
                           RETURNING id
                         )
@@ -909,7 +913,7 @@ public class PersistService {
                 Long.class,
                 // insert params
                 claimKeyId, ingestionFileId, time, type, submissionId, remittanceId,
-                // fallback (exact) params
+                // fallback params
                 claimKeyId, type, time
         );
     }
@@ -984,7 +988,7 @@ public class PersistService {
         }
     }
 
-    private void insertResubmission(long eventId, ResubmissionDTO r) {
+    private void insertResubmission(long eventId, ResubmissionDTO r, SubmissionDTO file) {
         jdbc.update("""
                     insert into claims.claim_resubmission(
                       claim_event_id, resubmission_type, comment, attachment, tx_at

@@ -190,11 +190,21 @@ public class User implements UserDetails {
     }
 
     /**
-     * Get list of report types this user has access to
+     * Get list of report codes this user has access to
      */
-    public Set<String> getReportTypeNames() {
+    public Set<String> getReportCodes() {
         return reportPermissions.stream()
-                .map(permission -> permission.getReportType().name())
+                .map(permission -> permission.getReportMetadata().getReportCode())
+                .collect(java.util.stream.Collectors.toSet());
+    }
+    
+    /**
+     * Get list of active report metadata this user has access to
+     */
+    public Set<ReportsMetadata> getActiveReportMetadata() {
+        return reportPermissions.stream()
+                .map(UserReportPermission::getReportMetadata)
+                .filter(ReportsMetadata::isActive)
                 .collect(java.util.stream.Collectors.toSet());
     }
 

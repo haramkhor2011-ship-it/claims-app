@@ -7,7 +7,9 @@ import com.acme.claims.security.entity.User;
 import com.acme.claims.security.entity.UserFacility;
 import com.acme.claims.security.entity.UserReportPermission;
 import com.acme.claims.security.entity.UserRole;
+import com.acme.claims.security.entity.ReportsMetadata;
 import com.acme.claims.security.repository.UserRepository;
+import com.acme.claims.security.repository.ReportsMetadataRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -31,6 +33,7 @@ public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final SecurityProperties securityProperties;
+    private final ReportsMetadataRepository reportsMetadataRepository;
     
     /**
      * Create a new user
@@ -133,14 +136,35 @@ public class UserService {
      * Grant report permission to user
      */
     public void grantReportPermission(User user, ReportType reportType, Long grantedBy) {
+        // Get the ReportsMetadata for this report type
+        Optional<ReportsMetadata> reportMetadataOpt = reportsMetadataRepository.findByReportCode(reportType.name());
+        
+        if (reportMetadataOpt.isEmpty()) {
+            log.warn("Report metadata not found for report type: {}", reportType);
+            return;
+        }
+        
+        ReportsMetadata reportMetadata = reportMetadataOpt.get();
+        
+        // Check if user already has this permission
+        boolean alreadyHasPermission = user.getReportPermissions().stream()
+                .anyMatch(permission -> permission.getReportMetadata().getId().equals(reportMetadata.getId()));
+        
+        if (alreadyHasPermission) {
+            log.debug("User {} already has permission for report: {}", user.getUsername(), reportType);
+            return;
+        }
+        
         UserReportPermission permission = UserReportPermission.builder()
                 .user(user)
-                .reportType(reportType)
+                .reportMetadata(reportMetadata)
                 .grantedBy(User.builder().id(grantedBy).build())
                 .build();
         
         user.getReportPermissions().add(permission);
         userRepository.save(user);
+        
+        log.info("Report permission granted - User: {}, Report: {}", user.getUsername(), reportType);
     }
     
     /**

@@ -1,5 +1,6 @@
 package com.acme.claims.service;
 
+import com.acme.claims.soap.db.ToggleRepo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -24,6 +25,7 @@ import java.util.*;
 public class RemittancesResubmissionReportService {
 
     private final DataSource dataSource;
+    private final ToggleRepo toggleRepo;
 
     public List<Map<String, Object>> getActivityLevelData(
             String facilityId,
@@ -44,10 +46,17 @@ public class RemittancesResubmissionReportService {
             List<Long> payerRefIds,
             List<Long> clinicianRefIds
     ) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Resubmission Report - useMv: {}", useMv);
+
         String sql = """
             SELECT * FROM claims.get_remittances_resubmission_activity_level(
-                ?::text,
-                ?::text[],
+                p_use_mv := ?,
+                p_tab_name := 'activity_level',
+                p_facility_id := ?::text,
+                p_facility_ids := ?::text[],
                 ?::text[],
                 ?::text[],
                 ?::timestamptz,
@@ -206,25 +215,31 @@ public class RemittancesResubmissionReportService {
             List<Long> payerRefIds,
             List<Long> clinicianRefIds
     ) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Resubmission Claim Level - useMv: {}", useMv);
+
         String sql = """
             SELECT * FROM claims.get_remittances_resubmission_claim_level(
-                ?::text,
-                ?::text[],
-                ?::text[],
-                ?::text[],
-                ?::timestamptz,
-                ?::timestamptz,
-                ?::text,
-                ?::text[],
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::integer,
-                ?::integer,
-                ?::bigint[],
-                ?::bigint[],
-                ?::bigint[]
+                p_use_mv := ?,
+                p_tab_name := 'claim_level',
+                p_facility_id := ?::text,
+                p_facility_ids := ?::text[],
+                p_payer_ids := ?::text[],
+                p_receiver_ids := ?::text[],
+                p_from_date := ?::timestamptz,
+                p_to_date := ?::timestamptz,
+                p_encounter_type := ?::text,
+                p_clinician_ids := ?::text[],
+                p_claim_number := ?::text,
+                p_denial_filter := ?::text,
+                p_order_by := ?::text,
+                p_limit := ?::integer,
+                p_offset := ?::integer,
+                p_facility_ref_ids := ?::bigint[],
+                p_payer_ref_ids := ?::bigint[],
+                p_clinician_ref_ids := ?::bigint[]
             )
         """;
 
@@ -242,6 +257,8 @@ public class RemittancesResubmissionReportService {
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             int i = 1;
+            // OPTION 3: Set useMv and tabName parameters first
+            stmt.setBoolean(i++, useMv);
             stmt.setString(i++, facilityId);
             setTextArray(conn, stmt, i++, facilityIds);
             setTextArray(conn, stmt, i++, payerIds);

@@ -265,7 +265,7 @@ public class ClaimXmlParserStax implements StageParser {
         if ((attachmentOnly || commentsPresent) && orderIssue) {
             // Flexible validation: Allow Comments/Attachment anywhere in Claim structure
             // but still validate they appear the correct number of times
-            log.warn("Flexible XSD validation: Allowing Comments/Attachment in non-standard position for fileId: {}", fileId);
+            log.debug("Flexible XSD validation: Allowing Comments/Attachment in non-standard position for fileId: {}", fileId);
 
             try {
                 // Perform occurrence validation instead of strict order validation

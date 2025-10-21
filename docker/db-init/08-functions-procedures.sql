@@ -177,19 +177,21 @@ DECLARE
   v_metrics RECORD;
   v_payment_status VARCHAR(20);
 BEGIN
-  -- Calculate all payment metrics for the claim
+  -- Calculate all financial metrics (SOURCE: pre-computed per-activity summary)
+  -- Using cumulative-with-cap semantics from claims.claim_activity_summary
   SELECT 
-    COALESCE(SUM(a.net), 0) as total_submitted_amount,
-    COALESCE(SUM(ra.payment_amount), 0) as total_paid_amount,
-    COALESCE(SUM(ra.net), 0) as total_remitted_amount,
-    COALESCE(SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN a.net ELSE 0 END), 0) as total_rejected_amount,
-    COALESCE(SUM(CASE WHEN ra.denial_code IS NOT NULL THEN a.net ELSE 0 END), 0) as total_denied_amount,
-    COUNT(DISTINCT a.activity_id) as total_activities,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 THEN a.activity_id END) as paid_activities,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < a.net THEN a.activity_id END) as partially_paid_activities,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN a.activity_id END) as rejected_activities,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount IS NULL THEN a.activity_id END) as pending_activities,
-    COUNT(DISTINCT rc.id) as remittance_count,
+    COALESCE(SUM(cas.submitted_amount), 0)                                 AS total_submitted_amount,
+    COALESCE(SUM(cas.paid_amount), 0)                                      AS total_paid_amount,
+    /* If business differentiates remitted vs paid later, adjust here */
+    COALESCE(SUM(cas.submitted_amount), 0)                                 AS total_remitted_amount,
+    COALESCE(SUM(cas.rejected_amount), 0)                                  AS total_rejected_amount,
+    COALESCE(SUM(cas.denied_amount), 0)                                    AS total_denied_amount,
+    COUNT(cas.activity_id)                                                 AS total_activities,
+    COUNT(CASE WHEN cas.activity_status = 'FULLY_PAID' THEN 1 END)         AS paid_activities,
+    COUNT(CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 1 END)     AS partially_paid_activities,
+    COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END)           AS rejected_activities,
+    COUNT(CASE WHEN cas.activity_status = 'PENDING' THEN 1 END)            AS pending_activities,
+    MAX(cas.remittance_count)                                              AS remittance_count,
     COUNT(DISTINCT CASE WHEN ce.type = 2 THEN ce.id END) as resubmission_count,
     MIN(DATE(c.tx_at)) as first_submission_date,
     MAX(DATE(c.tx_at)) as last_submission_date,
@@ -212,13 +214,11 @@ BEGIN
     MAX(rc.payment_reference) as latest_payment_reference,
     MAX(c.tx_at) as tx_at
   INTO v_metrics
-  FROM claims.claim c
-  JOIN claims.activity a ON a.claim_id = c.id
-  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = c.claim_key_id
-  LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id 
-    AND ra.activity_id = a.activity_id
-  LEFT JOIN claims.claim_event ce ON ce.claim_key_id = c.claim_key_id
-  WHERE c.claim_key_id = p_claim_key_id;
+  FROM claims.claim_activity_summary cas
+  LEFT JOIN claims.claim c ON c.claim_key_id = cas.claim_key_id
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = cas.claim_key_id
+  LEFT JOIN claims.claim_event ce ON ce.claim_key_id = cas.claim_key_id
+  WHERE cas.claim_key_id = p_claim_key_id;
   
   -- Calculate payment status
   v_payment_status := CASE 
@@ -334,23 +334,48 @@ DECLARE
   v_activity RECORD;
 BEGIN
   -- Loop through all activities for the claim
+  -- CUMULATIVE-WITH-CAP IMPLEMENTATION
+  -- Rationale:
+  --  - Sum all remittance payments per activity across cycles
+  --  - Cap cumulative paid at the activity's submitted net (prevents overcounting)
+  --  - Treat as REJECTED only if the latest remittance shows a denial AND capped paid = 0
+  --  - Denied amount equals submitted net only in that latest-denied-and-zero-paid scenario
   FOR v_activity IN 
     SELECT 
       a.activity_id,
       a.net as submitted_amount,
-      COALESCE(SUM(ra.payment_amount), 0) as paid_amount,
-      COALESCE(SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN a.net ELSE 0 END), 0) as rejected_amount,
-      COALESCE(SUM(CASE WHEN ra.denial_code IS NOT NULL THEN a.net ELSE 0 END), 0) as denied_amount,
-      COUNT(DISTINCT rc.id) as remittance_count,
-      ARRAY_AGG(DISTINCT ra.denial_code ORDER BY ra.denial_code) FILTER (WHERE ra.denial_code IS NOT NULL) as denial_codes,
-      MIN(DATE(rc.date_settlement)) as first_payment_date,
-      MAX(DATE(rc.date_settlement)) as last_payment_date,
+      -- cumulative sum of payments across all remittances for this activity
+      COALESCE(SUM(ra.payment_amount), 0)                                         AS cumulative_paid_raw,
+      -- CAP at submitted net to avoid overcounting beyond amount billed
+      LEAST(COALESCE(SUM(ra.payment_amount), 0), a.net)                           AS paid_amount,
+      -- latest denial across remittances (order by settlement desc, then row id)
+      (ARRAY_AGG(ra.denial_code ORDER BY rc.date_settlement DESC NULLS LAST, ra.id DESC))[1]
+                                                                                   AS latest_denial_code,
+      -- REJECTED when latest indicates denial and capped paid is zero
+      CASE 
+        WHEN (ARRAY_AGG(ra.denial_code ORDER BY rc.date_settlement DESC NULLS LAST, ra.id DESC))[1] IS NOT NULL
+             AND LEAST(COALESCE(SUM(ra.payment_amount), 0), a.net) = 0 
+        THEN a.net 
+        ELSE 0 
+      END                                                                           AS rejected_amount,
+      -- DENIED amount mirrors rejected under latest-denial-and-zero-paid semantics
+      CASE 
+        WHEN (ARRAY_AGG(ra.denial_code ORDER BY rc.date_settlement DESC NULLS LAST, ra.id DESC))[1] IS NOT NULL
+             AND LEAST(COALESCE(SUM(ra.payment_amount), 0), a.net) = 0 
+        THEN a.net 
+        ELSE 0 
+      END                                                                           AS denied_amount,
+      COUNT(DISTINCT rc.id)                                                         AS remittance_count,
+      ARRAY_AGG(DISTINCT ra.denial_code ORDER BY ra.denial_code) FILTER (WHERE ra.denial_code IS NOT NULL)
+                                                                                   AS denial_codes,
+      MIN(DATE(rc.date_settlement))                                                AS first_payment_date,
+      MAX(DATE(rc.date_settlement))                                                AS last_payment_date,
       CASE 
         WHEN MIN(DATE(c.tx_at)) IS NOT NULL AND MIN(DATE(rc.date_settlement)) IS NOT NULL 
         THEN MIN(DATE(rc.date_settlement)) - MIN(DATE(c.tx_at))
         ELSE NULL
-      END as days_to_first_payment,
-      MAX(c.tx_at) as tx_at
+      END                                                                           AS days_to_first_payment,
+      MAX(c.tx_at)                                                                  AS tx_at
     FROM claims.claim c
     JOIN claims.activity a ON a.claim_id = c.id
     LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = c.claim_key_id
@@ -359,16 +384,17 @@ BEGIN
     WHERE c.claim_key_id = p_claim_key_id
     GROUP BY a.activity_id, a.net, c.tx_at
   LOOP
-    -- Calculate activity status
-    DECLARE
-      v_activity_status VARCHAR(20);
-    BEGIN
-      v_activity_status := CASE 
-        WHEN v_activity.paid_amount = v_activity.submitted_amount AND v_activity.submitted_amount > 0 THEN 'FULLY_PAID'
-        WHEN v_activity.paid_amount > 0 THEN 'PARTIALLY_PAID'
-        WHEN v_activity.rejected_amount > 0 THEN 'REJECTED'
-        ELSE 'PENDING'
-      END;
+      -- Calculate activity status
+      DECLARE
+        v_activity_status VARCHAR(20);
+      BEGIN
+        -- Status from capped paid and latest-denial semantics
+        v_activity_status := CASE 
+          WHEN v_activity.paid_amount = v_activity.submitted_amount AND v_activity.submitted_amount > 0 THEN 'FULLY_PAID'
+          WHEN v_activity.paid_amount > 0 THEN 'PARTIALLY_PAID'
+          WHEN v_activity.rejected_amount > 0 THEN 'REJECTED'
+          ELSE 'PENDING'
+        END;
       
       -- Upsert activity summary record
       INSERT INTO claims.claim_activity_summary (

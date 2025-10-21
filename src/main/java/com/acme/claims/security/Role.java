@@ -1,1 +1,7 @@
-package com.acme.claims.security; public enum Role { SUPER_ADMIN, FACILITY_ADMIN, STAFF }
+package com.acme.claims.security;
+
+public enum Role {
+    SUPER_ADMIN,
+    FACILITY_ADMIN,
+    STAFF
+}

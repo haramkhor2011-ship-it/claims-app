@@ -22,6 +22,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.Set;
 
 /**
  * REST Controller for facility administration operations.
@@ -86,7 +87,7 @@ public class FacilityAdminController {
         )
     })
     @PostMapping
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN')")
     public ResponseEntity<Map<String, Object>> createOrUpdate(
             @Valid @RequestBody FacilityAdminService.FacilityDto dto,
             @Parameter(hidden = true) Authentication authentication) {
@@ -95,6 +96,14 @@ public class FacilityAdminController {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
             log.info("User {} (ID: {}) creating/updating facility: {} from IP: {}", 
                     userContext.getUsername(), userContext.getUserId(), dto.facilityCode(), userContext.getIpAddress());
+            
+            // For FACILITY_ADMIN: Allow creating/updating facilities
+            // When multi-tenancy is disabled, FACILITY_ADMIN can manage any facility
+            if (userContext.isFacilityAdmin() && !userContext.isSuperAdmin()) {
+                // TODO: When multi-tenancy is enabled, add facility access checks here
+                log.info("FACILITY_ADMIN {} managing facility {} (multi-tenancy disabled)", 
+                        userContext.getUsername(), dto.facilityCode());
+            }
             
             svc.upsert(dto);
             
@@ -167,11 +176,11 @@ public class FacilityAdminController {
             log.info("User {} (ID: {}) requesting facility configuration: {} from IP: {}", 
                     userContext.getUsername(), userContext.getUserId(), code, userContext.getIpAddress());
             
-            // Check if user has access to this facility (for FACILITY_ADMIN)
-            if (userContext.isFacilityAdmin() && !userContext.hasFacilityAccess(code)) {
-                log.warn("User {} (ID: {}) attempted to access facility {} without permission", 
-                        userContext.getUsername(), userContext.getUserId(), code);
-                return ResponseEntity.status(403).build();
+            // When multi-tenancy is disabled, FACILITY_ADMIN can access any facility
+            // TODO: When multi-tenancy is enabled, add facility access checks here
+            if (userContext.isFacilityAdmin() && !userContext.isSuperAdmin()) {
+                log.info("FACILITY_ADMIN {} accessing facility {} (multi-tenancy disabled)", 
+                        userContext.getUsername(), code);
             }
             
             FacilityAdminService.FacilityView facility = svc.get(code);
@@ -187,6 +196,97 @@ public class FacilityAdminController {
         } catch (Exception e) {
             log.error("Error retrieving facility: {} by user: {}", code, userContextService.getCurrentUsername(), e);
             return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    /**
+     * Get all facilities accessible to the current user
+     * 
+     * @param authentication Current user authentication context
+     * @return List of facilities accessible to the user
+     */
+    @Operation(
+        summary = "Get accessible facilities",
+        description = "Retrieves all facilities that the current user has access to"
+    )
+    @ApiResponses(value = {
+        @ApiResponse(
+            responseCode = "200",
+            description = "Facilities retrieved successfully",
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                examples = @ExampleObject(
+                    value = "{\"facilities\": [{\"facilityCode\": \"FACILITY_001\", \"facilityName\": \"Main Hospital\", \"active\": true}], \"total\": 1}"
+                )
+            )
+        ),
+        @ApiResponse(
+            responseCode = "401",
+            description = "Unauthorized - Invalid or missing authentication token",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Forbidden - Insufficient permissions",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
+        )
+    })
+    @GetMapping
+    @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN')")
+    public ResponseEntity<Map<String, Object>> getAllFacilities(
+            @Parameter(hidden = true) Authentication authentication) {
+        
+        try {
+            UserContext userContext = userContextService.getCurrentUserContextWithRequest();
+            log.info("User {} (ID: {}) requesting all accessible facilities from IP: {}", 
+                    userContext.getUsername(), userContext.getUserId(), userContext.getIpAddress());
+            
+            // When multi-tenancy is disabled, all users can access all facilities
+            // TODO: When multi-tenancy is enabled, implement proper facility filtering
+            Set<String> accessibleFacilities = userContext.getFacilities();
+            
+            if (userContext.isSuperAdmin()) {
+                log.info("Super admin {} requesting all facilities", userContext.getUsername());
+            } else if (userContext.isFacilityAdmin()) {
+                log.info("FACILITY_ADMIN {} requesting facilities (multi-tenancy disabled - full access)", 
+                        userContext.getUsername());
+            }
+            
+            Map<String, Object> response = Map.of(
+                "facilities", accessibleFacilities.stream()
+                    .map(facilityCode -> {
+                        try {
+                            FacilityAdminService.FacilityView facility = svc.get(facilityCode);
+                            return Map.of(
+                                "facilityCode", facility.facilityCode(),
+                                "facilityName", facility.facilityName(),
+                                "active", true // TODO: Get actual active status from database
+                            );
+                        } catch (Exception e) {
+                            return Map.of(
+                                "facilityCode", facilityCode,
+                                "facilityName", "Unknown",
+                                "active", false,
+                                "error", "Could not retrieve facility details"
+                            );
+                        }
+                    })
+                    .toList(),
+                "total", accessibleFacilities.size(),
+                "user", userContext.getUsername(),
+                "isSuperAdmin", userContext.isSuperAdmin()
+            );
+            
+            log.info("Successfully retrieved {} facilities for user: {} (ID: {})", 
+                    accessibleFacilities.size(), userContext.getUsername(), userContext.getUserId());
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            log.error("Error retrieving facilities for user: {}", 
+                    userContextService.getCurrentUsername(), e);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Failed to retrieve facilities: " + e.getMessage()));
         }
     }
 
@@ -230,7 +330,7 @@ public class FacilityAdminController {
         )
     })
     @PatchMapping("/{code}/activate")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN')")
     public ResponseEntity<Map<String, Object>> activate(
             @Parameter(description = "Facility code", required = true, example = "FACILITY_001")
             @PathVariable String code,
@@ -243,6 +343,13 @@ public class FacilityAdminController {
             log.info("User {} (ID: {}) {} facility: {} from IP: {}", 
                     userContext.getUsername(), userContext.getUserId(), 
                     active ? "activating" : "deactivating", code, userContext.getIpAddress());
+            
+            // When multi-tenancy is disabled, FACILITY_ADMIN can manage any facility
+            // TODO: When multi-tenancy is enabled, add facility access checks here
+            if (userContext.isFacilityAdmin() && !userContext.isSuperAdmin()) {
+                log.info("FACILITY_ADMIN {} {} facility {} (multi-tenancy disabled)", 
+                        userContext.getUsername(), active ? "activating" : "deactivating", code);
+            }
             
             svc.activate(code, active);
             

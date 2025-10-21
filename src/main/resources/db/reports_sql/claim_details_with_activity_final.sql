@@ -95,8 +95,8 @@ SELECT
     rc.id_payer,
     rc.payment_reference,
     rc.date_settlement as initial_date_settlement,
-    rc.denial_code as initial_denial_code,
-    rc.denial_code_ref_id as denial_code_ref_id,
+    ra.denial_code as initial_denial_code,
+    ra.denial_code_ref_id as denial_code_ref_id,
     rc.provider_ref_id as remittance_provider_ref_id,
     rc.payer_ref_id as remittance_payer_ref_id,
     r.tx_at as remittance_date,
@@ -139,15 +139,15 @@ SELECT
         ELSE 'Unknown'
     END as payment_status,
 
-    -- Financial Calculations
-    COALESCE(ra.payment_amount, 0) as remitted_amount,
-    COALESCE(ra.payment_amount, 0) as settled_amount,
-    CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END as rejected_amount,
-    CASE WHEN rc.date_settlement IS NULL THEN c.net ELSE 0 END as unprocessed_amount,
-    CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END as initial_rejected_amount,
+    -- Financial Calculations (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    COALESCE(cas.paid_amount, 0) as remitted_amount,                    -- capped paid across remittances
+    COALESCE(cas.paid_amount, 0) as settled_amount,                    -- same as remitted for this report
+    COALESCE(cas.rejected_amount, 0) as rejected_amount,               -- rejected only when latest denial and zero paid
+    COALESCE(cas.submitted_amount, 0) - COALESCE(cas.paid_amount, 0) - COALESCE(cas.denied_amount, 0) as unprocessed_amount,  -- remaining after paid/denied
+    COALESCE(cas.denied_amount, 0) as initial_rejected_amount,         -- denied amount from latest denial logic
 
-    -- Denial Information
-    ra.denial_code as last_denial_code,
+    -- Denial Information (CUMULATIVE-WITH-CAP: Using latest denial from activity summary)
+    (cas.denial_codes)[1] as last_denial_code,  -- first element of denial codes array (latest)
     ''::text as remittance_comments,
     c.comments as denial_comment,
 
@@ -218,6 +218,8 @@ LEFT JOIN claims_ref.payer py ON py.id = c.payer_ref_id
 LEFT JOIN claims.activity a ON a.claim_id = c.id
 LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
 LEFT JOIN claims_ref.activity_code ac ON ac.id = a.activity_code_ref_id
+-- CUMULATIVE-WITH-CAP: Join to pre-computed activity summary for accurate financial calculations
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id AND cas.activity_id = a.activity_id
 LEFT JOIN claims.diagnosis d_principal ON d_principal.claim_id = c.id AND d_principal.diag_type = 'Principal'
 LEFT JOIN claims.diagnosis d_secondary ON d_secondary.claim_id = c.id AND d_secondary.diag_type = 'Secondary'
 LEFT JOIN claims.ingestion_file if_submission ON if_submission.id = s.ingestion_file_id
@@ -231,6 +233,8 @@ COMMENT ON VIEW claims.v_claim_details_with_activity IS 'COMPREHENSIVE Claim Det
 -- FUNCTION: get_claim_details_with_activity (Complex filtering)
 -- ==========================================================================================================
 CREATE OR REPLACE FUNCTION claims.get_claim_details_with_activity(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'details',
     p_facility_code TEXT DEFAULT NULL,
     p_receiver_id TEXT DEFAULT NULL,
     p_payer_code TEXT DEFAULT NULL,
@@ -323,26 +327,34 @@ CREATE OR REPLACE FUNCTION claims.get_claim_details_with_activity(
     updated_at TIMESTAMPTZ
 ) AS $$
 BEGIN
-    RETURN QUERY
-    SELECT
-        mv.claim_id,
-        mv.claim_db_id,
-        mv.payer_id,
-        mv.provider_id,
-        mv.member_id,
-        mv.emirates_id_number,
-        mv.gross,
-        mv.patient_share,
-        mv.initial_net_amount,
-        mv.comments,
-        mv.submission_date,
-        mv.provider_name,
-        mv.receiver_id,
-        mv.payer_name,
-        mv.payer_code,
-        mv.facility_id,
-        mv.encounter_type,
-        mv.patient_id,
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'details' THEN
+                RETURN QUERY
+                SELECT
+                    mv.claim_id,
+                    mv.claim_db_id,
+                    mv.payer_id,
+                    mv.provider_id,
+                    mv.member_id,
+                    mv.emirates_id_number,
+                    mv.gross,
+                    mv.patient_share,
+                    mv.initial_net_amount,
+                    mv.comments,
+                    mv.submission_date,
+                    mv.provider_name,
+                    mv.receiver_id,
+                    mv.payer_name,
+                    mv.payer_code,
+                    mv.facility_id,
+                    mv.encounter_type,
+                    mv.patient_id,
         mv.encounter_start,
         mv.encounter_end_date,
         mv.facility_name,
@@ -416,6 +428,296 @@ BEGIN
         AND (p_to_date IS NULL OR mv.submission_date <= p_to_date)
     ORDER BY mv.submission_date DESC, mv.claim_id
     LIMIT p_limit OFFSET p_offset;
+            ELSE
+                -- Default to details
+                RETURN QUERY
+                SELECT
+                    mv.claim_id,
+                    mv.claim_db_id,
+                    mv.payer_id,
+                    mv.provider_id,
+                    mv.member_id,
+                    mv.emirates_id_number,
+                    mv.gross,
+                    mv.patient_share,
+                    mv.initial_net_amount,
+                    mv.comments,
+                    mv.submission_date,
+                    mv.provider_name,
+                    mv.receiver_id,
+                    mv.payer_name,
+                    mv.payer_code,
+                    mv.facility_id,
+                    mv.encounter_type,
+                    mv.patient_id,
+                    mv.encounter_start,
+                    mv.encounter_end_date,
+                    mv.facility_name,
+                    mv.facility_group,
+                    mv.submission_id,
+                    mv.submission_transaction_date,
+                    mv.remittance_claim_id,
+                    mv.id_payer,
+                    mv.payment_reference,
+                    mv.initial_date_settlement,
+                    mv.initial_denial_code,
+                    mv.remittance_date,
+                    mv.remittance_id,
+                    mv.claim_activity_number,
+                    mv.activity_start_date,
+                    mv.activity_type,
+                    mv.cpt_code,
+                    mv.quantity,
+                    mv.activity_net_amount,
+                    mv.clinician,
+                    mv.prior_authorization_id,
+                    mv.clinician_name,
+                    mv.activity_description,
+                    mv.primary_diagnosis,
+                    mv.secondary_diagnosis,
+                    mv.last_submission_file,
+                    mv.last_submission_transaction_date,
+                    mv.last_remittance_file,
+                    mv.last_remittance_transaction_date,
+                    mv.claim_status,
+                    mv.claim_status_time,
+                    mv.payment_status,
+                    mv.remitted_amount,
+                    mv.settled_amount,
+                    mv.rejected_amount,
+                    mv.unprocessed_amount,
+                    mv.initial_rejected_amount,
+                    mv.last_denial_code,
+                    mv.remittance_comments,
+                    mv.denial_comment,
+                    mv.resubmission_type,
+                    mv.resubmission_comment,
+                    mv.net_collection_rate,
+                    mv.denial_rate,
+                    mv.turnaround_time_days,
+                    mv.resubmission_effectiveness,
+                    mv.created_at,
+                    mv.updated_at
+                FROM claims.mv_claim_details_complete mv
+                WHERE
+                    (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+                    AND (p_receiver_id IS NULL OR mv.receiver_id = p_receiver_id)
+                    AND (p_payer_code IS NULL OR mv.payer_code = p_payer_code)
+                    AND (p_clinician IS NULL OR mv.clinician = p_clinician)
+                    AND (p_claim_id IS NULL OR mv.claim_id = p_claim_id)
+                    AND (p_patient_id IS NULL OR mv.patient_id = p_patient_id)
+                    AND (p_cpt_code IS NULL OR mv.cpt_code = p_cpt_code)
+                    AND (p_claim_status IS NULL OR mv.claim_status = p_claim_status)
+                    AND (p_payment_status IS NULL OR mv.payment_status = p_payment_status)
+                    AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
+                    AND (p_resub_type IS NULL OR mv.resubmission_type = p_resub_type)
+                    AND (p_denial_code IS NULL OR mv.last_denial_code = p_denial_code)
+                    AND (p_member_id IS NULL OR mv.member_id = p_member_id)
+                    AND (p_payer_ref_id IS NULL OR mv.payer_ref_id = p_payer_ref_id)
+                    AND (p_provider_ref_id IS NULL OR mv.provider_ref_id = p_provider_ref_id OR mv.remittance_provider_ref_id = p_provider_ref_id)
+                    AND (p_facility_ref_id IS NULL OR mv.facility_ref_id = p_facility_ref_id)
+                    AND (p_clinician_ref_id IS NULL OR mv.clinician_ref_id = p_clinician_ref_id)
+                    AND (p_activity_code_ref_id IS NULL OR mv.activity_code_ref_id = p_activity_code_ref_id)
+                    AND (p_denial_code_ref_id IS NULL OR mv.denial_code_ref_id = p_denial_code_ref_id)
+                    AND (p_from_date IS NULL OR mv.submission_date >= p_from_date)
+                    AND (p_to_date IS NULL OR mv.submission_date <= p_to_date)
+                ORDER BY mv.submission_date DESC, mv.claim_id
+                LIMIT p_limit OFFSET p_offset;
+        END CASE;
+    ELSE
+        -- Use traditional views for real-time data
+        CASE p_tab_name
+            WHEN 'details' THEN
+                RETURN QUERY
+                SELECT
+                    cda.claim_id,
+                    cda.claim_db_id,
+                    cda.payer_id,
+                    cda.provider_id,
+                    cda.member_id,
+                    cda.emirates_id_number,
+                    cda.gross,
+                    cda.patient_share,
+                    cda.initial_net_amount,
+                    cda.comments,
+                    cda.submission_date,
+                    cda.provider_name,
+                    cda.receiver_id,
+                    cda.payer_name,
+                    cda.payer_code,
+                    cda.facility_id,
+                    cda.encounter_type,
+                    cda.patient_id,
+                    cda.encounter_start,
+                    cda.encounter_end_date,
+                    cda.facility_name,
+                    cda.facility_group,
+                    cda.submission_id,
+                    cda.submission_transaction_date,
+                    cda.remittance_claim_id,
+                    cda.id_payer,
+                    cda.payment_reference,
+                    cda.initial_date_settlement,
+                    cda.initial_denial_code,
+                    cda.remittance_date,
+                    cda.remittance_id,
+                    cda.claim_activity_number,
+                    cda.activity_start_date,
+                    cda.activity_type,
+                    cda.cpt_code,
+                    cda.quantity,
+                    cda.activity_net_amount,
+                    cda.clinician,
+                    cda.prior_authorization_id,
+                    cda.clinician_name,
+                    cda.activity_description,
+                    cda.primary_diagnosis,
+                    cda.secondary_diagnosis,
+                    cda.last_submission_file,
+                    cda.last_submission_transaction_date,
+                    cda.last_remittance_file,
+                    cda.last_remittance_transaction_date,
+                    cda.claim_status,
+                    cda.claim_status_time,
+                    cda.payment_status,
+                    cda.remitted_amount,
+                    cda.settled_amount,
+                    cda.rejected_amount,
+                    cda.unprocessed_amount,
+                    cda.initial_rejected_amount,
+                    cda.last_denial_code,
+                    cda.remittance_comments,
+                    cda.denial_comment,
+                    cda.resubmission_type,
+                    cda.resubmission_comment,
+                    cda.net_collection_rate,
+                    cda.denial_rate,
+                    cda.turnaround_time_days,
+                    cda.resubmission_effectiveness,
+                    cda.created_at,
+                    cda.updated_at
+                FROM claims.v_claim_details_with_activity cda
+                WHERE
+                    (p_facility_code IS NULL OR cda.facility_id = p_facility_code)
+                    AND (p_receiver_id IS NULL OR cda.receiver_id = p_receiver_id)
+                    AND (p_payer_code IS NULL OR cda.payer_code = p_payer_code)
+                    AND (p_clinician IS NULL OR cda.clinician = p_clinician)
+                    AND (p_claim_id IS NULL OR cda.claim_id = p_claim_id)
+                    AND (p_patient_id IS NULL OR cda.patient_id = p_patient_id)
+                    AND (p_cpt_code IS NULL OR cda.cpt_code = p_cpt_code)
+                    AND (p_claim_status IS NULL OR cda.claim_status = p_claim_status)
+                    AND (p_payment_status IS NULL OR cda.payment_status = p_payment_status)
+                    AND (p_encounter_type IS NULL OR cda.encounter_type = p_encounter_type)
+                    AND (p_resub_type IS NULL OR cda.resubmission_type = p_resub_type)
+                    AND (p_denial_code IS NULL OR cda.last_denial_code = p_denial_code)
+                    AND (p_member_id IS NULL OR cda.member_id = p_member_id)
+                    AND (p_payer_ref_id IS NULL OR cda.payer_ref_id = p_payer_ref_id)
+                    AND (p_provider_ref_id IS NULL OR cda.provider_ref_id = p_provider_ref_id OR cda.remittance_provider_ref_id = p_provider_ref_id)
+                    AND (p_facility_ref_id IS NULL OR cda.facility_ref_id = p_facility_ref_id)
+                    AND (p_clinician_ref_id IS NULL OR cda.clinician_ref_id = p_clinician_ref_id)
+                    AND (p_activity_code_ref_id IS NULL OR cda.activity_code_ref_id = p_activity_code_ref_id)
+                    AND (p_denial_code_ref_id IS NULL OR cda.denial_code_ref_id = p_denial_code_ref_id)
+                    AND (p_from_date IS NULL OR cda.submission_date >= p_from_date)
+                    AND (p_to_date IS NULL OR cda.submission_date <= p_to_date)
+                ORDER BY cda.submission_date DESC, cda.claim_id
+                LIMIT p_limit OFFSET p_offset;
+            ELSE
+                -- Default to details
+                RETURN QUERY
+                SELECT
+                    cda.claim_id,
+                    cda.claim_db_id,
+                    cda.payer_id,
+                    cda.provider_id,
+                    cda.member_id,
+                    cda.emirates_id_number,
+                    cda.gross,
+                    cda.patient_share,
+                    cda.initial_net_amount,
+                    cda.comments,
+                    cda.submission_date,
+                    cda.provider_name,
+                    cda.receiver_id,
+                    cda.payer_name,
+                    cda.payer_code,
+                    cda.facility_id,
+                    cda.encounter_type,
+                    cda.patient_id,
+                    cda.encounter_start,
+                    cda.encounter_end_date,
+                    cda.facility_name,
+                    cda.facility_group,
+                    cda.submission_id,
+                    cda.submission_transaction_date,
+                    cda.remittance_claim_id,
+                    cda.id_payer,
+                    cda.payment_reference,
+                    cda.initial_date_settlement,
+                    cda.initial_denial_code,
+                    cda.remittance_date,
+                    cda.remittance_id,
+                    cda.claim_activity_number,
+                    cda.activity_start_date,
+                    cda.activity_type,
+                    cda.cpt_code,
+                    cda.quantity,
+                    cda.activity_net_amount,
+                    cda.clinician,
+                    cda.prior_authorization_id,
+                    cda.clinician_name,
+                    cda.activity_description,
+                    cda.primary_diagnosis,
+                    cda.secondary_diagnosis,
+                    cda.last_submission_file,
+                    cda.last_submission_transaction_date,
+                    cda.last_remittance_file,
+                    cda.last_remittance_transaction_date,
+                    cda.claim_status,
+                    cda.claim_status_time,
+                    cda.payment_status,
+                    cda.remitted_amount,
+                    cda.settled_amount,
+                    cda.rejected_amount,
+                    cda.unprocessed_amount,
+                    cda.initial_rejected_amount,
+                    cda.last_denial_code,
+                    cda.remittance_comments,
+                    cda.denial_comment,
+                    cda.resubmission_type,
+                    cda.resubmission_comment,
+                    cda.net_collection_rate,
+                    cda.denial_rate,
+                    cda.turnaround_time_days,
+                    cda.resubmission_effectiveness,
+                    cda.created_at,
+                    cda.updated_at
+                FROM claims.v_claim_details_with_activity cda
+                WHERE
+                    (p_facility_code IS NULL OR cda.facility_id = p_facility_code)
+                    AND (p_receiver_id IS NULL OR cda.receiver_id = p_receiver_id)
+                    AND (p_payer_code IS NULL OR cda.payer_code = p_payer_code)
+                    AND (p_clinician IS NULL OR cda.clinician = p_clinician)
+                    AND (p_claim_id IS NULL OR cda.claim_id = p_claim_id)
+                    AND (p_patient_id IS NULL OR cda.patient_id = p_patient_id)
+                    AND (p_cpt_code IS NULL OR cda.cpt_code = p_cpt_code)
+                    AND (p_claim_status IS NULL OR cda.claim_status = p_claim_status)
+                    AND (p_payment_status IS NULL OR cda.payment_status = p_payment_status)
+                    AND (p_encounter_type IS NULL OR cda.encounter_type = p_encounter_type)
+                    AND (p_resub_type IS NULL OR cda.resubmission_type = p_resub_type)
+                    AND (p_denial_code IS NULL OR cda.last_denial_code = p_denial_code)
+                    AND (p_member_id IS NULL OR cda.member_id = p_member_id)
+                    AND (p_payer_ref_id IS NULL OR cda.payer_ref_id = p_payer_ref_id)
+                    AND (p_provider_ref_id IS NULL OR cda.provider_ref_id = p_provider_ref_id OR cda.remittance_provider_ref_id = p_provider_ref_id)
+                    AND (p_facility_ref_id IS NULL OR cda.facility_ref_id = p_facility_ref_id)
+                    AND (p_clinician_ref_id IS NULL OR cda.clinician_ref_id = p_clinician_ref_id)
+                    AND (p_activity_code_ref_id IS NULL OR cda.activity_code_ref_id = p_activity_code_ref_id)
+                    AND (p_denial_code_ref_id IS NULL OR cda.denial_code_ref_id = p_denial_code_ref_id)
+                    AND (p_from_date IS NULL OR cda.submission_date >= p_from_date)
+                    AND (p_to_date IS NULL OR cda.submission_date <= p_to_date)
+                ORDER BY cda.submission_date DESC, cda.claim_id
+                LIMIT p_limit OFFSET p_offset;
+        END CASE;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -425,6 +727,8 @@ COMMENT ON FUNCTION claims.get_claim_details_with_activity IS 'Get filtered clai
 -- FUNCTION: get_claim_details_summary (Dashboard metrics)
 -- ==========================================================================================================
 CREATE OR REPLACE FUNCTION claims.get_claim_details_summary(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'summary',
     p_facility_code TEXT DEFAULT NULL,
     p_receiver_id TEXT DEFAULT NULL,
     p_payer_code TEXT DEFAULT NULL,
@@ -449,30 +753,38 @@ CREATE OR REPLACE FUNCTION claims.get_claim_details_summary(
     unique_facilities BIGINT
 ) AS $$
 BEGIN
-    RETURN QUERY
-    WITH filtered_data AS (
-        SELECT
-            mv.claim_id,
-            mv.initial_net_amount,
-            mv.remitted_amount,
-            mv.rejected_amount,
-            mv.unprocessed_amount,
-            mv.net_collection_rate,
-            mv.denial_rate,
-            mv.turnaround_time_days,
-            mv.payment_status,
-            mv.resubmission_type,
-            mv.patient_id,
-            mv.provider_id,
-            mv.facility_id
-        FROM claims.mv_claim_details_complete mv
-        WHERE
-            (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
-            AND (p_receiver_id IS NULL OR mv.receiver_id = p_receiver_id)
-            AND (p_payer_code IS NULL OR mv.payer_code = p_payer_code)
-            AND (p_from_date IS NULL OR mv.submission_date >= p_from_date)
-            AND (p_to_date IS NULL OR mv.submission_date <= p_to_date)
-    ),
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'summary' THEN
+                RETURN QUERY
+                WITH filtered_data AS (
+                    SELECT
+                        mv.claim_id,
+                        mv.initial_net_amount,
+                        mv.remitted_amount,
+                        mv.rejected_amount,
+                        mv.unprocessed_amount,
+                        mv.net_collection_rate,
+                        mv.denial_rate,
+                        mv.turnaround_time_days,
+                        mv.payment_status,
+                        mv.resubmission_type,
+                        mv.patient_id,
+                        mv.provider_id,
+                        mv.facility_id
+                    FROM claims.mv_claim_details_complete mv
+                    WHERE
+                        (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+                        AND (p_receiver_id IS NULL OR mv.receiver_id = p_receiver_id)
+                        AND (p_payer_code IS NULL OR mv.payer_code = p_payer_code)
+                        AND (p_from_date IS NULL OR mv.submission_date >= p_from_date)
+                        AND (p_to_date IS NULL OR mv.submission_date <= p_to_date)
+                ),
     claim_level AS (
         SELECT
             claim_id,
@@ -499,6 +811,167 @@ BEGIN
         COUNT(DISTINCT provider_id) as unique_providers,
         COUNT(DISTINCT facility_id) as unique_facilities
     FROM filtered_data;
+            ELSE
+                -- Default to summary
+                RETURN QUERY
+                WITH filtered_data AS (
+                    SELECT
+                        cda.claim_id,
+                        cda.initial_net_amount,
+                        cda.remitted_amount,
+                        cda.rejected_amount,
+                        cda.unprocessed_amount,
+                        cda.net_collection_rate,
+                        cda.denial_rate,
+                        cda.turnaround_time_days,
+                        cda.payment_status,
+                        cda.resubmission_type,
+                        cda.patient_id,
+                        cda.provider_id,
+                        cda.facility_id
+                    FROM claims.v_claim_details_with_activity cda
+                    WHERE
+                        (p_facility_code IS NULL OR cda.facility_id = p_facility_code)
+                        AND (p_receiver_id IS NULL OR cda.receiver_id = p_receiver_id)
+                        AND (p_payer_code IS NULL OR cda.payer_code = p_payer_code)
+                        AND (p_from_date IS NULL OR cda.submission_date >= p_from_date)
+                        AND (p_to_date IS NULL OR cda.submission_date <= p_to_date)
+                ),
+    claim_level AS (
+        SELECT
+            claim_id,
+            MAX(initial_net_amount) AS initial_net_amount,
+            MAX(unprocessed_amount) AS unprocessed_amount
+        FROM filtered_data
+        GROUP BY claim_id
+    )
+    SELECT
+        COUNT(DISTINCT claim_id) as total_claims,
+        (SELECT SUM(initial_net_amount) FROM claim_level) as total_claim_amount,
+        SUM(remitted_amount) as total_paid_amount,
+        SUM(rejected_amount) as total_rejected_amount,
+        (SELECT SUM(unprocessed_amount) FROM claim_level) as total_pending_amount,
+        ROUND(AVG(net_collection_rate), 2) as avg_collection_rate,
+        ROUND(AVG(denial_rate), 2) as avg_denial_rate,
+        ROUND(AVG(turnaround_time_days), 2) as avg_turnaround_time,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Fully Paid' THEN claim_id END) as fully_paid_count,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Partially Paid' THEN claim_id END) as partially_paid_count,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Rejected' THEN claim_id END) as fully_rejected_count,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Pending' THEN claim_id END) as pending_count,
+        COUNT(DISTINCT CASE WHEN resubmission_type IS NOT NULL THEN claim_id END) as resubmitted_count,
+        COUNT(DISTINCT patient_id) as unique_patients,
+        COUNT(DISTINCT provider_id) as unique_providers,
+        COUNT(DISTINCT facility_id) as unique_facilities
+    FROM filtered_data;
+        END CASE;
+    ELSE
+        -- Use traditional views for real-time data
+        CASE p_tab_name
+            WHEN 'summary' THEN
+                RETURN QUERY
+                WITH filtered_data AS (
+                    SELECT
+                        cda.claim_id,
+                        cda.initial_net_amount,
+                        cda.remitted_amount,
+                        cda.rejected_amount,
+                        cda.unprocessed_amount,
+                        cda.net_collection_rate,
+                        cda.denial_rate,
+                        cda.turnaround_time_days,
+                        cda.payment_status,
+                        cda.resubmission_type,
+                        cda.patient_id,
+                        cda.provider_id,
+                        cda.facility_id
+                    FROM claims.v_claim_details_with_activity cda
+                    WHERE
+                        (p_facility_code IS NULL OR cda.facility_id = p_facility_code)
+                        AND (p_receiver_id IS NULL OR cda.receiver_id = p_receiver_id)
+                        AND (p_payer_code IS NULL OR cda.payer_code = p_payer_code)
+                        AND (p_from_date IS NULL OR cda.submission_date >= p_from_date)
+                        AND (p_to_date IS NULL OR cda.submission_date <= p_to_date)
+                ),
+    claim_level AS (
+        SELECT
+            claim_id,
+            MAX(initial_net_amount) AS initial_net_amount,
+            MAX(unprocessed_amount) AS unprocessed_amount
+        FROM filtered_data
+        GROUP BY claim_id
+    )
+    SELECT
+        COUNT(DISTINCT claim_id) as total_claims,
+        (SELECT SUM(initial_net_amount) FROM claim_level) as total_claim_amount,
+        SUM(remitted_amount) as total_paid_amount,
+        SUM(rejected_amount) as total_rejected_amount,
+        (SELECT SUM(unprocessed_amount) FROM claim_level) as total_pending_amount,
+        ROUND(AVG(net_collection_rate), 2) as avg_collection_rate,
+        ROUND(AVG(denial_rate), 2) as avg_denial_rate,
+        ROUND(AVG(turnaround_time_days), 2) as avg_turnaround_time,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Fully Paid' THEN claim_id END) as fully_paid_count,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Partially Paid' THEN claim_id END) as partially_paid_count,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Rejected' THEN claim_id END) as fully_rejected_count,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Pending' THEN claim_id END) as pending_count,
+        COUNT(DISTINCT CASE WHEN resubmission_type IS NOT NULL THEN claim_id END) as resubmitted_count,
+        COUNT(DISTINCT patient_id) as unique_patients,
+        COUNT(DISTINCT provider_id) as unique_providers,
+        COUNT(DISTINCT facility_id) as unique_facilities
+    FROM filtered_data;
+            ELSE
+                -- Default to summary
+                RETURN QUERY
+                WITH filtered_data AS (
+                    SELECT
+                        cda.claim_id,
+                        cda.initial_net_amount,
+                        cda.remitted_amount,
+                        cda.rejected_amount,
+                        cda.unprocessed_amount,
+                        cda.net_collection_rate,
+                        cda.denial_rate,
+                        cda.turnaround_time_days,
+                        cda.payment_status,
+                        cda.resubmission_type,
+                        cda.patient_id,
+                        cda.provider_id,
+                        cda.facility_id
+                    FROM claims.v_claim_details_with_activity cda
+                    WHERE
+                        (p_facility_code IS NULL OR cda.facility_id = p_facility_code)
+                        AND (p_receiver_id IS NULL OR cda.receiver_id = p_receiver_id)
+                        AND (p_payer_code IS NULL OR cda.payer_code = p_payer_code)
+                        AND (p_from_date IS NULL OR cda.submission_date >= p_from_date)
+                        AND (p_to_date IS NULL OR cda.submission_date <= p_to_date)
+                ),
+    claim_level AS (
+        SELECT
+            claim_id,
+            MAX(initial_net_amount) AS initial_net_amount,
+            MAX(unprocessed_amount) AS unprocessed_amount
+        FROM filtered_data
+        GROUP BY claim_id
+    )
+    SELECT
+        COUNT(DISTINCT claim_id) as total_claims,
+        (SELECT SUM(initial_net_amount) FROM claim_level) as total_claim_amount,
+        SUM(remitted_amount) as total_paid_amount,
+        SUM(rejected_amount) as total_rejected_amount,
+        (SELECT SUM(unprocessed_amount) FROM claim_level) as total_pending_amount,
+        ROUND(AVG(net_collection_rate), 2) as avg_collection_rate,
+        ROUND(AVG(denial_rate), 2) as avg_denial_rate,
+        ROUND(AVG(turnaround_time_days), 2) as avg_turnaround_time,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Fully Paid' THEN claim_id END) as fully_paid_count,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Partially Paid' THEN claim_id END) as partially_paid_count,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Rejected' THEN claim_id END) as fully_rejected_count,
+        COUNT(DISTINCT CASE WHEN payment_status = 'Pending' THEN claim_id END) as pending_count,
+        COUNT(DISTINCT CASE WHEN resubmission_type IS NOT NULL THEN claim_id END) as resubmitted_count,
+        COUNT(DISTINCT patient_id) as unique_patients,
+        COUNT(DISTINCT provider_id) as unique_providers,
+        COUNT(DISTINCT facility_id) as unique_facilities
+    FROM filtered_data;
+        END CASE;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -507,7 +980,10 @@ COMMENT ON FUNCTION claims.get_claim_details_summary IS 'Get summary metrics for
 -- ==========================================================================================================
 -- FUNCTION: get_claim_details_filter_options
 -- ==========================================================================================================
-CREATE OR REPLACE FUNCTION claims.get_claim_details_filter_options() RETURNS TABLE(
+CREATE OR REPLACE FUNCTION claims.get_claim_details_filter_options(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'options'
+) RETURNS TABLE(
     facility_codes TEXT[],
     receiver_codes TEXT[],
     payer_codes TEXT[],
@@ -520,25 +996,25 @@ CREATE OR REPLACE FUNCTION claims.get_claim_details_filter_options() RETURNS TAB
     denial_codes TEXT[]
 ) AS $$
 BEGIN
-    RETURN QUERY
-    SELECT
-        ARRAY_AGG(DISTINCT f.facility_code ORDER BY f.facility_code) FILTER (WHERE f.facility_code IS NOT NULL) as facility_codes,
-        ARRAY_AGG(DISTINCT pr.provider_code ORDER BY pr.provider_code) FILTER (WHERE pr.provider_code IS NOT NULL) as receiver_codes,
-        ARRAY_AGG(DISTINCT p.payer_code ORDER BY p.payer_code) FILTER (WHERE p.payer_code IS NOT NULL) as payer_codes,
-        ARRAY_AGG(DISTINCT cl.clinician_code ORDER BY cl.clinician_code) FILTER (WHERE cl.clinician_code IS NOT NULL) as clinician_codes,
-        ARRAY_AGG(DISTINCT ac.code ORDER BY ac.code) FILTER (WHERE ac.code IS NOT NULL) as cpt_codes,
-        ARRAY_AGG(DISTINCT cst.status ORDER BY cst.status) FILTER (WHERE cst.status IS NOT NULL) as claim_statuses,
-        ARRAY_AGG(DISTINCT
-            CASE
-                WHEN ra.payment_amount > 0 AND ra.payment_amount = ra.net THEN 'Fully Paid'
-                WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN 'Partially Paid'
-                WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN 'Rejected'
-                WHEN rc.date_settlement IS NULL THEN 'Pending'
-                ELSE 'Unknown'
-            END
-        ORDER BY 1) FILTER (WHERE ra.id IS NOT NULL OR rc.id IS NOT NULL) as payment_statuses,
-        ARRAY_AGG(DISTINCT e.type ORDER BY e.type) FILTER (WHERE e.type IS NOT NULL) as encounter_types,
-        ARRAY_AGG(DISTINCT cr.resubmission_type ORDER BY cr.resubmission_type) FILTER (WHERE cr.resubmission_type IS NOT NULL) as resubmission_types,
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'options' THEN
+                RETURN QUERY
+                SELECT
+                    ARRAY_AGG(DISTINCT mv.facility_id ORDER BY mv.facility_id) FILTER (WHERE mv.facility_id IS NOT NULL) as facility_codes,
+                    ARRAY_AGG(DISTINCT mv.receiver_id ORDER BY mv.receiver_id) FILTER (WHERE mv.receiver_id IS NOT NULL) as receiver_codes,
+                    ARRAY_AGG(DISTINCT mv.payer_id ORDER BY mv.payer_id) FILTER (WHERE mv.payer_id IS NOT NULL) as payer_codes,
+                    ARRAY_AGG(DISTINCT mv.clinician ORDER BY mv.clinician) FILTER (WHERE mv.clinician IS NOT NULL) as clinician_codes,
+                    ARRAY_AGG(DISTINCT mv.cpt_code ORDER BY mv.cpt_code) FILTER (WHERE mv.cpt_code IS NOT NULL) as cpt_codes,
+                    ARRAY_AGG(DISTINCT mv.claim_status ORDER BY mv.claim_status) FILTER (WHERE mv.claim_status IS NOT NULL) as claim_statuses,
+                    ARRAY_AGG(DISTINCT mv.payment_status ORDER BY mv.payment_status) FILTER (WHERE mv.payment_status IS NOT NULL) as payment_statuses,
+                    ARRAY_AGG(DISTINCT mv.encounter_type ORDER BY mv.encounter_type) FILTER (WHERE mv.encounter_type IS NOT NULL) as encounter_types,
+                    ARRAY_AGG(DISTINCT mv.resubmission_type ORDER BY mv.resubmission_type) FILTER (WHERE mv.resubmission_type IS NOT NULL) as resubmission_types,
         ARRAY_AGG(DISTINCT ra.denial_code ORDER BY ra.denial_code) FILTER (WHERE ra.denial_code IS NOT NULL) as denial_codes
     FROM claims_ref.facility f
     FULL OUTER JOIN claims_ref.provider pr ON true
@@ -550,6 +1026,56 @@ BEGIN
     FULL OUTER JOIN claims.remittance_claim rc ON true
     FULL OUTER JOIN claims.encounter e ON true
     FULL OUTER JOIN claims.claim_resubmission cr ON true;
+            ELSE
+                -- Default to options
+                RETURN QUERY
+                SELECT
+                    ARRAY_AGG(DISTINCT cda.facility_id ORDER BY cda.facility_id) FILTER (WHERE cda.facility_id IS NOT NULL) as facility_codes,
+                    ARRAY_AGG(DISTINCT cda.receiver_id ORDER BY cda.receiver_id) FILTER (WHERE cda.receiver_id IS NOT NULL) as receiver_codes,
+                    ARRAY_AGG(DISTINCT cda.payer_id ORDER BY cda.payer_id) FILTER (WHERE cda.payer_id IS NOT NULL) as payer_codes,
+                    ARRAY_AGG(DISTINCT cda.clinician ORDER BY cda.clinician) FILTER (WHERE cda.clinician IS NOT NULL) as clinician_codes,
+                    ARRAY_AGG(DISTINCT cda.cpt_code ORDER BY cda.cpt_code) FILTER (WHERE cda.cpt_code IS NOT NULL) as cpt_codes,
+                    ARRAY_AGG(DISTINCT cda.claim_status ORDER BY cda.claim_status) FILTER (WHERE cda.claim_status IS NOT NULL) as claim_statuses,
+                    ARRAY_AGG(DISTINCT cda.payment_status ORDER BY cda.payment_status) FILTER (WHERE cda.payment_status IS NOT NULL) as payment_statuses,
+                    ARRAY_AGG(DISTINCT cda.encounter_type ORDER BY cda.encounter_type) FILTER (WHERE cda.encounter_type IS NOT NULL) as encounter_types,
+                    ARRAY_AGG(DISTINCT cda.resubmission_type ORDER BY cda.resubmission_type) FILTER (WHERE cda.resubmission_type IS NOT NULL) as resubmission_types,
+                    ARRAY_AGG(DISTINCT cda.last_denial_code ORDER BY cda.last_denial_code) FILTER (WHERE cda.last_denial_code IS NOT NULL) as denial_codes
+                FROM claims.v_claim_details_with_activity cda;
+        END CASE;
+    ELSE
+        -- Use traditional views for real-time data
+        CASE p_tab_name
+            WHEN 'options' THEN
+                RETURN QUERY
+                SELECT
+                    ARRAY_AGG(DISTINCT cda.facility_id ORDER BY cda.facility_id) FILTER (WHERE cda.facility_id IS NOT NULL) as facility_codes,
+                    ARRAY_AGG(DISTINCT cda.receiver_id ORDER BY cda.receiver_id) FILTER (WHERE cda.receiver_id IS NOT NULL) as receiver_codes,
+                    ARRAY_AGG(DISTINCT cda.payer_id ORDER BY cda.payer_id) FILTER (WHERE cda.payer_id IS NOT NULL) as payer_codes,
+                    ARRAY_AGG(DISTINCT cda.clinician ORDER BY cda.clinician) FILTER (WHERE cda.clinician IS NOT NULL) as clinician_codes,
+                    ARRAY_AGG(DISTINCT cda.cpt_code ORDER BY cda.cpt_code) FILTER (WHERE cda.cpt_code IS NOT NULL) as cpt_codes,
+                    ARRAY_AGG(DISTINCT cda.claim_status ORDER BY cda.claim_status) FILTER (WHERE cda.claim_status IS NOT NULL) as claim_statuses,
+                    ARRAY_AGG(DISTINCT cda.payment_status ORDER BY cda.payment_status) FILTER (WHERE cda.payment_status IS NOT NULL) as payment_statuses,
+                    ARRAY_AGG(DISTINCT cda.encounter_type ORDER BY cda.encounter_type) FILTER (WHERE cda.encounter_type IS NOT NULL) as encounter_types,
+                    ARRAY_AGG(DISTINCT cda.resubmission_type ORDER BY cda.resubmission_type) FILTER (WHERE cda.resubmission_type IS NOT NULL) as resubmission_types,
+                    ARRAY_AGG(DISTINCT cda.last_denial_code ORDER BY cda.last_denial_code) FILTER (WHERE cda.last_denial_code IS NOT NULL) as denial_codes
+                FROM claims.v_claim_details_with_activity cda;
+            ELSE
+                -- Default to options
+                RETURN QUERY
+                SELECT
+                    ARRAY_AGG(DISTINCT cda.facility_id ORDER BY cda.facility_id) FILTER (WHERE cda.facility_id IS NOT NULL) as facility_codes,
+                    ARRAY_AGG(DISTINCT cda.receiver_id ORDER BY cda.receiver_id) FILTER (WHERE cda.receiver_id IS NOT NULL) as receiver_codes,
+                    ARRAY_AGG(DISTINCT cda.payer_id ORDER BY cda.payer_id) FILTER (WHERE cda.payer_id IS NOT NULL) as payer_codes,
+                    ARRAY_AGG(DISTINCT cda.clinician ORDER BY cda.clinician) FILTER (WHERE cda.clinician IS NOT NULL) as clinician_codes,
+                    ARRAY_AGG(DISTINCT cda.cpt_code ORDER BY cda.cpt_code) FILTER (WHERE cda.cpt_code IS NOT NULL) as cpt_codes,
+                    ARRAY_AGG(DISTINCT cda.claim_status ORDER BY cda.claim_status) FILTER (WHERE cda.claim_status IS NOT NULL) as claim_statuses,
+                    ARRAY_AGG(DISTINCT cda.payment_status ORDER BY cda.payment_status) FILTER (WHERE cda.payment_status IS NOT NULL) as payment_statuses,
+                    ARRAY_AGG(DISTINCT cda.encounter_type ORDER BY cda.encounter_type) FILTER (WHERE cda.encounter_type IS NOT NULL) as encounter_types,
+                    ARRAY_AGG(DISTINCT cda.resubmission_type ORDER BY cda.resubmission_type) FILTER (WHERE cda.resubmission_type IS NOT NULL) as resubmission_types,
+                    ARRAY_AGG(DISTINCT cda.last_denial_code ORDER BY cda.last_denial_code) FILTER (WHERE cda.last_denial_code IS NOT NULL) as denial_codes
+                FROM claims.v_claim_details_with_activity cda;
+        END CASE;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -651,6 +1177,6 @@ SELECT * FROM claims.get_claim_details_with_activity(
 -- GRANTS
 -- =====================================================
 GRANT SELECT ON claims.v_claim_details_with_activity TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_claim_details_with_activity(text,text,text,text,text,text,text,text,text,text,text,text,text,bigint,bigint,bigint,bigint,bigint,bigint,timestamptz,timestamptz,integer,integer) TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_claim_details_summary(text,text,text,timestamptz,timestamptz) TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_claim_details_filter_options() TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_claim_details_with_activity(boolean,text,text,text,text,text,text,text,text,text,text,text,text,text,text,bigint,bigint,bigint,bigint,bigint,bigint,timestamptz,timestamptz,integer,integer) TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_claim_details_summary(boolean,text,text,text,text,timestamptz,timestamptz) TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_claim_details_filter_options(boolean,text) TO claims_user;

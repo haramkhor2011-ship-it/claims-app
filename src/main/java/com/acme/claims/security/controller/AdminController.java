@@ -35,13 +35,14 @@ public class AdminController {
         List<User> lockedUsers = userService.getAllUsers().stream()
                 .filter(User::isAccountLocked)
                 .filter(user -> {
+                    // TODO: When multi-tenancy is enabled, uncomment the following logic:
                     // Facility admins can only see users from their facilities
-                    if (currentUser.hasRole(com.acme.claims.security.Role.FACILITY_ADMIN)) {
-                        Set<String> currentUserFacilities = currentUser.getFacilityCodes();
-                        return user.getFacilityCodes().stream()
-                                .anyMatch(currentUserFacilities::contains);
-                    }
-                    return true; // Super admin can see all
+                    // if (currentUser.hasRole(com.acme.claims.security.Role.FACILITY_ADMIN)) {
+                    //     Set<String> currentUserFacilities = currentUser.getFacilityCodes();
+                    //     return user.getFacilityCodes().stream()
+                    //             .anyMatch(currentUserFacilities::contains);
+                    // }
+                    return true; // When multi-tenancy disabled, all users can see all locked accounts
                 })
                 .toList();
         

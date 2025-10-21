@@ -327,7 +327,7 @@ public class ReportViewGenerationController {
             
             // Add report access information
             info.put("reportAccess", Map.of(
-                "accessibleReports", currentUser.getReportTypeNames(),
+                "accessibleReports", currentUser.getReportCodes(),
                 "totalReports", com.acme.claims.security.ReportType.values().length,
                 "hasAllReports", currentUser.isSuperAdmin() || currentUser.isFacilityAdmin()
             ));

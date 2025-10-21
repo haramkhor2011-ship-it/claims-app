@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Authentication controller for login and token management
@@ -56,6 +57,13 @@ public class AuthenticationController {
                             .primaryFacility(result.getUser().getPrimaryFacilityCode())
                             .build())
                     .build();
+            
+            // TODO: When multi-tenancy is enabled, uncomment the following logic:
+            // When multi-tenancy is disabled, return empty facilities in response (no restrictions)
+            if (!securityProperties.getMultiTenancy().isEnabled()) {
+                response.getUser().facilities = Set.of(); // Empty list means no restrictions
+                response.getUser().primaryFacility = null; // No primary facility when multi-tenancy disabled
+            }
             
             return ResponseEntity.ok(response);
         } else {

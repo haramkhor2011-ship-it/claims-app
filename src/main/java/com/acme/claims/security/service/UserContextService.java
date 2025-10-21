@@ -3,9 +3,10 @@ package com.acme.claims.security.service;
 import com.acme.claims.security.ReportType;
 import com.acme.claims.security.Role;
 import com.acme.claims.security.config.SecurityProperties;
+import com.acme.claims.security.context.ServiceUserContext;
 import com.acme.claims.security.context.UserContext;
+import com.acme.claims.security.entity.ReportsMetadata;
 import com.acme.claims.security.entity.User;
-import com.acme.claims.security.entity.UserReportPermission;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,7 +45,7 @@ public class UserContextService {
         
         if (authentication == null || !authentication.isAuthenticated() || 
             "anonymousUser".equals(authentication.getPrincipal())) {
-            log.warn("Attempted to get user context for unauthenticated user");
+            log.debug("Attempted to get user context for unauthenticated user");
             throw new IllegalStateException("No authenticated user found");
         }
         
@@ -52,6 +53,28 @@ public class UserContextService {
         log.debug("Getting user context for user: {} (ID: {})", user.getUsername(), user.getId());
         
         return buildUserContext(user);
+    }
+    
+    /**
+     * Get current service user context from security context
+     * This method returns ServiceUserContext which is used by service layer
+     * 
+     * @return ServiceUserContext for current user
+     * @throws IllegalStateException if no user is authenticated
+     */
+    public ServiceUserContext getCurrentServiceUserContext() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        
+        if (authentication == null || !authentication.isAuthenticated() || 
+            "anonymousUser".equals(authentication.getPrincipal())) {
+            log.warn("Attempted to get service user context for unauthenticated user");
+            throw new IllegalStateException("No authenticated user found");
+        }
+        
+        User user = (User) authentication.getPrincipal();
+        log.debug("Getting service user context for user: {} (ID: {})", user.getUsername(), user.getId());
+        
+        return buildServiceUserContext(user);
     }
     
     /**
@@ -289,6 +312,47 @@ public class UserContextService {
     }
     
     /**
+     * Build ServiceUserContext from User entity
+     * 
+     * @param user User entity
+     * @return ServiceUserContext
+     */
+    private ServiceUserContext buildServiceUserContext(User user) {
+        log.debug("Building service user context for user: {} (ID: {})", user.getUsername(), user.getId());
+        
+        // Get user roles
+        Set<Role> roles = user.getRoles().stream()
+                .map(userRole -> userRole.getRole())
+                .collect(Collectors.toSet());
+        
+        // Get user facilities
+        Set<String> facilities = user.getFacilityCodes();
+        
+        // TODO: When multi-tenancy is enabled, uncomment the following logic:
+        // When multi-tenancy is disabled, return empty set to indicate no restrictions
+        if (!securityProperties.getMultiTenancy().isEnabled()) {
+            log.debug("Multi-tenancy disabled - returning empty facilities set (no restrictions) for service user: {}", user.getUsername());
+            facilities = Set.of(); // Empty set means no facility restrictions
+        }
+        
+        // TODO: Implement facility code to ref ID mapping when needed
+        // For now, we'll work with facility codes directly
+        
+        // Build the base UserContext first
+        UserContext baseUserContext = buildUserContext(user);
+        
+        ServiceUserContext context = ServiceUserContext.builder()
+                .userContext(baseUserContext)
+                .accessibleFacilities(facilities)
+                .accessibleReports(Set.of()) // Will be populated by ReportAccessService
+                .build();
+        
+        log.debug("Service user context built successfully: userId={}, username={}, roles={}, facilities={}", 
+                context.getUserId(), context.getUsername(), context.getUserRoles(), context.getAccessibleFacilities());
+        return context;
+    }
+    
+    /**
      * Build UserContext from User entity
      * 
      * @param user User entity
@@ -305,15 +369,20 @@ public class UserContextService {
         // Get user facilities
         Set<String> facilities = user.getFacilityCodes();
         
-        // Get report permissions
-        Set<ReportType> reportPermissions = user.getReportPermissions().stream()
-                .map(UserReportPermission::getReportType)
-                .collect(Collectors.toSet());
+        // TODO: When multi-tenancy is enabled, uncomment the following logic:
+        // When multi-tenancy is disabled, return empty set to indicate no restrictions
+        if (!securityProperties.getMultiTenancy().isEnabled()) {
+            log.debug("Multi-tenancy disabled - returning empty facilities set (no restrictions) for user: {}", user.getUsername());
+            facilities = Set.of(); // Empty set means no facility restrictions
+        }
         
-        // If user has no specific report permissions but is admin, grant all reports
+        // Get report permissions
+        Set<ReportsMetadata> reportPermissions = user.getActiveReportMetadata();
+        
+        // If user has no specific report permissions but is admin, grant all active reports
         if (reportPermissions.isEmpty() && (roles.contains(Role.SUPER_ADMIN) || roles.contains(Role.FACILITY_ADMIN))) {
-            reportPermissions = Set.of(ReportType.values());
-            log.debug("Granted all report permissions to admin user: {}", user.getUsername());
+            // This will be handled by the ReportAccessService.getUserReportAccess() method
+            log.debug("Admin user {} will get all active report permissions", user.getUsername());
         }
         
         UserContext context = UserContext.builder()

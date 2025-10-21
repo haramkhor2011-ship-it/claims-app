@@ -45,20 +45,7 @@
 -- VIEW: v_claim_summary_monthwise (Tab A - Monthwise grouping - COMPREHENSIVE)
 -- ==========================================================================================================
 CREATE OR REPLACE VIEW claims.v_claim_summary_monthwise AS
-WITH deduplicated_claims AS (
-  -- Optimize deduplication with window functions
-  SELECT DISTINCT ON (claim_key_id, month_bucket)
-    claim_key_id,
-    month_bucket,
-    payer_id,
-    net,
-    ROW_NUMBER() OVER (PARTITION BY claim_key_id ORDER BY tx_at) as claim_rank
-  FROM claims.claim c
-  JOIN claims.claim_key ck ON c.claim_key_id = ck.id
-  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
-  WHERE DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)) IS NOT NULL
-),
-base AS (
+WITH base AS (
     SELECT
         ck.claim_id,
         c.id AS claim_db_id,
@@ -67,10 +54,10 @@ base AS (
         f.name AS facility_name,
         rc.date_settlement,
         rc.id AS remittance_claim_id,
-        ra.id AS remittance_activity_id,
+        cas.activity_id AS remittance_activity_id,
         c.net AS claim_net,
-        ra.net AS ra_net,
-        ra.payment_amount,
+        cas.submitted_amount AS ra_net,
+        cas.paid_amount AS payment_amount,
         COALESCE(p2.payer_code, 'Unknown') AS health_authority
     FROM claims.claim_key ck
     JOIN claims.claim c ON c.claim_key_id = ck.id
@@ -78,6 +65,10 @@ base AS (
     LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
     LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
     LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+    -- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+    -- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+    LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id
+    -- Keep legacy join for backward compatibility (if needed for other calculations)
     LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
     LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
 ),
@@ -94,27 +85,31 @@ SELECT
     EXTRACT(YEAR FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS year,
     EXTRACT(MONTH FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS month,
 
-    -- Count Metrics (COMPREHENSIVE)
+    -- Count Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     COUNT(DISTINCT ck.claim_id) AS count_claims,
-    COUNT(DISTINCT ra.id) AS remitted_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 THEN ra.id END) AS fully_paid_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.id END) AS partially_paid_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS fully_rejected_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS rejection_count,
+    COUNT(DISTINCT cas.activity_id) AS remitted_count,                                    -- count of activities with remittance data
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'FULLY_PAID' THEN cas.activity_id END) AS fully_paid_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.activity_id END) AS partially_paid_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS fully_rejected_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS rejection_count,
     COUNT(DISTINCT CASE WHEN rc.payment_reference IS NOT NULL THEN ck.claim_id END) AS taken_back_count,
-    COUNT(DISTINCT CASE WHEN rc.date_settlement IS NULL THEN ck.claim_id END) AS pending_remittance_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'PENDING' THEN cas.activity_id END) AS pending_remittance_count,
     COUNT(DISTINCT CASE WHEN c.payer_id = 'Self-Paid' THEN ck.claim_id END) AS self_pay_count,
 
-    -- Amount Metrics (COMPREHENSIVE)
+    -- Amount Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Consistent with other reports, prevents overcounting, uses latest denial logic
+    -- HOW: Uses cas.paid_amount (capped), cas.denied_amount (latest denial logic), cas.submitted_amount
     SUM(DISTINCT d.claim_net_once) AS claim_amount,
     SUM(DISTINCT d.claim_net_once) AS initial_claim_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_net_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS fully_paid_amount,
-    SUM(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.payment_amount ELSE 0 END) AS partially_paid_amount,
-    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS fully_rejected_amount,
-    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS rejected_amount,
-    SUM(CASE WHEN rc.date_settlement IS NULL THEN c.net ELSE 0 END) AS pending_remittance_amount,
+    SUM(COALESCE(cas.paid_amount, 0)) AS remitted_amount,                                -- capped paid across remittances
+    SUM(COALESCE(cas.paid_amount, 0)) AS remitted_net_amount,                           -- same as remitted for consistency
+    SUM(COALESCE(cas.paid_amount, 0)) AS fully_paid_amount,                             -- capped paid amount
+    SUM(CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.paid_amount ELSE 0 END) AS partially_paid_amount,
+    SUM(COALESCE(cas.denied_amount, 0)) AS fully_rejected_amount,                       -- denied only when latest denial and zero paid
+    SUM(COALESCE(cas.denied_amount, 0)) AS rejected_amount,                             -- same as fully_rejected for consistency
+    SUM(CASE WHEN cas.activity_status = 'PENDING' THEN cas.submitted_amount ELSE 0 END) AS pending_remittance_amount,
     SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END) AS self_pay_amount,
 
     -- Facility and Health Authority
@@ -148,7 +143,7 @@ SELECT
     COUNT(DISTINCT c.provider_id) AS unique_providers,
     COUNT(DISTINCT e.patient_id) AS unique_patients,
     AVG(c.net) AS avg_claim_amount,
-    AVG(COALESCE(ra.payment_amount, 0)) AS avg_paid_amount,
+    AVG(COALESCE(cas.paid_amount, 0)) AS avg_paid_amount,
     MIN(c.tx_at) AS earliest_submission_date,
     MAX(c.tx_at) AS latest_submission_date,
     MIN(COALESCE(rc.date_settlement, c.tx_at)) AS earliest_settlement_date,
@@ -160,6 +155,10 @@ LEFT JOIN claims.encounter e ON e.claim_id = c.id
 LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
 LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
 LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+-- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+-- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id
+-- Keep legacy join for backward compatibility (if needed for other calculations)
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
 LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
 LEFT JOIN dedup_claim d ON d.claim_db_id = c.id AND d.month_bucket = DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))
@@ -191,10 +190,10 @@ WITH base AS (
         e.facility_id,
         f.name AS facility_name,
         rc.date_settlement,
-        ra.id AS remittance_activity_id,
+        cas.activity_id AS remittance_activity_id,
         c.net AS claim_net,
-        ra.net AS ra_net,
-        ra.payment_amount,
+        cas.submitted_amount AS ra_net,
+        cas.paid_amount AS payment_amount,
         COALESCE(p2.payer_code, 'Unknown') AS health_authority,
         p.payer_code AS payer_code,
         p.name AS payer_name
@@ -204,6 +203,10 @@ WITH base AS (
     LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
     LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
     LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+    -- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+    -- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+    LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id
+    -- Keep legacy join for backward compatibility (if needed for other calculations)
     LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
     LEFT JOIN claims_ref.payer p ON p.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
     LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
@@ -225,27 +228,31 @@ SELECT
     EXTRACT(YEAR FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS year,
     EXTRACT(MONTH FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS month,
 
-    -- Count Metrics (COMPREHENSIVE)
+    -- Count Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     COUNT(DISTINCT ck.claim_id) AS count_claims,
-    COUNT(DISTINCT ra.id) AS remitted_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 THEN ra.id END) AS fully_paid_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.id END) AS partially_paid_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS fully_rejected_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS rejection_count,
+    COUNT(DISTINCT cas.activity_id) AS remitted_count,                                    -- count of activities with remittance data
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'FULLY_PAID' THEN cas.activity_id END) AS fully_paid_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.activity_id END) AS partially_paid_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS fully_rejected_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS rejection_count,
     COUNT(DISTINCT CASE WHEN rc.payment_reference IS NOT NULL THEN ck.claim_id END) AS taken_back_count,
-    COUNT(DISTINCT CASE WHEN rc.date_settlement IS NULL THEN ck.claim_id END) AS pending_remittance_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'PENDING' THEN cas.activity_id END) AS pending_remittance_count,
     COUNT(DISTINCT CASE WHEN c.payer_id = 'Self-Paid' THEN ck.claim_id END) AS self_pay_count,
 
-    -- Amount Metrics (COMPREHENSIVE)
+    -- Amount Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Consistent with other reports, prevents overcounting, uses latest denial logic
+    -- HOW: Uses cas.paid_amount (capped), cas.denied_amount (latest denial logic), cas.submitted_amount
     SUM(DISTINCT d.claim_net_once) AS claim_amount,
     SUM(DISTINCT d.claim_net_once) AS initial_claim_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_net_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS fully_paid_amount,
-    SUM(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.payment_amount ELSE 0 END) AS partially_paid_amount,
-    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS fully_rejected_amount,
-    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS rejected_amount,
-    SUM(CASE WHEN rc.date_settlement IS NULL THEN c.net ELSE 0 END) AS pending_remittance_amount,
+    SUM(COALESCE(cas.paid_amount, 0)) AS remitted_amount,                                -- capped paid across remittances
+    SUM(COALESCE(cas.paid_amount, 0)) AS remitted_net_amount,                           -- same as remitted for consistency
+    SUM(COALESCE(cas.paid_amount, 0)) AS fully_paid_amount,                             -- capped paid amount
+    SUM(CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.paid_amount ELSE 0 END) AS partially_paid_amount,
+    SUM(COALESCE(cas.denied_amount, 0)) AS fully_rejected_amount,                       -- denied only when latest denial and zero paid
+    SUM(COALESCE(cas.denied_amount, 0)) AS rejected_amount,                             -- same as fully_rejected for consistency
+    SUM(CASE WHEN cas.activity_status = 'PENDING' THEN cas.submitted_amount ELSE 0 END) AS pending_remittance_amount,
     SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END) AS self_pay_amount,
 
     -- Facility and Health Authority
@@ -287,6 +294,10 @@ LEFT JOIN claims.encounter e ON e.claim_id = c.id
 LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
 LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
 LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+-- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+-- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id
+-- Keep legacy join for backward compatibility (if needed for other calculations)
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
 LEFT JOIN claims_ref.payer p ON p.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
 LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
@@ -323,10 +334,10 @@ WITH base AS (
         e.facility_id,
         f.name AS facility_name,
         rc.date_settlement,
-        ra.id AS remittance_activity_id,
+        cas.activity_id AS remittance_activity_id,
         c.net AS claim_net,
-        ra.net AS ra_net,
-        ra.payment_amount,
+        cas.submitted_amount AS ra_net,
+        cas.paid_amount AS payment_amount,
         COALESCE(p2.payer_code, 'Unknown') AS health_authority
     FROM claims.claim_key ck
     JOIN claims.claim c ON c.claim_key_id = ck.id
@@ -334,6 +345,10 @@ WITH base AS (
     LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
     LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
     LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+    -- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+    -- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+    LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id
+    -- Keep legacy join for backward compatibility (if needed for other calculations)
     LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
     LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
 ),
@@ -353,27 +368,31 @@ SELECT
     EXTRACT(YEAR FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS year,
     EXTRACT(MONTH FROM DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))) AS month,
 
-    -- Count Metrics (COMPREHENSIVE)
+    -- Count Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     COUNT(DISTINCT ck.claim_id) AS count_claims,
-    COUNT(DISTINCT ra.id) AS remitted_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 THEN ra.id END) AS fully_paid_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.id END) AS partially_paid_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS fully_rejected_count,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.id END) AS rejection_count,
+    COUNT(DISTINCT cas.activity_id) AS remitted_count,                                    -- count of activities with remittance data
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'FULLY_PAID' THEN cas.activity_id END) AS fully_paid_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.activity_id END) AS partially_paid_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS fully_rejected_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS rejection_count,
     COUNT(DISTINCT CASE WHEN rc.payment_reference IS NOT NULL THEN ck.claim_id END) AS taken_back_count,
-    COUNT(DISTINCT CASE WHEN rc.date_settlement IS NULL THEN ck.claim_id END) AS pending_remittance_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'PENDING' THEN cas.activity_id END) AS pending_remittance_count,
     COUNT(DISTINCT CASE WHEN c.payer_id = 'Self-Paid' THEN ck.claim_id END) AS self_pay_count,
 
-    -- Amount Metrics (COMPREHENSIVE)
+    -- Amount Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Consistent with other reports, prevents overcounting, uses latest denial logic
+    -- HOW: Uses cas.paid_amount (capped), cas.denied_amount (latest denial logic), cas.submitted_amount
     SUM(DISTINCT d.claim_net_once) AS claim_amount,
     SUM(DISTINCT d.claim_net_once) AS initial_claim_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS remitted_net_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) AS fully_paid_amount,
-    SUM(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN ra.payment_amount ELSE 0 END) AS partially_paid_amount,
-    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS fully_rejected_amount,
-    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS rejected_amount,
-    SUM(CASE WHEN rc.date_settlement IS NULL THEN c.net ELSE 0 END) AS pending_remittance_amount,
+    SUM(COALESCE(cas.paid_amount, 0)) AS remitted_amount,                                -- capped paid across remittances
+    SUM(COALESCE(cas.paid_amount, 0)) AS remitted_net_amount,                           -- same as remitted for consistency
+    SUM(COALESCE(cas.paid_amount, 0)) AS fully_paid_amount,                             -- capped paid amount
+    SUM(CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.paid_amount ELSE 0 END) AS partially_paid_amount,
+    SUM(COALESCE(cas.denied_amount, 0)) AS fully_rejected_amount,                       -- denied only when latest denial and zero paid
+    SUM(COALESCE(cas.denied_amount, 0)) AS rejected_amount,                             -- same as fully_rejected for consistency
+    SUM(CASE WHEN cas.activity_status = 'PENDING' THEN cas.submitted_amount ELSE 0 END) AS pending_remittance_amount,
     SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END) AS self_pay_amount,
 
     -- Facility and Health Authority
@@ -415,6 +434,10 @@ LEFT JOIN claims.encounter e ON e.claim_id = c.id
 LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
 LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
 LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
+-- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+-- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id
+-- Keep legacy join for backward compatibility (if needed for other calculations)
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
 LEFT JOIN claims_ref.payer p2 ON p2.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
 LEFT JOIN dedup_claim d ON d.claim_db_id = c.id AND d.month_bucket = DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))
@@ -440,6 +463,8 @@ COMMENT ON VIEW claims.v_claim_summary_encounterwise IS 'Claim Summary Encounter
 -- FUNCTION: get_claim_summary_monthwise_params (COMPREHENSIVE)
 -- ==========================================================================================================
 CREATE OR REPLACE FUNCTION claims.get_claim_summary_monthwise_params(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'monthwise',
     p_from_date TIMESTAMPTZ DEFAULT NULL,
     p_to_date TIMESTAMPTZ DEFAULT NULL,
     p_facility_code TEXT DEFAULT NULL,
@@ -475,30 +500,37 @@ CREATE OR REPLACE FUNCTION claims.get_claim_summary_monthwise_params(
     avg_paid_amount NUMERIC(14,2)
 ) AS $$
 BEGIN
-    RETURN QUERY
-    -- Use materialized view for sub-second performance
-    SELECT
-        SUM(mv.claim_count) as total_claims,
-        SUM(mv.remitted_count) as total_remitted_claims,
-        SUM(mv.fully_paid_count) as total_fully_paid_claims,
-        SUM(mv.partially_paid_count) as total_partially_paid_claims,
-        SUM(mv.fully_rejected_count) as total_fully_rejected_claims,
-        SUM(mv.rejection_count) as total_rejection_count,
-        SUM(mv.taken_back_count) as total_taken_back_count,
-        SUM(mv.pending_remittance_count) as total_pending_remittance_count,
-        SUM(mv.self_pay_count) as total_self_pay_count,
-        SUM(mv.total_net) as total_claim_amount,
-        SUM(mv.total_net) as total_initial_claim_amount,
-        SUM(mv.remitted_amount) as total_remitted_amount,
-        SUM(mv.remitted_amount) as total_remitted_net_amount,
-        SUM(mv.fully_paid_amount) as total_fully_paid_amount,
-        SUM(mv.partially_paid_amount) as total_partially_paid_amount,
-        SUM(mv.fully_rejected_amount) as total_fully_rejected_amount,
-        SUM(mv.rejected_amount) as total_rejected_amount,
-        SUM(mv.pending_remittance_amount) as total_pending_remittance_amount,
-        SUM(mv.self_pay_amount) as total_self_pay_amount,
-        AVG(mv.rejected_percentage_on_initial) as avg_rejected_percentage_on_initial,
-        AVG(mv.rejected_percentage_on_remittance) as avg_rejected_percentage_on_remittance,
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use tab-specific MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'monthwise' THEN
+                RETURN QUERY
+                SELECT
+                    SUM(mv.claim_count) as total_claims,
+                    SUM(mv.remitted_count) as total_remitted_claims,
+                    SUM(mv.fully_paid_count) as total_fully_paid_claims,
+                    SUM(mv.partially_paid_count) as total_partially_paid_claims,
+                    SUM(mv.fully_rejected_count) as total_fully_rejected_claims,
+                    SUM(mv.rejection_count) as total_rejection_count,
+                    SUM(mv.taken_back_count) as total_taken_back_count,
+                    SUM(mv.pending_remittance_count) as total_pending_remittance_count,
+                    SUM(mv.self_pay_count) as total_self_pay_count,
+                    SUM(mv.total_net) as total_claim_amount,
+                    SUM(mv.total_net) as total_initial_claim_amount,
+                    SUM(mv.remitted_amount) as total_remitted_amount,
+                    SUM(mv.remitted_amount) as total_remitted_net_amount,
+                    SUM(mv.fully_paid_amount) as total_fully_paid_amount,
+                    SUM(mv.partially_paid_amount) as total_partially_paid_amount,
+                    SUM(mv.fully_rejected_amount) as total_fully_rejected_amount,
+                    SUM(mv.rejected_amount) as total_rejected_amount,
+                    SUM(mv.pending_remittance_amount) as total_pending_remittance_amount,
+                    SUM(mv.self_pay_amount) as total_self_pay_amount,
+                    AVG(mv.rejected_percentage_on_initial) as avg_rejected_percentage_on_initial,
+                    AVG(mv.rejected_percentage_on_remittance) as avg_rejected_percentage_on_remittance,
         AVG(mv.collection_rate) as avg_collection_rate,
         COUNT(DISTINCT mv.payer_id) as unique_providers,
         COUNT(DISTINCT mv.facility_id) as unique_patients,
@@ -511,6 +543,8 @@ BEGIN
         AND (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
         AND (p_payer_code IS NULL OR mv.health_authority = p_payer_code)
         AND (p_receiver_code IS NULL OR mv.health_authority = p_receiver_code);
+            END CASE;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -519,23 +553,36 @@ COMMENT ON FUNCTION claims.get_claim_summary_monthwise_params IS 'Get COMPREHENS
 -- ==========================================================================================================
 -- FUNCTION: get_claim_summary_report_params (Filter options - COMPREHENSIVE)
 -- ==========================================================================================================
-CREATE OR REPLACE FUNCTION claims.get_claim_summary_report_params() RETURNS TABLE(
+CREATE OR REPLACE FUNCTION claims.get_claim_summary_report_params(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'params'
+) RETURNS TABLE(
     facility_codes TEXT[],
     payer_codes TEXT[],
     receiver_codes TEXT[],
     encounter_types TEXT[]
 ) AS $$
 BEGIN
-    RETURN QUERY
-    SELECT
-        ARRAY_AGG(DISTINCT f.facility_code ORDER BY f.facility_code) FILTER (WHERE f.facility_code IS NOT NULL) as facility_codes,
-        ARRAY_AGG(DISTINCT p.payer_code ORDER BY p.payer_code) FILTER (WHERE p.payer_code IS NOT NULL) as payer_codes,
-        ARRAY_AGG(DISTINCT pr.provider_code ORDER BY pr.provider_code) FILTER (WHERE pr.provider_code IS NOT NULL) as receiver_codes,
-        ARRAY_AGG(DISTINCT e.type ORDER BY e.type) FILTER (WHERE e.type IS NOT NULL) as encounter_types
-    FROM claims_ref.facility f
-    FULL OUTER JOIN claims_ref.payer p ON true
-    FULL OUTER JOIN claims_ref.provider pr ON true
-    FULL OUTER JOIN claims.encounter e ON true;
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'params' THEN
+                RETURN QUERY
+                SELECT
+                    ARRAY_AGG(DISTINCT f.facility_code ORDER BY f.facility_code) FILTER (WHERE f.facility_code IS NOT NULL) as facility_codes,
+                    ARRAY_AGG(DISTINCT p.payer_code ORDER BY p.payer_code) FILTER (WHERE p.payer_code IS NOT NULL) as payer_codes,
+                    ARRAY_AGG(DISTINCT pr.provider_code ORDER BY pr.provider_code) FILTER (WHERE pr.provider_code IS NOT NULL) as receiver_codes,
+                    ARRAY_AGG(DISTINCT e.type ORDER BY e.type) FILTER (WHERE e.type IS NOT NULL) as encounter_types
+                FROM claims_ref.facility f
+                FULL OUTER JOIN claims_ref.payer p ON true
+                FULL OUTER JOIN claims_ref.provider pr ON true
+                FULL OUTER JOIN claims.encounter e ON true;
+            END CASE;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -593,16 +640,18 @@ ORDER BY encounter_type, year DESC, month DESC;
 
 -- Get summary parameters for dashboard
 SELECT * FROM claims.get_claim_summary_monthwise_params(
-    CURRENT_DATE - INTERVAL '12 months',
-    CURRENT_DATE,
-    NULL, -- facility_code
-    NULL, -- payer_code
-    NULL, -- receiver_code
-    NULL  -- encounter_type
+    FALSE, -- p_use_mv
+    'monthwise', -- p_tab_name
+    CURRENT_DATE - INTERVAL '12 months', -- p_from_date
+    CURRENT_DATE, -- p_to_date
+    NULL, -- p_facility_code
+    NULL, -- p_payer_code
+    NULL, -- p_receiver_code
+    NULL  -- p_encounter_type
 );
 
 -- Get filter options for UI dropdowns
-SELECT * FROM claims.get_claim_summary_report_params();
+SELECT * FROM claims.get_claim_summary_report_params(FALSE, 'params');
 */
 
 -- =====================================================
@@ -611,5 +660,5 @@ SELECT * FROM claims.get_claim_summary_report_params();
 GRANT SELECT ON claims.v_claim_summary_monthwise TO claims_user;
 GRANT SELECT ON claims.v_claim_summary_payerwise TO claims_user;
 GRANT SELECT ON claims.v_claim_summary_encounterwise TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_claim_summary_monthwise_params(timestamptz,timestamptz,text,text,text,text) TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_claim_summary_report_params() TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_claim_summary_monthwise_params(boolean,text,timestamptz,timestamptz,text,text,text,text) TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_claim_summary_report_params(boolean,text) TO claims_user;

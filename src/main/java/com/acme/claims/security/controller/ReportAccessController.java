@@ -99,7 +99,7 @@ public class ReportAccessController {
             
             boolean success = reportAccessService.grantReportAccess(
                     request.getUserId(), 
-                    request.getReportType(), 
+                    request.getReportType().name(), 
                     userContext.getUserId());
             
             if (success) {
@@ -180,7 +180,7 @@ public class ReportAccessController {
             
             boolean success = reportAccessService.revokeReportAccess(
                     request.getUserId(), 
-                    request.getReportType(), 
+                    request.getReportType().name(), 
                     userContext.getUserId());
             
             if (success) {
@@ -261,7 +261,9 @@ public class ReportAccessController {
             
             int grantedCount = reportAccessService.grantMultipleReportAccess(
                     request.getUserId(), 
-                    request.getReportTypes(), 
+                    request.getReportTypes().stream()
+                            .map(ReportType::name)
+                            .collect(java.util.stream.Collectors.toSet()), 
                     userContext.getUserId());
             
             Map<String, Object> response = new HashMap<>();
@@ -337,7 +339,7 @@ public class ReportAccessController {
             log.info("User {} (ID: {}) requesting users with access to report: {} from IP: {}", 
                     userContext.getUsername(), userContext.getUserId(), reportType, userContext.getIpAddress());
             
-            List<User> usersWithAccess = reportAccessService.getUsersWithReportAccess(reportTypeEnum);
+            List<User> usersWithAccess = reportAccessService.getUsersWithReportAccess(reportTypeEnum.name());
             
             List<Map<String, Object>> userList = usersWithAccess.stream()
                     .map(user -> {

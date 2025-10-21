@@ -1,7 +1,7 @@
 package com.acme.claims.security.context;
 
 import com.acme.claims.security.Role;
-import com.acme.claims.security.ReportType;
+import com.acme.claims.security.entity.ReportsMetadata;
 import lombok.Builder;
 import lombok.Data;
 
@@ -49,7 +49,7 @@ public class UserContext {
     /**
      * Report types the user has access to
      */
-    private final Set<ReportType> reportPermissions;
+    private final Set<ReportsMetadata> reportPermissions;
     
     /**
      * Session start time
@@ -102,7 +102,7 @@ public class UserContext {
      * @return true if user has access to the facility
      */
     public boolean hasFacilityAccess(String facilityCode) {
-        if (facilityCode == null || facilities == null) {
+        if (facilityCode == null) {
             return false;
         }
         
@@ -111,17 +111,24 @@ public class UserContext {
             return true;
         }
         
-        return facilities.contains(facilityCode);
+        // TODO: When multi-tenancy is enabled, uncomment the following logic:
+        // if (facilities == null) {
+        //     return false;
+        // }
+        // return facilities.contains(facilityCode);
+        
+        // For now (multi-tenancy disabled), all authenticated users can access all facilities
+        return true;
     }
     
     /**
      * Check if user has access to a specific report type
      * 
-     * @param reportType Report type to check
+     * @param reportCode Report type to check
      * @return true if user has access to the report
      */
-    public boolean hasReportAccess(ReportType reportType) {
-        if (reportType == null || reportPermissions == null) {
+    public boolean hasReportAccess(String reportCode) {
+        if (reportCode == null || reportPermissions == null) {
             return false;
         }
         
@@ -130,7 +137,18 @@ public class UserContext {
             return true;
         }
         
-        return reportPermissions.contains(reportType);
+        return reportPermissions.stream()
+                .anyMatch(metadata -> metadata.getReportCode().equals(reportCode));
+    }
+    
+    /**
+     * Check if user has access to a specific report (backward compatibility)
+     * 
+     * @param reportType Report type to check
+     * @return true if user has access to the report
+     */
+    public boolean hasReportAccess(com.acme.claims.security.ReportType reportType) {
+        return hasReportAccess(reportType.name());
     }
     
     /**
@@ -175,16 +193,16 @@ public class UserContext {
     }
     
     /**
-     * Get user's report type names as strings
+     * Get user's report codes as strings
      * 
-     * @return Set of report type names
+     * @return Set of report codes
      */
-    public Set<String> getReportTypeNames() {
+    public Set<String> getReportCodes() {
         if (reportPermissions == null) {
             return Set.of();
         }
         return reportPermissions.stream()
-                .map(ReportType::name)
+                .map(ReportsMetadata::getReportCode)
                 .collect(java.util.stream.Collectors.toSet());
     }
     
@@ -195,6 +213,6 @@ public class UserContext {
      */
     public String toSummaryString() {
         return String.format("UserContext{userId=%d, username='%s', roles=%s, facilities=%s, primaryFacility='%s', reports=%s}", 
-                userId, username, getRoleNames(), facilities, primaryFacility, getReportTypeNames());
+                userId, username, getRoleNames(), facilities, primaryFacility, getReportCodes());
     }
 }

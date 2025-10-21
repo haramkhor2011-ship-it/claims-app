@@ -1,5 +1,6 @@
 package com.acme.claims.service;
 
+import com.acme.claims.soap.db.ToggleRepo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +33,7 @@ import java.util.*;
 public class ClaimDetailsWithActivityReportService {
 
     private final DataSource dataSource;
+    private final ToggleRepo toggleRepo;
 
     /**
      * Get comprehensive claim details with activity data using complex filtering
@@ -55,30 +57,36 @@ public class ClaimDetailsWithActivityReportService {
             String sortBy,
             String sortDirection,
             Integer page,
-            Integer size) {
+            Integer size    ) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Claim Details Report - useMv: {}", useMv);
 
         // Build ORDER BY clause
         String orderByClause = buildOrderByClause(sortBy, sortDirection, "submission_date", "DESC");
 
         String sql = """
             SELECT * FROM claims.get_claim_details_with_activity(
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::timestamptz,
-                ?::timestamptz,
-                ?::integer,
-                ?::integer
+                p_use_mv := ?,
+                p_tab_name := 'details',
+                p_facility_code := ?::text,
+                p_receiver_id := ?::text,
+                p_payer_code := ?::text,
+                p_clinician := ?::text,
+                p_claim_id := ?::text,
+                p_patient_id := ?::text,
+                p_cpt_code := ?::text,
+                p_claim_status := ?::text,
+                p_payment_status := ?::text,
+                p_encounter_type := ?::text,
+                p_resub_type := ?::text,
+                p_denial_code := ?::text,
+                p_member_id := ?::text,
+                p_from_date := ?::timestamptz,
+                p_to_date := ?::timestamptz,
+                p_limit := ?::integer,
+                p_offset := ?::integer
             )
             """ + orderByClause;
 
@@ -89,6 +97,8 @@ public class ClaimDetailsWithActivityReportService {
 
             // Set parameters
             int paramIndex = 1;
+            // OPTION 3: Set useMv and tabName parameters first
+            stmt.setBoolean(paramIndex++, useMv);
             stmt.setString(paramIndex++, facilityCode);
             stmt.setString(paramIndex++, receiverId);
             stmt.setString(paramIndex++, payerCode);
@@ -180,7 +190,7 @@ public class ClaimDetailsWithActivityReportService {
                 }
             }
 
-            log.info("Retrieved {} claim details records for Claim Details with Activity report", results.size());
+            log.info("Retrieved {} claim details records using Option 3 (useMv: {})", results.size(), useMv);
 
         } catch (SQLException e) {
             log.error("Error retrieving claim details with activity data", e);
@@ -199,25 +209,32 @@ public class ClaimDetailsWithActivityReportService {
             String payerCode,
             LocalDateTime fromDate,
             LocalDateTime toDate) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Claim Details Summary - useMv: {}", useMv);
 
         String sql = """
             SELECT * FROM claims.get_claim_details_summary(
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::timestamptz,
-                ?::timestamptz
+                p_use_mv := ?,
+                p_facility_code := ?::text,
+                p_receiver_id := ?::text,
+                p_payer_code := ?::text,
+                p_from_date := ?::timestamptz,
+                p_to_date := ?::timestamptz
             )
             """;
 
         try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
-            stmt.setString(1, facilityCode);
-            stmt.setString(2, receiverId);
-            stmt.setString(3, payerCode);
-            stmt.setObject(4, fromDate);
-            stmt.setObject(5, toDate);
+            // OPTION 3: Set useMv parameter first
+            stmt.setBoolean(1, useMv);
+            stmt.setString(2, facilityCode);
+            stmt.setString(3, receiverId);
+            stmt.setString(4, payerCode);
+            stmt.setObject(5, fromDate);
+            stmt.setObject(6, toDate);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {

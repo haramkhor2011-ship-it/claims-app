@@ -1,0 +1,849 @@
+{
+  "info": {
+    "name": "Claims Backend API",
+    "description": "Comprehensive REST API for healthcare claims management and reporting with JWT authentication, role-based access control, and comprehensive audit logging.",
+    "version": "1.0.0",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{authToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Add correlation ID to all requests",
+          "pm.request.headers.add({",
+          "    key: 'X-Correlation-ID',",
+          "    value: pm.variables.replaceIn('{{$guid}}')",
+          "});",
+          "",
+          "// Add timestamp for request tracking",
+          "pm.globals.set('requestTimestamp', new Date().toISOString());",
+          "",
+          "// Log request start",
+          "console.log('Starting request:', pm.request.method, pm.request.url.toString());"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Basic response validation",
+          "pm.test('Status code is successful', function () {",
+          "    pm.expect(pm.response.code).to.be.oneOf([200, 201, 202]);",
+          "});",
+          "",
+          "// Response time validation",
+          "pm.test('Response time is less than 5000ms', function () {",
+          "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+          "});",
+          "",
+          "// Correlation ID validation",
+          "pm.test('Correlation ID is present in response headers', function () {",
+          "    pm.expect(pm.response.headers.get('X-Correlation-ID')).to.not.be.null;",
+          "});",
+          "",
+          "// Log response details",
+          "console.log('Response status:', pm.response.code);",
+          "console.log('Response time:', pm.response.responseTime + 'ms');",
+          "console.log('Correlation ID:', pm.response.headers.get('X-Correlation-ID'));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "facilityCode",
+      "value": "FAC001",
+      "type": "string"
+    },
+    {
+      "key": "payerCode",
+      "value": "DHA",
+      "type": "string"
+    },
+    {
+      "key": "fromDate",
+      "value": "2025-01-01T00:00:00",
+      "type": "string"
+    },
+    {
+      "key": "toDate",
+      "value": "2025-12-31T23:59:59",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"admin123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    if (response.token) {",
+                  "        pm.collectionVariables.set('authToken', response.token);",
+                  "        console.log('Auth token saved:', response.token.substring(0, 20) + '...');",
+                  "    }",
+                  "    if (response.refreshToken) {",
+                  "        pm.collectionVariables.set('refreshToken', response.refreshToken);",
+                  "    }",
+                  "    if (response.user && response.user.id) {",
+                  "        pm.collectionVariables.set('userId', response.user.id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/refresh",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "refresh"]
+            }
+          }
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "me"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports - Available",
+      "item": [
+        {
+          "name": "Get Available Reports",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/available",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "available"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Response has available reports', function () {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('availableReports');",
+                  "    pm.expect(response.availableReports).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Response has user context', function () {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('user');",
+                  "    pm.expect(response).to.have.property('userId');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Report Access Summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/access-summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "access-summary"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports - Balance Amount",
+      "item": [
+        {
+          "name": "Tab A: Balance to be Received",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"BALANCE_AMOUNT_REPORT\",\n  \"tab\": \"overall\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50,\n  \"sortBy\": \"aging_days\",\n  \"sortDirection\": \"DESC\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Response has report data', function () {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('data');",
+                  "    pm.expect(response.data).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Response has pagination', function () {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('pagination');",
+                  "});",
+                  "",
+                  "pm.test('Response has filters', function () {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('filters');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tab B: Initial Not Remitted",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"BALANCE_AMOUNT_REPORT\",\n  \"tab\": \"initial_not_remitted\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Tab C: Post Resubmission",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"BALANCE_AMOUNT_REPORT\",\n  \"tab\": \"post_resubmission\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports - Rejected Claims",
+      "item": [
+        {
+          "name": "Summary Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"REJECTED_CLAIMS_REPORT\",\n  \"tab\": \"summary\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Receiver-Payer Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"REJECTED_CLAIMS_REPORT\",\n  \"tab\": \"receiverPayer\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Claim-Wise Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"REJECTED_CLAIMS_REPORT\",\n  \"tab\": \"claimWise\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports - Claim Details",
+      "item": [
+        {
+          "name": "Get Claim Details with Activity",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"CLAIM_DETAILS_WITH_ACTIVITY\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Get Claim Summary",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"CLAIM_DETAILS_WITH_ACTIVITY\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports - Doctor Denial",
+      "item": [
+        {
+          "name": "High Denial Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"DOCTOR_DENIAL_REPORT\",\n  \"tab\": \"high_denial\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Summary Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"DOCTOR_DENIAL_REPORT\",\n  \"tab\": \"summary\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Detail Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"DOCTOR_DENIAL_REPORT\",\n  \"tab\": \"detail\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Clinician Drill-Down",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"DOCTOR_DENIAL_REPORT\",\n  \"tab\": \"detail\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"clinicianIds\": [\"DR001\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports - Remittances & Resubmission",
+      "item": [
+        {
+          "name": "Activity Level",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"REMITTANCES_RESUBMISSION\",\n  \"level\": \"activity\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Claim Level",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"REMITTANCES_RESUBMISSION\",\n  \"level\": \"claim\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports - Claim Summary Monthwise",
+      "item": [
+        {
+          "name": "Monthwise Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"CLAIM_SUMMARY_MONTHWISE\",\n  \"tab\": \"monthwise\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"year\": 2025,\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Payerwise Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"CLAIM_SUMMARY_MONTHWISE\",\n  \"tab\": \"payerwise\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"year\": 2025,\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Encounterwise Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"CLAIM_SUMMARY_MONTHWISE\",\n  \"tab\": \"encounterwise\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"year\": 2025,\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Status Breakdown Popup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"CLAIM_SUMMARY_MONTHWISE\",\n  \"tab\": \"monthwise\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"year\": 2025,\n  \"month\": 6,\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports - Remittance Advice Payerwise",
+      "item": [
+        {
+          "name": "Header Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"REMITTANCE_ADVICE_PAYERWISE\",\n  \"tab\": \"header\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Claim-Wise Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"REMITTANCE_ADVICE_PAYERWISE\",\n  \"tab\": \"claimWise\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        },
+        {
+          "name": "Activity-Wise Tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"REMITTANCE_ADVICE_PAYERWISE\",\n  \"tab\": \"activityWise\",\n  \"facilityCodes\": [\"{{facilityCode}}\"],\n  \"payerCodes\": [\"{{payerCode}}\"],\n  \"fromDate\": \"{{fromDate}}\",\n  \"toDate\": \"{{toDate}}\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error Handling Tests",
+      "item": [
+        {
+          "name": "Invalid Report Type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"INVALID_REPORT\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400 for invalid report type', function () {",
+                  "    pm.expect(pm.response.code).to.equal(400);",
+                  "});",
+                  "",
+                  "pm.test('Response has error message', function () {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('message');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid Date Range",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reportType\": \"BALANCE_AMOUNT_REPORT\",\n  \"fromDate\": \"2025-12-31T23:59:59\",\n  \"toDate\": \"2025-01-01T00:00:00\",\n  \"page\": 0,\n  \"size\": 50\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "query"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400 for invalid date range', function () {",
+                  "    pm.expect(pm.response.code).to.equal(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing Authentication",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/data/available",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "data", "available"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401 for missing authentication', function () {",
+                  "    pm.expect(pm.response.code).to.equal(401);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

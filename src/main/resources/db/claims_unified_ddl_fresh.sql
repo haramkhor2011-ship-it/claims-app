@@ -31,6 +31,7 @@
 CREATE EXTENSION IF NOT EXISTS pg_trgm;     -- Text similarity and trigram indexes
 CREATE EXTENSION IF NOT EXISTS citext;      -- Case-insensitive text type
 CREATE EXTENSION IF NOT EXISTS pgcrypto;    -- Cryptographic functions
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 -- Schema creation
 CREATE SCHEMA IF NOT EXISTS claims;         -- Main claims processing schema
@@ -898,6 +899,8 @@ CREATE INDEX IF NOT EXISTS idx_claim_payment_cycles ON claims.claim_payment(proc
 CREATE TRIGGER trg_claim_payment_updated_at
   BEFORE UPDATE ON claims.claim_payment
   FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
+
+ALTER TABLE claim_payment ALTER COLUMN remittance_count SET DEFAULT 0;
 
 -- ----------------------------------------------------------------------------------------------------------
 -- 5.17 CLAIM ACTIVITY SUMMARY (ACTIVITY-LEVEL FINANCIAL TRACKING)

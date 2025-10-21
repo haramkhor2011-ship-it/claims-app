@@ -59,14 +59,27 @@ CREATE TABLE IF NOT EXISTS claims.user_facilities (
     UNIQUE(user_id, facility_code)
 );
 
+-- Reports metadata table
+CREATE TABLE IF NOT EXISTS claims.reports_metadata (
+    id BIGSERIAL PRIMARY KEY,
+    report_code VARCHAR(50) NOT NULL UNIQUE,
+    report_name VARCHAR(100) NOT NULL,
+    description TEXT,
+    status CHAR(1) NOT NULL CHECK (status IN ('A', 'I')) DEFAULT 'A',
+    category VARCHAR(50),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by BIGINT REFERENCES claims.users(id)
+);
+
 -- User report permissions table
 CREATE TABLE IF NOT EXISTS claims.user_report_permissions (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES claims.users(id) ON DELETE CASCADE,
-    report_type VARCHAR(50) NOT NULL,
+    report_metadata_id BIGINT NOT NULL REFERENCES claims.reports_metadata(id) ON DELETE CASCADE,
     granted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     granted_by BIGINT NOT NULL REFERENCES claims.users(id),
-    UNIQUE(user_id, report_type)
+    UNIQUE(user_id, report_metadata_id)
 );
 
 -- ==========================================================================================================
@@ -146,9 +159,14 @@ CREATE INDEX IF NOT EXISTS idx_user_facilities_user_id ON claims.user_facilities
 CREATE INDEX IF NOT EXISTS idx_user_facilities_facility_code ON claims.user_facilities(facility_code);
 CREATE INDEX IF NOT EXISTS idx_user_facilities_primary ON claims.user_facilities(user_id, is_primary) WHERE is_primary = true;
 
+-- Reports metadata indexes
+CREATE INDEX IF NOT EXISTS idx_reports_metadata_report_code ON claims.reports_metadata(report_code);
+CREATE INDEX IF NOT EXISTS idx_reports_metadata_status ON claims.reports_metadata(status);
+CREATE INDEX IF NOT EXISTS idx_reports_metadata_category ON claims.reports_metadata(category);
+
 -- User report permissions indexes
 CREATE INDEX IF NOT EXISTS idx_user_report_permissions_user_id ON claims.user_report_permissions(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_report_permissions_report_type ON claims.user_report_permissions(report_type);
+CREATE INDEX IF NOT EXISTS idx_user_report_permissions_report_metadata_id ON claims.user_report_permissions(report_metadata_id);
 
 -- Security audit log indexes
 CREATE INDEX IF NOT EXISTS idx_security_audit_user_id ON claims.security_audit_log(user_id);
@@ -189,6 +207,9 @@ CREATE TRIGGER update_sso_providers_updated_at BEFORE UPDATE ON claims.sso_provi
 CREATE TRIGGER update_user_sso_mappings_updated_at BEFORE UPDATE ON claims.user_sso_mappings
     FOR EACH ROW EXECUTE FUNCTION claims.update_updated_at_column();
 
+CREATE TRIGGER update_reports_metadata_updated_at BEFORE UPDATE ON claims.reports_metadata
+    FOR EACH ROW EXECUTE FUNCTION claims.update_updated_at_column();
+
 -- ==========================================================================================================
 -- SECTION 6: DEFAULT DATA
 -- ==========================================================================================================
@@ -206,6 +227,18 @@ FROM claims.users u
 WHERE u.username = 'admin'
 ON CONFLICT (user_id, role) DO NOTHING;
 
+-- Insert default reports metadata
+INSERT INTO claims.reports_metadata (report_code, report_name, description, status, category, created_at, updated_at, created_by)
+VALUES 
+    ('BALANCE_AMOUNT_REPORT', 'Balance Amount Report', 'Shows balance amounts to be received', 'A', 'FINANCIAL', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, (SELECT id FROM claims.users WHERE username = 'admin')),
+    ('CLAIM_DETAILS_WITH_ACTIVITY', 'Claim Details With Activity', 'Detailed claim information with activity timeline', 'A', 'OPERATIONAL', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, (SELECT id FROM claims.users WHERE username = 'admin')),
+    ('CLAIM_SUMMARY_MONTHWISE', 'Claim Summary - Monthwise Report', 'Monthly summary of claims with comprehensive metrics and breakdowns by payer and encounter type', 'A', 'FINANCIAL', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, (SELECT id FROM claims.users WHERE username = 'admin')),
+    ('DOCTOR_DENIAL_REPORT', 'Doctor Denial Report', 'Reports on claims denied by doctors', 'A', 'OPERATIONAL', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, (SELECT id FROM claims.users WHERE username = 'admin')),
+    ('REJECTED_CLAIMS_REPORT', 'Rejected Claims Report', 'Claims that were rejected during processing', 'A', 'OPERATIONAL', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, (SELECT id FROM claims.users WHERE username = 'admin')),
+    ('REMITTANCE_ADVICE_PAYERWISE', 'Remittance Advice Payerwise', 'Remittance advice grouped by payer', 'A', 'FINANCIAL', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, (SELECT id FROM claims.users WHERE username = 'admin')),
+    ('REMITTANCES_RESUBMISSION', 'Remittances & Resubmission', 'Remittance and resubmission activity reports', 'A', 'OPERATIONAL', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, (SELECT id FROM claims.users WHERE username = 'admin'))
+ON CONFLICT (report_code) DO NOTHING;
+
 -- ==========================================================================================================
 -- SECTION 7: COMMENTS
 -- ==========================================================================================================
@@ -213,7 +246,8 @@ ON CONFLICT (user_id, role) DO NOTHING;
 COMMENT ON TABLE claims.users IS 'User accounts for the claims system';
 COMMENT ON TABLE claims.user_roles IS 'User role assignments';
 COMMENT ON TABLE claims.user_facilities IS 'User facility associations for multi-tenancy';
-COMMENT ON TABLE claims.user_report_permissions IS 'User permissions for specific reports';
+COMMENT ON TABLE claims.reports_metadata IS 'Metadata for all available reports including name, description, status, and category';
+COMMENT ON TABLE claims.user_report_permissions IS 'User permissions for specific reports (references reports_metadata)';
 COMMENT ON TABLE claims.security_audit_log IS 'Security event audit trail';
 COMMENT ON TABLE claims.refresh_tokens IS 'JWT refresh tokens for extended sessions';
 COMMENT ON TABLE claims.sso_providers IS 'SSO provider configurations (skeleton)';
@@ -226,3 +260,45 @@ COMMENT ON COLUMN claims.user_facilities.is_primary IS 'Primary facility for the
 COMMENT ON COLUMN claims.refresh_tokens.token_hash IS 'SHA-256 hash of the refresh token';
 COMMENT ON COLUMN claims.security_audit_log.resource_type IS 'Type of resource accessed (e.g., CLAIM, FACILITY, REPORT)';
 COMMENT ON COLUMN claims.security_audit_log.resource_id IS 'ID of the specific resource accessed';
+
+-- ==========================================================================================================
+-- SECTION 8: PERMISSIONS AND GRANTS
+-- ==========================================================================================================
+
+-- Grant schema usage to claims_user role
+GRANT USAGE ON SCHEMA claims TO claims_user;
+
+-- Grant permissions on user management tables
+GRANT SELECT, INSERT, UPDATE ON claims.users TO claims_user;
+GRANT SELECT, INSERT, UPDATE ON claims.user_roles TO claims_user;
+GRANT SELECT, INSERT, UPDATE ON claims.user_facilities TO claims_user;
+GRANT SELECT, INSERT, UPDATE ON claims.reports_metadata TO claims_user;
+GRANT SELECT, INSERT, UPDATE ON claims.user_report_permissions TO claims_user;
+
+-- Grant permissions on security and audit tables
+GRANT SELECT, INSERT, UPDATE ON claims.security_audit_log TO claims_user;
+GRANT SELECT, INSERT, UPDATE ON claims.refresh_tokens TO claims_user;
+
+-- Grant permissions on SSO tables
+GRANT SELECT, INSERT, UPDATE ON claims.sso_providers TO claims_user;
+GRANT SELECT, INSERT, UPDATE ON claims.user_sso_mappings TO claims_user;
+
+-- Grant permissions on sequences
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA claims TO claims_user;
+
+-- Grant execute permissions on functions
+GRANT EXECUTE ON FUNCTION claims.update_updated_at_column() TO claims_user;
+
+-- Grant permissions on indexes (implicit with table permissions)
+-- Note: Index permissions are automatically granted with table permissions
+
+-- Default privileges for future objects in claims schema
+ALTER DEFAULT PRIVILEGES IN SCHEMA claims GRANT SELECT, INSERT, UPDATE ON TABLES TO claims_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA claims GRANT USAGE, SELECT ON SEQUENCES TO claims_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA claims GRANT EXECUTE ON FUNCTIONS TO claims_user;
+
+-- Additional security considerations:
+-- 1. claims_user role should NOT have DELETE permissions on user management tables
+-- 2. claims_user role should NOT have CREATE/DROP permissions on schema objects
+-- 3. Only super admin users should have DELETE permissions (handled at application level)
+-- 4. Audit tables should be INSERT-only for regular operations (handled at application level)

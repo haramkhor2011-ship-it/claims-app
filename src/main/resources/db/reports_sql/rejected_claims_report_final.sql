@@ -103,24 +103,28 @@ SELECT
     a.quantity,
     a.net AS activity_net_amount,
     
-    -- Remittance details
-    ra.payment_amount AS activity_payment_amount,
-    ra.denial_code AS activity_denial_code,
-    COALESCE(dc.description, ra.denial_code, 'No Denial Code') AS denial_type,
+    -- Remittance details (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
+    COALESCE(cas.paid_amount, 0) AS activity_payment_amount,                    -- capped paid across remittances
+    (cas.denial_codes)[1] AS activity_denial_code,                             -- latest denial from pre-computed summary
+    COALESCE(dc.description, (cas.denial_codes)[1], 'No Denial Code') AS denial_type,
     
-    -- Rejection analysis
+    -- Rejection analysis (CUMULATIVE-WITH-CAP: Using pre-computed activity status)
+    -- WHY: Consistent with other reports, uses latest denial and zero paid logic
+    -- HOW: Maps activity_status to rejection_type for consistent business logic
     CASE 
-        WHEN ra.payment_amount = 0 AND ra.denial_code IS NOT NULL THEN 'Fully Rejected'
-        WHEN ra.payment_amount > 0 AND ra.payment_amount < a.net THEN 'Partially Rejected'
-        WHEN ra.payment_amount = a.net THEN 'Fully Paid'
+        WHEN cas.activity_status = 'REJECTED' THEN 'Fully Rejected'
+        WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 'Partially Rejected'
+        WHEN cas.activity_status = 'FULLY_PAID' THEN 'Fully Paid'
+        WHEN cas.activity_status = 'PENDING' THEN 'Pending'
         ELSE 'Unknown Status'
     END AS rejection_type,
     
-    CASE 
-        WHEN ra.payment_amount = 0 AND ra.denial_code IS NOT NULL THEN a.net
-        WHEN ra.payment_amount > 0 AND ra.payment_amount < a.net THEN (a.net - ra.payment_amount)
-        ELSE 0
-    END AS rejected_amount,
+    -- Rejected amount (CUMULATIVE-WITH-CAP: Using pre-computed denied amount)
+    -- WHY: Only counts as rejected when latest denial exists AND capped paid = 0
+    -- HOW: Uses cas.denied_amount which implements the latest-denial-and-zero-paid logic
+    COALESCE(cas.denied_amount, 0) AS rejected_amount,
     
     -- Time analysis
     EXTRACT(YEAR FROM a.start_at) AS claim_year,
@@ -141,6 +145,10 @@ JOIN claims.claim c ON ck.id = c.claim_key_id
 LEFT JOIN claims.encounter e ON c.id = e.claim_id
 JOIN claims.activity a ON c.id = a.claim_id
 LEFT JOIN claims.remittance_claim rc ON ck.id = rc.claim_key_id
+-- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+-- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id AND cas.activity_id = a.activity_id
+-- Keep legacy join for denial code reference (needs raw data for reference lookup)
 LEFT JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id AND a.activity_id = ra.activity_id
 LEFT JOIN claims.submission s ON c.submission_id = s.id
 LEFT JOIN claims.remittance r ON rc.remittance_id = r.id
@@ -396,18 +404,20 @@ COMMENT ON VIEW claims.v_rejected_claims_claim_wise IS 'Claim wise view for Reje
 -- ==========================================================================================================
 
 CREATE OR REPLACE FUNCTION claims.get_rejected_claims_summary(
-  p_user_id TEXT,
-  p_facility_codes TEXT[],
-  p_payer_codes TEXT[],
-  p_receiver_ids TEXT[],
-  p_date_from TIMESTAMPTZ,
-  p_date_to TIMESTAMPTZ,
-  p_year INTEGER,
-  p_month INTEGER,
-  p_limit INTEGER,
-  p_offset INTEGER,
-  p_order_by TEXT,
-  p_order_direction TEXT,
+  p_use_mv BOOLEAN DEFAULT FALSE,
+  p_tab_name TEXT DEFAULT 'summary',
+  p_user_id TEXT DEFAULT NULL,
+  p_facility_codes TEXT[] DEFAULT NULL,
+  p_payer_codes TEXT[] DEFAULT NULL,
+  p_receiver_ids TEXT[] DEFAULT NULL,
+  p_date_from TIMESTAMPTZ DEFAULT NULL,
+  p_date_to TIMESTAMPTZ DEFAULT NULL,
+  p_year INTEGER DEFAULT NULL,
+  p_month INTEGER DEFAULT NULL,
+  p_limit INTEGER DEFAULT 100,
+  p_offset INTEGER DEFAULT 0,
+  p_order_by TEXT DEFAULT 'activity_start_date',
+  p_order_direction TEXT DEFAULT 'DESC',
   p_facility_ref_ids BIGINT[] DEFAULT NULL,
   p_payer_ref_ids BIGINT[] DEFAULT NULL,
   p_clinician_ref_ids BIGINT[] DEFAULT NULL
@@ -447,26 +457,33 @@ CREATE OR REPLACE FUNCTION claims.get_rejected_claims_summary(
   remittance_file_id BIGINT
 ) LANGUAGE plpgsql AS $$
 BEGIN
-  RETURN QUERY
-  -- Use materialized view for sub-second performance
-  SELECT
-    mv.facility_id,
-    mv.facility_name,
-    mv.report_year as claim_year,
-    TO_CHAR(mv.report_month, 'Month') as claim_month_name,
-    mv.payer_id,
-    mv.payer_name,
-    1 as total_claim,
-    mv.activity_net_amount as claim_amt,
-    CASE WHEN mv.activity_payment_amount > 0 THEN 1 ELSE 0 END as remitted_claim,
-    mv.activity_payment_amount as remitted_amt,
-    1 as rejected_claim,
-    mv.rejected_amount as rejected_amt,
-    0 as pending_remittance,
-    0.0 as pending_remittance_amt,
-    CASE WHEN mv.activity_payment_amount > 0 THEN 
-      ROUND((mv.rejected_amount / (mv.activity_payment_amount + mv.rejected_amount)) * 100, 2) 
-    ELSE 0 END as rejected_percentage_remittance,
+  -- OPTION 3: Hybrid approach with DB toggle and tab selection
+  -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+  -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+  
+  IF p_use_mv THEN
+    -- Use tab-specific MVs for sub-second performance
+    CASE p_tab_name
+      WHEN 'summary' THEN
+        RETURN QUERY
+        SELECT
+          mv.facility_id,
+          mv.facility_name,
+          mv.report_year as claim_year,
+          TO_CHAR(mv.report_month, 'Month') as claim_month_name,
+          mv.payer_id,
+          mv.payer_name,
+          1 as total_claim,
+          mv.activity_net_amount as claim_amt,
+          CASE WHEN mv.activity_payment_amount > 0 THEN 1 ELSE 0 END as remitted_claim,
+          mv.activity_payment_amount as remitted_amt,
+          1 as rejected_claim,
+          mv.rejected_amount as rejected_amt,
+          0 as pending_remittance,
+          0.0 as pending_remittance_amt,
+          CASE WHEN mv.activity_payment_amount > 0 THEN 
+            ROUND((mv.rejected_amount / (mv.activity_payment_amount + mv.rejected_amount)) * 100, 2) 
+          ELSE 0 END as rejected_percentage_remittance,
     CASE WHEN mv.activity_net_amount > 0 THEN 
       ROUND((mv.rejected_amount / mv.activity_net_amount) * 100, 2) 
     ELSE 0 END as rejected_percentage_submission,
@@ -535,6 +552,83 @@ BEGIN
     END ASC
   LIMIT p_limit
   OFFSET p_offset;
+      ELSE
+        -- Default to summary tab
+        RETURN QUERY
+        SELECT * FROM claims.get_rejected_claims_summary(
+            p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to,
+            p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction,
+            p_facility_ref_ids, p_payer_ref_ids, p_clinician_ref_ids
+        );
+    END CASE;
+  ELSE
+    -- Use traditional views for backward compatibility
+    RETURN QUERY
+    SELECT
+      rcs.facility_id,
+      rcs.facility_name,
+      rcs.claim_year,
+      rcs.claim_month_name,
+      rcs.id_payer as payer_id,
+      rcs.payer_name,
+      rcs.total_claim,
+      rcs.claim_amt,
+      rcs.remitted_claim,
+      rcs.remitted_amt,
+      rcs.rejected_claim,
+      rcs.rejected_amt,
+      rcs.pending_remittance,
+      rcs.pending_remittance_amt,
+      rcs.rejected_percentage_remittance,
+      rcs.rejected_percentage_submission,
+      rcs.claim_id,
+      rcs.member_id,
+      rcs.emirates_id_number,
+      rcs.claim_amt_detail,
+      rcs.remitted_amt_detail,
+      rcs.rejected_amt_detail,
+      rcs.rejection_type,
+      rcs.activity_start_date,
+      rcs.activity_code,
+      rcs.activity_denial_code,
+      rcs.denial_type,
+      rcs.clinician_name,
+      rcs.ageing_days,
+      rcs.current_status,
+      rcs.resubmission_type,
+      rcs.submission_file_id,
+      rcs.remittance_file_id
+    FROM claims.v_rejected_claims_summary rcs
+    WHERE 
+      (p_facility_codes IS NULL OR rcs.facility_id = ANY(p_facility_codes))
+      AND (p_payer_codes IS NULL OR rcs.id_payer = ANY(p_payer_codes))
+      AND (p_receiver_ids IS NULL OR rcs.payer_name = ANY(p_receiver_ids))
+      AND (p_date_from IS NULL OR rcs.activity_start_date >= p_date_from)
+      AND (p_date_to IS NULL OR rcs.activity_start_date <= p_date_to)
+      AND (p_year IS NULL OR rcs.claim_year = p_year)
+      AND (p_month IS NULL OR EXTRACT(MONTH FROM rcs.activity_start_date) = p_month)
+    ORDER BY
+      CASE WHEN p_order_direction = 'DESC' THEN
+        CASE p_order_by
+          WHEN 'facility_name' THEN rcs.facility_name
+          WHEN 'claim_year' THEN rcs.claim_year::TEXT
+          WHEN 'rejected_amt' THEN rcs.rejected_amt::TEXT
+          WHEN 'rejected_percentage_remittance' THEN rcs.rejected_percentage_remittance::TEXT
+          ELSE rcs.facility_name
+        END
+      END DESC,
+      CASE WHEN p_order_direction = 'ASC' OR p_order_direction IS NULL THEN
+        CASE p_order_by
+          WHEN 'facility_name' THEN rcs.facility_name
+          WHEN 'claim_year' THEN rcs.claim_year::TEXT
+          WHEN 'rejected_amt' THEN rcs.rejected_amt::TEXT
+          WHEN 'rejected_percentage_remittance' THEN rcs.rejected_percentage_remittance::TEXT
+          ELSE rcs.facility_name
+        END
+      END ASC
+    LIMIT p_limit
+    OFFSET p_offset;
+  END IF;
 END;
 $$;
 
@@ -545,18 +639,20 @@ COMMENT ON FUNCTION claims.get_rejected_claims_summary IS 'API function for Reje
 -- ==========================================================================================================
 
 CREATE OR REPLACE FUNCTION claims.get_rejected_claims_receiver_payer(
-  p_user_id TEXT,
-  p_facility_codes TEXT[],
-  p_payer_codes TEXT[],
-  p_receiver_ids TEXT[],
-  p_date_from TIMESTAMPTZ,
-  p_date_to TIMESTAMPTZ,
-  p_year INTEGER,
-  p_denial_codes TEXT[],
-  p_limit INTEGER,
-  p_offset INTEGER,
-  p_order_by TEXT,
-  p_order_direction TEXT,
+  p_use_mv BOOLEAN DEFAULT FALSE,
+  p_tab_name TEXT DEFAULT 'receiver_payer',
+  p_user_id TEXT DEFAULT NULL,
+  p_facility_codes TEXT[] DEFAULT NULL,
+  p_payer_codes TEXT[] DEFAULT NULL,
+  p_receiver_ids TEXT[] DEFAULT NULL,
+  p_date_from TIMESTAMPTZ DEFAULT NULL,
+  p_date_to TIMESTAMPTZ DEFAULT NULL,
+  p_year INTEGER DEFAULT NULL,
+  p_denial_codes TEXT[] DEFAULT NULL,
+  p_limit INTEGER DEFAULT 100,
+  p_offset INTEGER DEFAULT 0,
+  p_order_by TEXT DEFAULT 'activity_start_date',
+  p_order_direction TEXT DEFAULT 'DESC',
   p_facility_ref_ids BIGINT[] DEFAULT NULL,
   p_payer_ref_ids BIGINT[] DEFAULT NULL,
   p_clinician_ref_ids BIGINT[] DEFAULT NULL
@@ -581,33 +677,41 @@ CREATE OR REPLACE FUNCTION claims.get_rejected_claims_receiver_payer(
   collection_rate NUMERIC
 ) LANGUAGE plpgsql AS $$
 BEGIN
-  RETURN QUERY
-  SELECT
-    rctb.facility_id,
-    rctb.facility_name,
-    rctb.claim_year,
-    rctb.claim_month_name,
-    rctb.payer_id,
-    rctb.payer_name,
-    rctb.total_claim,
-    rctb.claim_amt,
-    rctb.remitted_claim,
-    rctb.remitted_amt,
-    rctb.rejected_claim,
-    rctb.rejected_amt,
-    rctb.pending_remittance,
-    rctb.pending_remittance_amt,
-    rctb.rejected_percentage_remittance,
-    rctb.rejected_percentage_submission,
-    rctb.average_claim_value,
-    rctb.collection_rate
-  FROM claims.v_rejected_claims_receiver_payer rctb
-  WHERE 
-    (p_facility_codes IS NULL OR rctb.facility_id = ANY(p_facility_codes))
-    AND (p_payer_codes IS NULL OR rctb.payer_id = ANY(p_payer_codes))
-    AND (p_receiver_ids IS NULL OR rctb.payer_name = ANY(p_receiver_ids))
-    AND (
-      p_facility_ref_ids IS NULL
+  -- OPTION 3: Hybrid approach with DB toggle and tab selection
+  -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+  -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+  
+  IF p_use_mv THEN
+    -- Use tab-specific MVs for sub-second performance
+    CASE p_tab_name
+      WHEN 'receiver_payer' THEN
+        RETURN QUERY
+        SELECT
+          mv.facility_id,
+          mv.facility_name,
+          mv.claim_year,
+          mv.claim_month_name,
+          mv.payer_id,
+          mv.payer_name,
+          mv.total_claim,
+          mv.claim_amt,
+          mv.remitted_claim,
+          mv.remitted_amt,
+          mv.rejected_claim,
+          mv.rejected_amt,
+          mv.pending_remittance,
+          mv.pending_remittance_amt,
+          mv.rejected_percentage_remittance,
+          mv.rejected_percentage_submission,
+          mv.average_claim_value,
+          mv.collection_rate
+        FROM claims.mv_rejected_claims_receiver_payer mv
+        WHERE 
+          (p_facility_codes IS NULL OR mv.facility_id = ANY(p_facility_codes))
+          AND (p_payer_codes IS NULL OR mv.payer_id = ANY(p_payer_codes))
+          AND (p_receiver_ids IS NULL OR mv.payer_name = ANY(p_receiver_ids))
+          AND (
+            p_facility_ref_ids IS NULL
       OR EXISTS (
         SELECT 1 FROM claims.v_rejected_claims_base b
         WHERE b.facility_ref_id = ANY(p_facility_ref_ids) AND b.facility_id = rctb.facility_id
@@ -623,24 +727,83 @@ BEGIN
   ORDER BY 
     CASE WHEN p_order_direction = 'DESC' THEN
       CASE p_order_by
-        WHEN 'facility_name' THEN rctb.facility_name
-        WHEN 'claim_year' THEN rctb.claim_year::TEXT
-        WHEN 'rejected_amt' THEN rctb.rejected_amt::TEXT
-        WHEN 'rejected_percentage_remittance' THEN rctb.rejected_percentage_remittance::TEXT
-        ELSE rctb.facility_name
+        WHEN 'facility_name' THEN mv.facility_name
+        WHEN 'claim_year' THEN mv.claim_year::TEXT
+        WHEN 'rejected_amt' THEN mv.rejected_amt::TEXT
+        WHEN 'rejected_percentage_remittance' THEN mv.rejected_percentage_remittance::TEXT
+        ELSE mv.facility_name
       END
     END DESC,
     CASE WHEN p_order_direction = 'ASC' OR p_order_direction IS NULL THEN
       CASE p_order_by
-        WHEN 'facility_name' THEN rctb.facility_name
-        WHEN 'claim_year' THEN rctb.claim_year::TEXT
-        WHEN 'rejected_amt' THEN rctb.rejected_amt::TEXT
-        WHEN 'rejected_percentage_remittance' THEN rctb.rejected_percentage_remittance::TEXT
-        ELSE rctb.facility_name
+        WHEN 'facility_name' THEN mv.facility_name
+        WHEN 'claim_year' THEN mv.claim_year::TEXT
+        WHEN 'rejected_amt' THEN mv.rejected_amt::TEXT
+        WHEN 'rejected_percentage_remittance' THEN mv.rejected_percentage_remittance::TEXT
+        ELSE mv.facility_name
       END
     END ASC
   LIMIT p_limit
   OFFSET p_offset;
+      ELSE
+        -- Default to receiver_payer tab
+        RETURN QUERY
+        SELECT * FROM claims.get_rejected_claims_receiver_payer(
+            p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to,
+            p_year, p_denial_codes, p_limit, p_offset, p_order_by, p_order_direction,
+            p_facility_ref_ids, p_payer_ref_ids, p_clinician_ref_ids
+        );
+    END CASE;
+  ELSE
+    -- Use traditional views for backward compatibility
+    RETURN QUERY
+    SELECT
+      rcrp.facility_id,
+      rcrp.facility_name,
+      rcrp.claim_year,
+      rcrp.claim_month_name,
+      rcrp.id_payer as payer_id,
+      rcrp.payer_name,
+      rcrp.total_claim,
+      rcrp.claim_amt,
+      rcrp.remitted_claim,
+      rcrp.remitted_amt,
+      rcrp.rejected_claim,
+      rcrp.rejected_amt,
+      rcrp.pending_remittance,
+      rcrp.pending_remittance_amt,
+      rcrp.rejected_percentage_remittance,
+      rcrp.rejected_percentage_submission,
+      rcrp.average_claim_value,
+      rcrp.collection_rate
+    FROM claims.v_rejected_claims_receiver_payer rcrp
+    WHERE 
+      (p_facility_codes IS NULL OR rcrp.facility_id = ANY(p_facility_codes))
+      AND (p_payer_codes IS NULL OR rcrp.id_payer = ANY(p_payer_codes))
+      AND (p_receiver_ids IS NULL OR rcrp.payer_name = ANY(p_receiver_ids))
+      AND (p_year IS NULL OR rcrp.claim_year = p_year)
+    ORDER BY
+      CASE WHEN p_order_direction = 'DESC' THEN
+        CASE p_order_by
+          WHEN 'facility_name' THEN rcrp.facility_name
+          WHEN 'claim_year' THEN rcrp.claim_year::TEXT
+          WHEN 'rejected_amt' THEN rcrp.rejected_amt::TEXT
+          WHEN 'rejected_percentage_remittance' THEN rcrp.rejected_percentage_remittance::TEXT
+          ELSE rcrp.facility_name
+        END
+      END DESC,
+      CASE WHEN p_order_direction = 'ASC' OR p_order_direction IS NULL THEN
+        CASE p_order_by
+          WHEN 'facility_name' THEN rcrp.facility_name
+          WHEN 'claim_year' THEN rcrp.claim_year::TEXT
+          WHEN 'rejected_amt' THEN rcrp.rejected_amt::TEXT
+          WHEN 'rejected_percentage_remittance' THEN rcrp.rejected_percentage_remittance::TEXT
+          ELSE rcrp.facility_name
+        END
+      END ASC
+    LIMIT p_limit
+    OFFSET p_offset;
+  END IF;
 END;
 $$;
 
@@ -651,18 +814,20 @@ COMMENT ON FUNCTION claims.get_rejected_claims_receiver_payer IS 'API function f
 -- ==========================================================================================================
 
 CREATE OR REPLACE FUNCTION claims.get_rejected_claims_claim_wise(
-  p_user_id TEXT,
-  p_facility_codes TEXT[],
-  p_payer_codes TEXT[],
-  p_receiver_ids TEXT[],
-  p_date_from TIMESTAMPTZ,
-  p_date_to TIMESTAMPTZ,
-  p_year INTEGER,
-  p_denial_codes TEXT[],
-  p_limit INTEGER,
-  p_offset INTEGER,
-  p_order_by TEXT,
-  p_order_direction TEXT,
+  p_use_mv BOOLEAN DEFAULT FALSE,
+  p_tab_name TEXT DEFAULT 'claim_wise',
+  p_user_id TEXT DEFAULT NULL,
+  p_facility_codes TEXT[] DEFAULT NULL,
+  p_payer_codes TEXT[] DEFAULT NULL,
+  p_receiver_ids TEXT[] DEFAULT NULL,
+  p_date_from TIMESTAMPTZ DEFAULT NULL,
+  p_date_to TIMESTAMPTZ DEFAULT NULL,
+  p_year INTEGER DEFAULT NULL,
+  p_denial_codes TEXT[] DEFAULT NULL,
+  p_limit INTEGER DEFAULT 100,
+  p_offset INTEGER DEFAULT 0,
+  p_order_by TEXT DEFAULT 'activity_start_date',
+  p_order_direction TEXT DEFAULT 'DESC',
   p_facility_ref_ids BIGINT[] DEFAULT NULL,
   p_payer_ref_ids BIGINT[] DEFAULT NULL,
   p_clinician_ref_ids BIGINT[] DEFAULT NULL
@@ -694,30 +859,38 @@ CREATE OR REPLACE FUNCTION claims.get_rejected_claims_claim_wise(
   claim_comments TEXT
 ) LANGUAGE plpgsql AS $$
 BEGIN
-  RETURN QUERY
-  SELECT
-    rctc.claim_key_id,
-    rctc.claim_id,
-    rctc.payer_id,
-    rctc.payer_name,
-    rctc.member_id,
-    rctc.emirates_id_number,
-    rctc.claim_amt,
-    rctc.remitted_amt,
-    rctc.rejected_amt,
-    rctc.rejection_type,
-    rctc.service_date,
-    rctc.activity_code,
-    rctc.denial_code,
-    rctc.denial_type,
-    rctc.clinician_name,
-    rctc.facility_name,
-    rctc.ageing_days,
-    rctc.current_status,
-    rctc.resubmission_type,
-    rctc.resubmission_comment,
-    rctc.submission_file_id,
-    rctc.remittance_file_id,
+  -- OPTION 3: Hybrid approach with DB toggle and tab selection
+  -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+  -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+  
+  IF p_use_mv THEN
+    -- Use tab-specific MVs for sub-second performance
+    CASE p_tab_name
+      WHEN 'claim_wise' THEN
+        RETURN QUERY
+        SELECT
+          mv.claim_key_id,
+          mv.claim_id,
+          mv.payer_id,
+          mv.payer_name,
+          mv.member_id,
+          mv.emirates_id_number,
+          mv.claim_amt,
+          mv.remitted_amt,
+          mv.rejected_amt,
+          mv.rejection_type,
+          mv.service_date,
+          mv.activity_code,
+          mv.denial_code,
+          mv.denial_type,
+          mv.clinician_name,
+          mv.facility_name,
+          mv.ageing_days,
+          mv.current_status,
+          mv.resubmission_type,
+          mv.resubmission_comment,
+          mv.submission_file_id,
+          mv.remittance_file_id,
     rctc.submission_transaction_date,
     rctc.remittance_transaction_date,
     rctc.claim_comments
@@ -772,6 +945,75 @@ BEGIN
     END ASC
   LIMIT p_limit
   OFFSET p_offset;
+      ELSE
+        -- Default to claim_wise tab
+        RETURN QUERY
+        SELECT * FROM claims.get_rejected_claims_claim_wise(
+            p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to,
+            p_year, p_denial_codes, p_limit, p_offset, p_order_by, p_order_direction,
+            p_facility_ref_ids, p_payer_ref_ids, p_clinician_ref_ids
+        );
+    END CASE;
+  ELSE
+    -- Use traditional views for backward compatibility
+    RETURN QUERY
+    SELECT
+      rccw.claim_key_id,
+      rccw.claim_id,
+      rccw.id_payer as payer_id,
+      rccw.payer_name,
+      rccw.member_id,
+      rccw.emirates_id_number,
+      rccw.claim_amt,
+      rccw.remitted_amt,
+      rccw.rejected_amt,
+      rccw.rejection_type,
+      rccw.service_date,
+      rccw.activity_code,
+      rccw.denial_code,
+      rccw.denial_type,
+      rccw.clinician_name,
+      rccw.facility_name,
+      rccw.ageing_days,
+      rccw.current_status,
+      rccw.resubmission_type,
+      rccw.resubmission_comment,
+      rccw.submission_file_id,
+      rccw.remittance_file_id,
+      rccw.submission_transaction_date,
+      rccw.remittance_transaction_date,
+      rccw.claim_comments
+    FROM claims.v_rejected_claims_claim_wise rccw
+    WHERE 
+      (p_facility_codes IS NULL OR rccw.facility_name = ANY(p_facility_codes))
+      AND (p_payer_codes IS NULL OR rccw.id_payer = ANY(p_payer_codes))
+      AND (p_receiver_ids IS NULL OR rccw.payer_name = ANY(p_receiver_ids))
+      AND (p_date_from IS NULL OR rccw.service_date >= p_date_from)
+      AND (p_date_to IS NULL OR rccw.service_date <= p_date_to)
+      AND (p_year IS NULL OR EXTRACT(YEAR FROM rccw.service_date) = p_year)
+      AND (p_denial_codes IS NULL OR rccw.denial_code = ANY(p_denial_codes))
+    ORDER BY
+      CASE WHEN p_order_direction = 'DESC' THEN
+        CASE p_order_by
+          WHEN 'claim_id' THEN rccw.claim_id
+          WHEN 'payer_name' THEN rccw.payer_name
+          WHEN 'rejected_amt' THEN rccw.rejected_amt::TEXT
+          WHEN 'service_date' THEN rccw.service_date::TEXT
+          ELSE rccw.claim_id
+        END
+      END DESC,
+      CASE WHEN p_order_direction = 'ASC' OR p_order_direction IS NULL THEN
+        CASE p_order_by
+          WHEN 'claim_id' THEN rccw.claim_id
+          WHEN 'payer_name' THEN rccw.payer_name
+          WHEN 'rejected_amt' THEN rccw.rejected_amt::TEXT
+          WHEN 'service_date' THEN rccw.service_date::TEXT
+          ELSE rccw.claim_id
+        END
+      END ASC
+    LIMIT p_limit
+    OFFSET p_offset;
+  END IF;
 END;
 $$;
 
@@ -809,9 +1051,9 @@ GRANT SELECT ON claims.v_rejected_claims_base TO claims_user;
 GRANT SELECT ON claims.v_rejected_claims_summary TO claims_user;
 GRANT SELECT ON claims.v_rejected_claims_receiver_payer TO claims_user;
 GRANT SELECT ON claims.v_rejected_claims_claim_wise TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_rejected_claims_summary TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_rejected_claims_receiver_payer TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_rejected_claims_claim_wise TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_rejected_claims_summary(boolean,text,text,text[],text[],text[],timestamptz,timestamptz,integer,integer,integer,integer,text,text,bigint[],bigint[],bigint[]) TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_rejected_claims_receiver_payer(boolean,text,text,text[],text[],text[],timestamptz,timestamptz,integer,text[],integer,integer,text,text,bigint[],bigint[],bigint[]) TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_rejected_claims_claim_wise(boolean,text,text,text[],text[],text[],timestamptz,timestamptz,integer,text[],integer,integer,text,text,bigint[],bigint[],bigint[]) TO claims_user;
 
 -- ==========================================================================================================
 -- END OF REJECTED CLAIMS REPORT IMPLEMENTATION

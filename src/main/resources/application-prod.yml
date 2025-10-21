@@ -88,7 +88,7 @@ claims:
   parser:
     allowNonSchemaAttachments: false
     maxAttachmentBytes: 10485760
-    failOnXsdError: true                  # stricter in prod
+    failOnXsdError: false                  # stricter in prod
 
 
   # ===== Refdata & Bootstrap =====

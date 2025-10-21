@@ -80,16 +80,19 @@ LEFT JOIN (
   WHERE rn = 1
 ) cst ON cst.claim_key_id = ck.id
 LEFT JOIN (
+  -- CUMULATIVE-WITH-CAP: Aggregate claim-level remittance metrics from pre-computed per-activity summary
+  -- Using cumulative-with-cap semantics via claim_activity_summary to prevent overcounting
   SELECT 
-    rc.claim_key_id,
-    SUM(ra.payment_amount) as total_payment,
-    SUM(CASE WHEN ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) as total_denied,
-    COUNT(*) as remittance_count,
-    MIN(rc.date_settlement) as first_remittance_date,
-    MAX(rc.date_settlement) as last_remittance_date
-  FROM claims.remittance_claim rc
-  JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-  GROUP BY rc.claim_key_id
+    cas.claim_key_id,
+    SUM(cas.paid_amount)                                  AS total_payment,      -- capped paid across activities
+    SUM(cas.denied_amount)                                AS total_denied,       -- denied only when latest denial and zero paid
+    MAX(cas.remittance_count)                             AS remittance_count,   -- per-claim max across activities
+    MIN(rc.date_settlement)                               AS first_remittance_date,
+    MAX(rc.date_settlement)                               AS last_remittance_date
+  FROM claims.claim_activity_summary cas
+  LEFT JOIN claims.remittance_claim rc 
+    ON rc.claim_key_id = cas.claim_key_id
+  GROUP BY cas.claim_key_id
 ) rem_agg ON rem_agg.claim_key_id = ck.id
 LEFT JOIN (
   SELECT 
@@ -137,17 +140,18 @@ COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_summary IS 'Pre-computed b
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittance_advice_summary CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_remittance_advice_summary AS
 WITH claim_remittance_agg AS (
-  -- Pre-aggregate all remittance data per claim_key_id to prevent duplicates
+  -- CUMULATIVE-WITH-CAP: Pre-aggregate all remittance data per claim_key_id using claim_activity_summary
+  -- Using cumulative-with-cap semantics to prevent overcounting from multiple remittances per activity
   SELECT 
-    rc.claim_key_id,
-    -- Aggregate all remittances for this claim
-    COUNT(DISTINCT rc.id) as remittance_count,
-    SUM(ra.payment_amount) as total_payment,
-    SUM(ra.net) as total_remitted,
-    COUNT(CASE WHEN ra.denial_code IS NOT NULL THEN 1 END) as denied_count,
-    SUM(CASE WHEN ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) as denied_amount,
-    COUNT(ra.id) as total_activity_count,
-    -- Use the most recent remittance for payer/provider info
+    cas.claim_key_id,
+    -- Aggregate all remittances for this claim using pre-computed activity summary
+    MAX(cas.remittance_count) as remittance_count,                    -- max across activities
+    SUM(cas.paid_amount) as total_payment,                           -- capped paid across activities
+    SUM(cas.submitted_amount) as total_remitted,                     -- submitted as remitted baseline
+    COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END) as denied_count,  -- activities with latest denial
+    SUM(cas.denied_amount) as denied_amount,                         -- denied only when latest denial and zero paid
+    COUNT(cas.activity_id) as total_activity_count,                  -- count of activities
+    -- Use the most recent remittance for payer/provider info (from remittance_claim)
     (ARRAY_AGG(rc.id_payer ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_id_payer,
     (ARRAY_AGG(rc.provider_id ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_provider_id,
     (ARRAY_AGG(rc.id ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_remittance_claim_id,
@@ -155,10 +159,11 @@ WITH claim_remittance_agg AS (
     MAX(rc.payment_reference) as latest_payment_reference,
     -- Additional metrics
     MIN(rc.date_settlement) as first_settlement_date,
-    STRING_AGG(DISTINCT ra.denial_code, ', ') as all_denial_codes
-  FROM claims.remittance_claim rc
-  LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-  GROUP BY rc.claim_key_id
+    (SELECT STRING_AGG(DISTINCT denial_code, ', ') 
+     FROM UNNEST(cas.denial_codes) AS denial_code) as all_denial_codes  -- flatten denial codes array
+  FROM claims.claim_activity_summary cas
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = cas.claim_key_id
+  GROUP BY cas.claim_key_id, cas.denial_codes
 )
 SELECT 
   -- Core identifiers (claim-level)
@@ -239,22 +244,24 @@ COMMENT ON MATERIALIZED VIEW claims.mv_remittance_advice_summary IS 'Pre-aggrega
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_doctor_denial_summary CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_doctor_denial_summary AS
 WITH remittance_aggregated AS (
-  -- Pre-aggregate all remittance data per claim_key_id to prevent duplicates
+  -- CUMULATIVE-WITH-CAP: Pre-aggregate all remittance data per claim_key_id using claim_activity_summary
+  -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+  -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
   SELECT 
-    rc.claim_key_id,
-    COUNT(*) as remittance_count,
-    SUM(ra.payment_amount) as total_payment_amount,
-    SUM(ra.net) as total_remitted_amount,
-    COUNT(CASE WHEN ra.payment_amount > 0 THEN 1 END) as paid_activity_count,
-    COUNT(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN 1 END) as rejected_activity_count,
+    cas.claim_key_id,
+    MAX(cas.remittance_count) as remittance_count,                    -- max across activities
+    SUM(cas.paid_amount) as total_payment_amount,                     -- capped paid across activities
+    SUM(cas.submitted_amount) as total_remitted_amount,               -- submitted as remitted baseline
+    COUNT(CASE WHEN cas.activity_status = 'FULLY_PAID' OR cas.activity_status = 'PARTIALLY_PAID' THEN 1 END) as paid_activity_count,
+    COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END) as rejected_activity_count,
     MIN(rc.date_settlement) as first_remittance_date,
     MAX(rc.date_settlement) as last_remittance_date,
     -- Use the most recent remittance for payer/provider info
     (ARRAY_AGG(rc.id_payer ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_id_payer,
     (ARRAY_AGG(rc.provider_id ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_provider_id
-  FROM claims.remittance_claim rc
-  LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-  GROUP BY rc.claim_key_id
+  FROM claims.claim_activity_summary cas
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = cas.claim_key_id
+  GROUP BY cas.claim_key_id
 ),
 clinician_activity_agg AS (
   SELECT 
@@ -359,27 +366,27 @@ COMMENT ON MATERIALIZED VIEW claims.mv_claims_monthly_agg IS 'Pre-computed month
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_claim_details_complete CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_claim_details_complete AS
 WITH activity_remittance_agg AS (
-  -- Pre-aggregate remittance data per activity to prevent duplicates
-  -- This CTE will return one row per activity, even if no remittance data exists
+  -- CUMULATIVE-WITH-CAP: Pre-aggregate remittance data per activity using claim_activity_summary
+  -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+  -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
   SELECT 
     a.activity_id,
     a.claim_id,
-    -- Aggregate all remittances for this activity across all remittance cycles
-    COALESCE(SUM(ra.payment_amount), 0) as total_payment_amount,
-    MAX(ra.denial_code) as latest_denial_code,
+    -- Use pre-computed activity summary for accurate financial data
+    COALESCE(cas.paid_amount, 0) as total_payment_amount,              -- capped paid across remittances
+    (cas.denial_codes)[1] as latest_denial_code,                       -- latest denial from pre-computed summary
     MAX(rc.date_settlement) as latest_settlement_date,
     MAX(rc.payment_reference) as latest_payment_reference,
-    COALESCE(COUNT(DISTINCT rc.id), 0) as remittance_count,
-    -- Additional remittance metrics
-    COALESCE(SUM(ra.net), 0) as total_remitted_amount,
-    COALESCE(COUNT(CASE WHEN ra.payment_amount > 0 THEN 1 END), 0) as paid_remittance_count,
-    COALESCE(COUNT(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN 1 END), 0) as rejected_remittance_count
+    COALESCE(cas.remittance_count, 0) as remittance_count,             -- remittance count from pre-computed summary
+    -- Additional remittance metrics from pre-computed summary
+    COALESCE(cas.submitted_amount, 0) as total_remitted_amount,        -- submitted as remitted baseline
+    CASE WHEN cas.activity_status = 'FULLY_PAID' OR cas.activity_status = 'PARTIALLY_PAID' THEN 1 ELSE 0 END as paid_remittance_count,
+    CASE WHEN cas.activity_status = 'REJECTED' THEN 1 ELSE 0 END as rejected_remittance_count
   FROM claims.activity a
   LEFT JOIN claims.claim c ON c.id = a.claim_id
+  LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = c.claim_key_id AND cas.activity_id = a.activity_id
   LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = c.claim_key_id
-  LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id 
-    AND ra.activity_id = a.activity_id
-  GROUP BY a.activity_id, a.claim_id
+  GROUP BY a.activity_id, a.claim_id, cas.paid_amount, cas.denial_codes, cas.remittance_count, cas.submitted_amount, cas.activity_status
 )
 SELECT 
   ck.id as claim_key_id,
@@ -535,41 +542,41 @@ COMMENT ON MATERIALIZED VIEW claims.mv_resubmission_cycles IS 'Pre-computed resu
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittances_resubmission_activity_level CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_remittances_resubmission_activity_level AS
 WITH activity_financials AS (
-    -- Calculate financial metrics per activity (SIMPLIFIED)
+    -- CUMULATIVE-WITH-CAP: Calculate financial metrics per activity using claim_activity_summary
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     SELECT 
         a.id as activity_internal_id,
         a.claim_id,
         a.activity_id,
         a.net::numeric as submitted_amount,
-        COALESCE(SUM(ra.payment_amount), 0::numeric) as total_paid,
-        COALESCE(SUM(ra.net), 0::numeric) as total_remitted,
-        CASE
-            WHEN a.net > COALESCE(SUM(ra.payment_amount), 0::numeric) THEN a.net - COALESCE(SUM(ra.payment_amount), 0::numeric)
-            ELSE 0::numeric
-        END as rejected_amount,
-        COUNT(DISTINCT ra.remittance_claim_id) as remittance_count,
-        MAX(ra.denial_code) as latest_denial_code,
-        MIN(ra.denial_code) as initial_denial_code,
-        -- Additional calculated fields
-        COUNT(CASE WHEN ra.payment_amount = a.net THEN 1 END) as fully_paid_count,
-        SUM(CASE WHEN ra.payment_amount = a.net THEN ra.payment_amount ELSE 0::numeric END) as fully_paid_amount,
-        COUNT(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN 1 END) as fully_rejected_count,
-        SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN a.net ELSE 0::numeric END) as fully_rejected_amount,
-        COUNT(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < a.net THEN 1 END) as partially_paid_count,
-        SUM(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < a.net THEN ra.payment_amount ELSE 0::numeric END) as partially_paid_amount,
+        COALESCE(cas.paid_amount, 0::numeric) as total_paid,                    -- capped paid across remittances
+        COALESCE(cas.submitted_amount, 0::numeric) as total_remitted,          -- submitted as remitted baseline
+        COALESCE(cas.denied_amount, 0::numeric) as rejected_amount,            -- denied only when latest denial and zero paid
+        COALESCE(cas.remittance_count, 0) as remittance_count,                 -- remittance count from pre-computed summary
+        (cas.denial_codes)[1] as latest_denial_code,                           -- latest denial from pre-computed summary
+        (cas.denial_codes)[array_length(cas.denial_codes, 1)] as initial_denial_code,  -- first denial from pre-computed summary
+        -- Additional calculated fields using pre-computed activity status
+        CASE WHEN cas.activity_status = 'FULLY_PAID' THEN 1 ELSE 0 END as fully_paid_count,
+        CASE WHEN cas.activity_status = 'FULLY_PAID' THEN cas.paid_amount ELSE 0::numeric END as fully_paid_amount,
+        CASE WHEN cas.activity_status = 'REJECTED' THEN 1 ELSE 0 END as fully_rejected_count,
+        CASE WHEN cas.activity_status = 'REJECTED' THEN cas.denied_amount ELSE 0::numeric END as fully_rejected_amount,
+        CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 1 ELSE 0 END as partially_paid_count,
+        CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.paid_amount ELSE 0::numeric END as partially_paid_amount,
         -- Self-pay detection
         COUNT(CASE WHEN c.payer_id = 'Self-Paid' THEN 1 END) as self_pay_count,
         SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN a.net ELSE 0::numeric END) as self_pay_amount,
-        -- Taken back amounts
-        SUM(CASE WHEN ra.payment_amount < 0 THEN ABS(ra.payment_amount) ELSE 0::numeric END) as taken_back_amount,
-        COUNT(CASE WHEN ra.payment_amount < 0 THEN 1 END) as taken_back_count
+        -- Taken back amounts (from raw remittance data as this is not in summary)
+        COALESCE(SUM(CASE WHEN ra.payment_amount < 0 THEN ABS(ra.payment_amount) ELSE 0::numeric END), 0::numeric) as taken_back_amount,
+        COALESCE(COUNT(CASE WHEN ra.payment_amount < 0 THEN 1 END), 0) as taken_back_count
     FROM claims.activity a
     LEFT JOIN claims.claim c ON a.claim_id = c.id
+    LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = c.claim_key_id AND cas.activity_id = a.activity_id
     LEFT JOIN claims.remittance_activity ra ON a.activity_id = ra.activity_id
       AND ra.remittance_claim_id IN (
         SELECT id FROM claims.remittance_claim rc2 WHERE rc2.claim_key_id = c.claim_key_id
       )
-    GROUP BY a.id, a.claim_id, a.activity_id, a.net, c.payer_id
+    GROUP BY a.id, a.claim_id, a.activity_id, a.net, c.payer_id, cas.paid_amount, cas.submitted_amount, cas.denied_amount, cas.remittance_count, cas.denial_codes, cas.activity_status
 ),
 claim_resubmission_summary AS (
     -- Calculate resubmission metrics per claim
@@ -746,7 +753,6 @@ SELECT
     diag_agg.secondary_diagnosis,
     
     -- Additional fields from JSON mapping (derived calculations)
-    c.payer_id,
     a.prior_authorization_id,
     -- REMOVED: rc.payment_reference, rc.date_settlement (caused duplicates)
     -- These fields are available in remittance_cycles CTE if needed
@@ -816,6 +822,719 @@ CREATE INDEX IF NOT EXISTS idx_mv_remittances_resubmission_clinician
 ON claims.mv_remittances_resubmission_activity_level(clinician, encounter_start);
 
 COMMENT ON MATERIALIZED VIEW claims.mv_remittances_resubmission_activity_level IS 'Pre-computed remittances and resubmission activity-level data for sub-second report performance - FIXED: Aggregated cycles to prevent duplicates';
+
+-- ==========================================================================================================
+-- SECTION 7: REFRESH FUNCTIONS
+-- ==========================================================================================================
+
+-- SUB-SECOND REFRESH STRATEGY
+CREATE OR REPLACE FUNCTION refresh_report_mvs_subsecond() RETURNS VOID AS $$
+BEGIN
+  -- Refresh original MVs in parallel for maximum speed
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_balance_amount_summary;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_remittance_advice_summary;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_doctor_denial_summary;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claims_monthly_agg;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claim_details_complete;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_resubmission_cycles;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_remittances_resubmission_activity_level;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_rejected_claims_summary;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claim_summary_payerwise;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claim_summary_encounterwise;
+  
+  -- Refresh tab-specific MVs for Option 3 implementation
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_balance_amount_overall;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_balance_amount_initial;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_balance_amount_resubmission;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_remittance_advice_header;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_remittance_advice_claim_wise;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_remittance_advice_activity_wise;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_doctor_denial_high_denial;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_doctor_denial_detail;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_rejected_claims_by_year;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_rejected_claims_summary_tab;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_rejected_claims_receiver_payer;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_rejected_claims_claim_wise;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claim_summary_monthwise;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_remittances_resubmission_claim_level;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Individual refresh functions for selective updates
+CREATE OR REPLACE FUNCTION refresh_balance_amount_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_balance_amount_summary;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION refresh_remittance_advice_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_remittance_advice_summary;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION refresh_doctor_denial_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_doctor_denial_summary;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION refresh_monthly_agg_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claims_monthly_agg;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION refresh_claim_details_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claim_details_complete;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION refresh_resubmission_cycles_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_resubmission_cycles;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION refresh_remittances_resubmission_activity_level_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_remittances_resubmission_activity_level;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION refresh_rejected_claims_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_rejected_claims_summary;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION refresh_payerwise_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claim_summary_payerwise;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION refresh_encounterwise_mv() RETURNS VOID AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claim_summary_encounterwise;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ==========================================================================================================
+-- SECTION 8: PERFORMANCE MONITORING
+-- ==========================================================================================================
+
+-- Function to monitor materialized view sizes and refresh times
+CREATE OR REPLACE FUNCTION monitor_mv_performance() RETURNS TABLE(
+  mv_name TEXT,
+  row_count BIGINT,
+  size_mb NUMERIC,
+  last_refresh TIMESTAMPTZ
+) AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    schemaname||'.'||matviewname as mv_name,
+    pg_size_pretty(pg_total_relation_size(schemaname||'.'||matviewname))::bigint as row_count,
+    ROUND(pg_total_relation_size(schemaname||'.'||matviewname) / 1024.0 / 1024.0, 2) as size_mb,
+    pg_stat_get_last_analyze_time(schemaname||'.'||matviewname) as last_refresh
+  FROM pg_matviews 
+  WHERE schemaname = 'claims' 
+  AND matviewname LIKE 'mv_%'
+  ORDER BY pg_total_relation_size(schemaname||'.'||matviewname) DESC;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ==========================================================================================================
+-- SECTION 9: INITIAL DATA POPULATION
+-- ==========================================================================================================
+
+-- Populate materialized views with initial data
+-- Note: This will be called at the end of the script after all MVs are created
+
+-- ==========================================================================================================
+-- SECTION 10: COMMENTS AND DOCUMENTATION
+-- ==========================================================================================================
+
+COMMENT ON FUNCTION refresh_report_mvs_subsecond() IS 'Refreshes all report materialized views for sub-second performance';
+COMMENT ON FUNCTION monitor_mv_performance() IS 'Monitors materialized view performance metrics';
+
+-- ==========================================================================================================
+-- PERFORMANCE EXPECTATIONS
+-- ==========================================================================================================
+-- 
+-- After implementing these materialized views:
+-- 
+-- 1. Balance Amount Report: 0.5-1.5 seconds (95% improvement)
+-- 2. Remittance Advice Report: 0.3-0.8 seconds (96% improvement)  
+-- 3. Resubmission Report: 0.8-2.0 seconds (97% improvement)
+-- 4. Doctor Denial Report: 0.4-1.0 seconds (97% improvement)
+-- 5. Claim Details Report: 0.6-1.8 seconds (98% improvement)
+-- 6. Monthly Reports: 0.2-0.5 seconds (99% improvement)
+-- 7. Rejected Claims Report: 0.4-1.2 seconds (95% improvement)
+-- 8. Claim Summary Payerwise: 0.3-0.8 seconds (96% improvement)
+-- 9. Claim Summary Encounterwise: 0.2-0.6 seconds (97% improvement)
+--
+-- REFRESH STRATEGY:
+-- - Full refresh: Daily during maintenance window
+-- - Incremental refresh: Every 4 hours during business hours
+-- - Emergency refresh: On-demand for critical reports
+--
+-- STORAGE REQUIREMENTS:
+-- - Estimated total size: 2-5 GB depending on data volume
+-- - Index overhead: 20-30% additional storage
+-- - Refresh time: 5-15 minutes for full refresh
+--
+-- ==========================================================================================================
+-- SECTION 8: ADDITIONAL MATERIALIZED VIEWS FOR COMPLETE SUB-SECOND PERFORMANCE
+-- ==========================================================================================================
+
+-- 7. Materialized View for Rejected Claims Report Summary
+-- This MV pre-aggregates rejected claims data for sub-second performance
+-- FIXED: Added activity-level rejection aggregation to prevent duplicates from multiple remittances per activity
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_summary CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_rejected_claims_summary AS
+WITH activity_rejection_agg AS (
+  -- CUMULATIVE-WITH-CAP: Pre-aggregate rejection data per activity using claim_activity_summary
+  -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+  -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
+  SELECT 
+    a.activity_id,
+    a.claim_id,
+    a.net as activity_net_amount,
+    -- Get latest rejection status from pre-computed activity summary
+    (cas.denial_codes)[1] as latest_denial_code,                       -- latest denial from pre-computed summary
+    MAX(rc.date_settlement) as latest_settlement_date,
+    MAX(rc.payment_reference) as latest_payment_reference,
+    MAX(rc.id) as latest_remittance_claim_id,
+    -- Use pre-computed rejection amount and type
+    COALESCE(cas.denied_amount, 0) as rejected_amount,                 -- denied only when latest denial and zero paid
+    CASE 
+      WHEN cas.activity_status = 'REJECTED' THEN 'Fully Rejected'
+      WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 'Partially Rejected'
+      WHEN cas.activity_status = 'PENDING' THEN 'No Payment'
+      ELSE 'Unknown'
+    END as rejection_type,
+    -- Additional metrics from pre-computed summary
+    COALESCE(cas.remittance_count, 0) as remittance_count,             -- remittance count from pre-computed summary
+    COALESCE(cas.paid_amount, 0) as total_payment_amount,              -- capped paid across remittances
+    COALESCE(cas.paid_amount, 0) as max_payment_amount,                -- capped paid across remittances
+    -- Flag to indicate if this activity has rejection data
+    CASE 
+      WHEN cas.activity_status = 'REJECTED' OR cas.activity_status = 'PARTIALLY_PAID' OR cas.denied_amount > 0
+      THEN 1 
+      ELSE 0 
+    END as has_rejection_data
+  FROM claims.activity a
+  LEFT JOIN claims.claim c ON c.id = a.claim_id
+  LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = c.claim_key_id AND cas.activity_id = a.activity_id
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = c.claim_key_id
+  GROUP BY a.activity_id, a.claim_id, a.net, cas.denial_codes, cas.denied_amount, cas.activity_status, cas.remittance_count, cas.paid_amount
+)
+SELECT 
+  -- Core identifiers
+  ck.id as claim_key_id,
+  ck.claim_id,
+  c.id as claim_internal_id,
+  
+  -- Payer information - FIXED: Use correct payer field
+  c.payer_id as payer_id,
+  COALESCE(p.name, c.payer_id, 'Unknown Payer') as payer_name,
+  c.payer_ref_id,
+  
+  -- Patient information
+  c.member_id,
+  c.emirates_id_number,
+  
+  -- Facility information
+  e.facility_id,
+  e.facility_ref_id,
+  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_name,
+  
+  -- Clinician information
+  a.clinician,
+  a.clinician_ref_id,
+  COALESCE(cl.name, a.clinician, 'Unknown Clinician') as clinician_name,
+  
+  -- Activity details
+  a.activity_id,
+  a.start_at as activity_start_date,
+  a.type as activity_type,
+  a.code as activity_code,
+  a.quantity,
+  ara.activity_net_amount,
+  
+  -- Rejection details (aggregated per activity)
+  ara.latest_denial_code as activity_denial_code,
+  COALESCE(dc.description, ara.latest_denial_code, 'No Denial Code') as denial_type,
+  ara.rejection_type,
+  ara.rejected_amount,
+  
+  -- Time-based fields
+  DATE_TRUNC('month', COALESCE(ara.latest_settlement_date, c.tx_at)) as report_month,
+  EXTRACT(YEAR FROM COALESCE(ara.latest_settlement_date, c.tx_at)) as report_year,
+  EXTRACT(MONTH FROM COALESCE(ara.latest_settlement_date, c.tx_at)) as report_month_num,
+  
+  -- Aging
+  EXTRACT(DAYS FROM (CURRENT_DATE - DATE_TRUNC('day', a.start_at))) as aging_days,
+  
+  -- Reference data
+  s.id as submission_id,
+  s.tx_at as submission_date,
+  ara.latest_remittance_claim_id as remittance_claim_id,
+  ara.latest_settlement_date as date_settlement,
+  ara.latest_payment_reference as payment_reference,
+  
+  -- Additional aggregated metrics
+  ara.remittance_count,
+  ara.total_payment_amount,
+  ara.max_payment_amount
+
+FROM claims.claim_key ck
+JOIN claims.claim c ON c.claim_key_id = ck.id
+LEFT JOIN claims.encounter e ON e.claim_id = c.id
+LEFT JOIN claims.activity a ON a.claim_id = c.id
+LEFT JOIN activity_rejection_agg ara ON ara.activity_id = a.activity_id AND ara.claim_id = c.id
+LEFT JOIN claims.submission s ON s.id = c.submission_id
+LEFT JOIN claims_ref.payer p ON p.id = c.payer_ref_id
+LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
+LEFT JOIN claims_ref.denial_code dc ON dc.code = ara.latest_denial_code
+WHERE ara.has_rejection_data = 1; -- Only include activities that have rejection data
+
+-- SUB-SECOND PERFORMANCE INDEXES
+CREATE UNIQUE INDEX IF NOT EXISTS mv_rejected_claims_summary_pk 
+ON claims.mv_rejected_claims_summary (claim_key_id, activity_id);
+
+CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_payer_idx 
+ON claims.mv_rejected_claims_summary (payer_id, report_month);
+
+CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_facility_idx 
+ON claims.mv_rejected_claims_summary (facility_id, report_month);
+
+CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_clinician_idx 
+ON claims.mv_rejected_claims_summary (clinician_ref_id, report_month);
+
+CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_denial_code_idx 
+ON claims.mv_rejected_claims_summary (activity_denial_code);
+
+CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_aging_idx 
+ON claims.mv_rejected_claims_summary (aging_days);
+
+COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_summary IS 'Pre-computed rejected claims data for sub-second report performance - FIXED: Use correct payer ID field (c.payer_id)';
+
+-- 8. Materialized View for Claim Summary Payerwise Report
+-- This MV pre-aggregates payerwise summary data for quick access
+-- FIXED: Added remittance aggregation to prevent duplicates from multiple remittances per claim
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_claim_summary_payerwise CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_claim_summary_payerwise AS
+WITH remittance_aggregated AS (
+  -- CUMULATIVE-WITH-CAP: Pre-aggregate all remittance data per claim_key_id using claim_activity_summary
+  -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+  -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
+  SELECT 
+    cas.claim_key_id,
+    MAX(cas.remittance_count) as remittance_count,                    -- max across activities
+    SUM(cas.paid_amount) as total_payment_amount,                     -- capped paid across activities
+    SUM(cas.submitted_amount) as total_remitted_amount,               -- submitted as remitted baseline
+    COUNT(CASE WHEN cas.activity_status = 'FULLY_PAID' OR cas.activity_status = 'PARTIALLY_PAID' THEN 1 END) as paid_activity_count,
+    COUNT(CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 1 END) as partially_paid_activity_count,
+    COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END) as rejected_activity_count,
+    COUNT(CASE WHEN rc.payment_reference IS NOT NULL THEN 1 END) as taken_back_count,
+    COUNT(CASE WHEN rc.date_settlement IS NULL THEN 1 END) as pending_remittance_count,
+    MIN(rc.date_settlement) as first_remittance_date,
+    MAX(rc.date_settlement) as last_remittance_date,
+    -- Use the most recent remittance for payer/provider info
+    (ARRAY_AGG(rc.id_payer ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_id_payer,
+    (ARRAY_AGG(rc.provider_id ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_provider_id
+  FROM claims.claim_activity_summary cas
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = cas.claim_key_id
+  GROUP BY cas.claim_key_id
+)
+SELECT 
+  -- Use COALESCE with a default date to ensure we always have a valid month bucket
+  DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as month_bucket,
+  EXTRACT(YEAR FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as year,
+  EXTRACT(MONTH FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as month,
+  
+  -- Payer information with fallbacks - FIXED: Use correct payer fields and make unique for NULL cases
+  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text) as payer_id,
+  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer') as payer_name,
+  
+  -- Facility information with fallbacks
+  COALESCE(e.facility_id, 'Unknown') as facility_id,
+  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_name,
+  
+  -- Claim counts and amounts
+  COUNT(*) as total_claims,
+  COUNT(CASE WHEN ra.claim_key_id IS NOT NULL THEN 1 END) as claims_with_remittances,
+  COUNT(CASE WHEN ra.claim_key_id IS NULL THEN 1 END) as claims_without_remittances,
+  
+  -- Financial metrics
+  SUM(COALESCE(c.net, 0)) as total_claim_amount,
+  SUM(COALESCE(ra.total_payment_amount, 0)) as total_paid_amount,
+  SUM(COALESCE(ra.total_remitted_amount, 0)) as total_remitted_amount,
+  
+  -- Remittance metrics
+  SUM(COALESCE(ra.remittance_count, 0)) as total_remittances,
+  SUM(COALESCE(ra.paid_activity_count, 0)) as total_paid_activities,
+  SUM(COALESCE(ra.partially_paid_activity_count, 0)) as total_partially_paid_activities,
+  SUM(COALESCE(ra.rejected_activity_count, 0)) as total_rejected_activities,
+  SUM(COALESCE(ra.taken_back_count, 0)) as total_taken_back,
+  SUM(COALESCE(ra.pending_remittance_count, 0)) as total_pending_remittances,
+  
+  -- Date ranges
+  MIN(COALESCE(ra.first_remittance_date, c.tx_at, ck.created_at)) as earliest_date,
+  MAX(COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at)) as latest_date,
+  
+  -- Additional identifiers
+  c.payer_ref_id,
+  e.facility_id as raw_facility_id,
+  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_display_name
+
+FROM claims.claim_key ck
+JOIN claims.claim c ON c.claim_key_id = ck.id
+LEFT JOIN claims.encounter e ON e.claim_id = c.id
+LEFT JOIN remittance_aggregated ra ON ra.claim_key_id = ck.id
+LEFT JOIN claims_ref.payer p ON p.id = c.payer_ref_id
+LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+
+-- REMOVED: WHERE DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at)) IS NOT NULL
+-- This was filtering out all rows where both dates were NULL
+
+GROUP BY 
+  DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
+  EXTRACT(YEAR FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
+  EXTRACT(MONTH FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
+  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text),
+  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer'),
+  COALESCE(e.facility_id, 'Unknown'),
+  COALESCE(f.name, e.facility_id, 'Unknown Facility'),
+  c.payer_ref_id,
+  e.facility_id;
+
+-- SUB-SECOND PERFORMANCE INDEXES
+CREATE UNIQUE INDEX IF NOT EXISTS mv_claim_summary_payerwise_pk 
+ON claims.mv_claim_summary_payerwise (month_bucket, payer_id, facility_id);
+
+CREATE INDEX IF NOT EXISTS mv_claim_summary_payerwise_month_idx 
+ON claims.mv_claim_summary_payerwise (month_bucket);
+
+CREATE INDEX IF NOT EXISTS mv_claim_summary_payerwise_payer_idx 
+ON claims.mv_claim_summary_payerwise (payer_id);
+
+CREATE INDEX IF NOT EXISTS mv_claim_summary_payerwise_facility_idx 
+ON claims.mv_claim_summary_payerwise (facility_id);
+
+COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_payerwise IS 'Pre-computed payerwise summary data for sub-second report performance - FIXED: Use correct payer ID fields (c.payer_id and rc.id_payer), made payer_id unique for NULL cases to prevent duplicate key violations';
+
+-- 9. Materialized View for Claim Summary Encounterwise Report
+-- This MV pre-aggregates encounterwise summary data for quick access
+-- FIXED: Added remittance aggregation to prevent duplicates from multiple remittances per claim
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_claim_summary_encounterwise CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_claim_summary_encounterwise AS
+WITH remittance_aggregated AS (
+  -- CUMULATIVE-WITH-CAP: Pre-aggregate all remittance data per claim_key_id using claim_activity_summary
+  -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+  -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
+  SELECT 
+    cas.claim_key_id,
+    MAX(cas.remittance_count) as remittance_count,                    -- max across activities
+    SUM(cas.paid_amount) as total_payment_amount,                     -- capped paid across activities
+    SUM(cas.submitted_amount) as total_remitted_amount,               -- submitted as remitted baseline
+    COUNT(CASE WHEN cas.activity_status = 'FULLY_PAID' OR cas.activity_status = 'PARTIALLY_PAID' THEN 1 END) as paid_activity_count,
+    COUNT(CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 1 END) as partially_paid_activity_count,
+    COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END) as rejected_activity_count,
+    COUNT(CASE WHEN rc.payment_reference IS NOT NULL THEN 1 END) as taken_back_count,
+    COUNT(CASE WHEN rc.date_settlement IS NULL THEN 1 END) as pending_remittance_count,
+    MIN(rc.date_settlement) as first_remittance_date,
+    MAX(rc.date_settlement) as last_remittance_date,
+    -- Use the most recent remittance for payer/provider info
+    (ARRAY_AGG(rc.id_payer ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_id_payer,
+    (ARRAY_AGG(rc.provider_id ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_provider_id
+  FROM claims.claim_activity_summary cas
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = cas.claim_key_id
+  GROUP BY cas.claim_key_id
+)
+SELECT 
+  -- Use COALESCE with a default date to ensure we always have a valid month bucket
+  DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as month_bucket,
+  EXTRACT(YEAR FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as year,
+  EXTRACT(MONTH FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as month,
+  
+  -- Encounter type information
+  COALESCE(e.type, 'Unknown') as encounter_type,
+  COALESCE(et.description, e.type, 'Unknown Encounter Type') as encounter_type_name,
+  
+  -- Facility information with fallbacks
+  COALESCE(e.facility_id, 'Unknown') as facility_id,
+  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_name,
+  
+  -- Payer information with fallbacks - FIXED: Use correct payer fields and make unique for NULL cases
+  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text) as payer_id,
+  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer') as payer_name,
+  
+  -- Claim counts and amounts
+  COUNT(*) as total_claims,
+  COUNT(CASE WHEN ra.claim_key_id IS NOT NULL THEN 1 END) as claims_with_remittances,
+  COUNT(CASE WHEN ra.claim_key_id IS NULL THEN 1 END) as claims_without_remittances,
+  
+  -- Financial metrics
+  SUM(COALESCE(c.net, 0)) as total_claim_amount,
+  SUM(COALESCE(ra.total_payment_amount, 0)) as total_paid_amount,
+  SUM(COALESCE(ra.total_remitted_amount, 0)) as total_remitted_amount,
+  
+  -- Remittance metrics
+  SUM(COALESCE(ra.remittance_count, 0)) as total_remittances,
+  SUM(COALESCE(ra.paid_activity_count, 0)) as total_paid_activities,
+  SUM(COALESCE(ra.partially_paid_activity_count, 0)) as total_partially_paid_activities,
+  SUM(COALESCE(ra.rejected_activity_count, 0)) as total_rejected_activities,
+  SUM(COALESCE(ra.taken_back_count, 0)) as total_taken_back,
+  SUM(COALESCE(ra.pending_remittance_count, 0)) as total_pending_remittances,
+  
+  -- Date ranges
+  MIN(COALESCE(ra.first_remittance_date, c.tx_at, ck.created_at)) as earliest_date,
+  MAX(COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at)) as latest_date,
+  
+  -- Additional identifiers
+  c.payer_ref_id,
+  e.facility_id as raw_facility_id,
+  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_display_name,
+  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text) as raw_payer_id,
+  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer') as payer_display_name
+
+FROM claims.claim_key ck
+JOIN claims.claim c ON c.claim_key_id = ck.id
+LEFT JOIN claims.encounter e ON e.claim_id = c.id
+LEFT JOIN remittance_aggregated ra ON ra.claim_key_id = ck.id
+LEFT JOIN claims_ref.payer p ON p.id = c.payer_ref_id
+LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+LEFT JOIN claims_ref.encounter_type et ON et.type_code = e.type
+
+-- REMOVED: WHERE DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at)) IS NOT NULL
+-- This was filtering out all rows where both dates were NULL
+
+GROUP BY 
+  DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
+  EXTRACT(YEAR FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
+  EXTRACT(MONTH FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
+  e.type,
+  COALESCE(et.description, e.type, 'Unknown Encounter Type'),
+  COALESCE(e.facility_id, 'Unknown'),
+  COALESCE(f.name, e.facility_id, 'Unknown Facility'),
+  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text),
+  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer'),
+  c.payer_ref_id,
+  e.facility_id;
+
+-- SUB-SECOND PERFORMANCE INDEXES
+CREATE UNIQUE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_pk 
+ON claims.mv_claim_summary_encounterwise (month_bucket, encounter_type, facility_id, payer_id);
+
+CREATE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_month_idx 
+ON claims.mv_claim_summary_encounterwise (month_bucket);
+
+CREATE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_type_idx 
+ON claims.mv_claim_summary_encounterwise (encounter_type);
+
+CREATE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_facility_idx 
+ON claims.mv_claim_summary_encounterwise (facility_id);
+
+COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_encounterwise IS 'Pre-computed encounterwise summary data for sub-second report performance - FIXED: Use correct payer ID fields (c.payer_id and rc.id_payer), made payer_id unique for NULL cases to prevent duplicate key violations';
+
+-- ==========================================================================================================
+-- TAB-SPECIFIC MATERIALIZED VIEWS FOR OPTION 3 IMPLEMENTATION
+-- ==========================================================================================================
+
+-- ==========================================================================================================
+-- BALANCE AMOUNT REPORT - TAB-SPECIFIC MVs
+-- ==========================================================================================================
+
+-- Tab A: Overall balances
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_balance_amount_overall CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_balance_amount_overall AS
+SELECT * FROM claims.v_balance_amount_to_be_received;
+
+-- Tab B: Initial not remitted
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_balance_amount_initial CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_balance_amount_initial AS
+SELECT * FROM claims.v_initial_not_remitted_balance;
+
+-- Tab C: After resubmission
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_balance_amount_resubmission CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_balance_amount_resubmission AS
+SELECT * FROM claims.v_after_resubmission_not_remitted_balance;
+
+-- ==========================================================================================================
+-- REMITTANCE ADVICE REPORT - TAB-SPECIFIC MVs
+-- ==========================================================================================================
+
+-- Tab A: Header summary
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittance_advice_header CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_remittance_advice_header AS
+SELECT * FROM claims.v_remittance_advice_header;
+
+-- Tab B: Claim-wise details
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittance_advice_claim_wise CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_remittance_advice_claim_wise AS
+SELECT * FROM claims.v_remittance_advice_claim_wise;
+
+-- Tab C: Activity-wise details
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittance_advice_activity_wise CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_remittance_advice_activity_wise AS
+SELECT * FROM claims.v_remittance_advice_activity_wise;
+
+-- ==========================================================================================================
+-- DOCTOR DENIAL REPORT - TAB-SPECIFIC MVs
+-- ==========================================================================================================
+
+-- Tab A: High denial doctors
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_doctor_denial_high_denial CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_doctor_denial_high_denial AS
+SELECT * FROM claims.v_doctor_denial_high_denial;
+
+-- Tab C: Detail view
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_doctor_denial_detail CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_doctor_denial_detail AS
+SELECT * FROM claims.v_doctor_denial_detail;
+
+-- ==========================================================================================================
+-- REJECTED CLAIMS REPORT - TAB-SPECIFIC MVs
+-- ==========================================================================================================
+
+-- Tab A: Summary by year
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_by_year CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_rejected_claims_by_year AS
+SELECT * FROM claims.v_rejected_claims_summary_by_year;
+
+-- Tab B: Summary view (renamed to avoid conflict with consolidated version)
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_summary_tab CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_rejected_claims_summary_tab AS
+SELECT * FROM claims.v_rejected_claims_summary;
+
+-- Tab C: Receiver/Payer view
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_receiver_payer CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_rejected_claims_receiver_payer AS
+SELECT * FROM claims.v_rejected_claims_receiver_payer;
+
+-- Tab D: Claim-wise view
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_claim_wise CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_rejected_claims_claim_wise AS
+SELECT * FROM claims.v_rejected_claims_claim_wise;
+
+-- ==========================================================================================================
+-- CLAIM SUMMARY REPORT - TAB-SPECIFIC MVs
+-- ==========================================================================================================
+
+-- Tab A: Monthwise (missing MV)
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_claim_summary_monthwise CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_claim_summary_monthwise AS
+SELECT * FROM claims.v_claim_summary_monthwise;
+
+-- ==========================================================================================================
+-- RESUBMISSION REPORT - TAB-SPECIFIC MVs
+-- ==========================================================================================================
+
+-- Tab B: Claim level (missing MV)
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittances_resubmission_claim_level CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_remittances_resubmission_claim_level AS
+SELECT * FROM claims.v_remittances_resubmission_claim_level;
+
+-- ==========================================================================================================
+-- TAB-SPECIFIC MV INDEXES
+-- ==========================================================================================================
+
+-- Balance Amount MVs
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_balance_amount_overall_unique 
+ON claims.mv_balance_amount_overall(claim_key_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_balance_amount_initial_unique 
+ON claims.mv_balance_amount_initial(claim_key_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_balance_amount_resubmission_unique 
+ON claims.mv_balance_amount_resubmission(claim_key_id);
+
+-- Remittance Advice MVs
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittance_advice_header_unique 
+ON claims.mv_remittance_advice_header(claim_key_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittance_advice_claim_wise_unique 
+ON claims.mv_remittance_advice_claim_wise(claim_key_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittance_advice_activity_wise_unique 
+ON claims.mv_remittance_advice_activity_wise(claim_key_id, activity_id);
+
+-- Doctor Denial MVs
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_doctor_denial_high_denial_unique 
+ON claims.mv_doctor_denial_high_denial(clinician_id, facility_id, report_month);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_doctor_denial_detail_unique 
+ON claims.mv_doctor_denial_detail(claim_key_id, activity_id);
+
+-- Rejected Claims MVs
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_by_year_unique 
+ON claims.mv_rejected_claims_by_year(claim_year, facility_id, payer_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_summary_tab_unique 
+ON claims.mv_rejected_claims_summary_tab(facility_id, payer_id, report_month);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_receiver_payer_unique 
+ON claims.mv_rejected_claims_receiver_payer(facility_id, payer_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_claim_wise_unique 
+ON claims.mv_rejected_claims_claim_wise(claim_key_id, activity_id);
+
+-- Claim Summary MVs
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_claim_summary_monthwise_unique 
+ON claims.mv_claim_summary_monthwise(month_bucket, facility_id, payer_id, encounter_type);
+
+-- Resubmission MVs
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittances_resubmission_claim_level_unique 
+ON claims.mv_remittances_resubmission_claim_level(claim_key_id);
+
+-- ==========================================================================================================
+-- TAB-SPECIFIC MV COMMENTS
+-- ==========================================================================================================
+
+COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_overall IS 'Tab A: Overall balances - matches v_balance_amount_to_be_received';
+COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_initial IS 'Tab B: Initial not remitted - matches v_initial_not_remitted_balance';
+COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_resubmission IS 'Tab C: After resubmission - matches v_after_resubmission_not_remitted_balance';
+
+COMMENT ON MATERIALIZED VIEW claims.mv_remittance_advice_header IS 'Tab A: Header summary - matches v_remittance_advice_header';
+COMMENT ON MATERIALIZED VIEW claims.mv_remittance_advice_claim_wise IS 'Tab B: Claim-wise details - matches v_remittance_advice_claim_wise';
+COMMENT ON MATERIALIZED VIEW claims.mv_remittance_advice_activity_wise IS 'Tab C: Activity-wise details - matches v_remittance_advice_activity_wise';
+
+COMMENT ON MATERIALIZED VIEW claims.mv_doctor_denial_high_denial IS 'Tab A: High denial doctors - matches v_doctor_denial_high_denial';
+COMMENT ON MATERIALIZED VIEW claims.mv_doctor_denial_detail IS 'Tab C: Detail view - matches v_doctor_denial_detail';
+
+COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_by_year IS 'Tab A: Summary by year - matches v_rejected_claims_summary_by_year';
+COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_summary_tab IS 'Tab B: Summary view - matches v_rejected_claims_summary';
+COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_receiver_payer IS 'Tab C: Receiver/Payer view - matches v_rejected_claims_receiver_payer';
+COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_claim_wise IS 'Tab D: Claim-wise view - matches v_rejected_claims_claim_wise';
+
+COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_monthwise IS 'Tab A: Monthwise - matches v_claim_summary_monthwise';
+
+COMMENT ON MATERIALIZED VIEW claims.mv_remittances_resubmission_claim_level IS 'Tab B: Claim level - matches v_remittances_resubmission_claim_level';
+
+-- ==========================================================================================================
+-- ADDITIONAL PERFORMANCE INDEXES (from docker file)
+-- ==========================================================================================================
+
+-- SUB-SECOND PERFORMANCE INDEXES
+CREATE UNIQUE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_pk 
+ON claims.mv_claim_summary_encounterwise (month_bucket, encounter_type, facility_id, payer_id);
+
+CREATE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_month_idx 
+ON claims.mv_claim_summary_encounterwise (month_bucket);
+
+CREATE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_type_idx 
+ON claims.mv_claim_summary_encounterwise (encounter_type);
+
+CREATE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_facility_idx 
+ON claims.mv_claim_summary_encounterwise (facility_id);
+
+COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_encounterwise IS 'Pre-computed encounterwise summary data for sub-second report performance - FIXED: Use correct payer ID fields (c.payer_id and rc.id_payer), made payer_id unique for NULL cases to prevent duplicate key violations';
 
 -- ==========================================================================================================
 -- SECTION 7: REFRESH FUNCTIONS
@@ -964,363 +1683,6 @@ COMMENT ON FUNCTION monitor_mv_performance() IS 'Monitors materialized view perf
 -- - Index overhead: 20-30% additional storage
 -- - Refresh time: 5-15 minutes for full refresh
 --
--- ==========================================================================================================
--- SECTION 8: ADDITIONAL MATERIALIZED VIEWS FOR COMPLETE SUB-SECOND PERFORMANCE
--- ==========================================================================================================
-
--- 7. Materialized View for Rejected Claims Report Summary
--- This MV pre-aggregates rejected claims data for sub-second performance
--- FIXED: Added activity-level rejection aggregation to prevent duplicates from multiple remittances per activity
-DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_summary CASCADE;
-CREATE MATERIALIZED VIEW claims.mv_rejected_claims_summary AS
-WITH activity_rejection_agg AS (
-  -- Pre-aggregate rejection data per activity to prevent duplicates
-  -- DO NOT filter here - let the main query handle filtering
-  SELECT 
-    a.activity_id,
-    a.claim_id,
-    a.net as activity_net_amount,
-    -- Get latest rejection status for this activity
-    MAX(ra.denial_code) as latest_denial_code,
-    MAX(rc.date_settlement) as latest_settlement_date,
-    MAX(rc.payment_reference) as latest_payment_reference,
-    MAX(rc.id) as latest_remittance_claim_id,
-    -- Calculate rejection amount and type
-    CASE 
-      WHEN MAX(ra.payment_amount) = 0 AND MAX(ra.denial_code) IS NOT NULL THEN a.net
-      WHEN MAX(ra.payment_amount) > 0 AND MAX(ra.payment_amount) < a.net THEN a.net - MAX(ra.payment_amount)
-      ELSE 0
-    END as rejected_amount,
-    -- Determine rejection type
-    CASE 
-      WHEN MAX(ra.payment_amount) = 0 AND MAX(ra.denial_code) IS NOT NULL THEN 'Fully Rejected'
-      WHEN MAX(ra.payment_amount) > 0 AND MAX(ra.payment_amount) < a.net THEN 'Partially Rejected'
-      WHEN MAX(ra.payment_amount) = 0 AND MAX(ra.denial_code) IS NULL THEN 'No Payment'
-      ELSE 'Unknown'
-    END as rejection_type,
-    -- Additional metrics
-    COALESCE(COUNT(DISTINCT rc.id), 0) as remittance_count,
-    COALESCE(SUM(ra.payment_amount), 0) as total_payment_amount,
-    COALESCE(MAX(ra.payment_amount), 0) as max_payment_amount,
-    -- Flag to indicate if this activity has rejection data
-    CASE 
-      WHEN MAX(ra.payment_amount) = 0 OR MAX(ra.denial_code) IS NOT NULL OR MAX(ra.payment_amount) < a.net 
-      THEN 1 
-      ELSE 0 
-    END as has_rejection_data
-  FROM claims.activity a
-  LEFT JOIN claims.claim c ON c.id = a.claim_id
-  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = c.claim_key_id
-  LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id 
-    AND ra.activity_id = a.activity_id
-  GROUP BY a.activity_id, a.claim_id, a.net
-)
-SELECT 
-  -- Core identifiers
-  ck.id as claim_key_id,
-  ck.claim_id,
-  c.id as claim_internal_id,
-  
-  -- Payer information - FIXED: Use correct payer field
-  c.payer_id as payer_id,
-  COALESCE(p.name, c.payer_id, 'Unknown Payer') as payer_name,
-  c.payer_ref_id,
-  
-  -- Patient information
-  c.member_id,
-  c.emirates_id_number,
-  
-  -- Facility information
-  e.facility_id,
-  e.facility_ref_id,
-  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_name,
-  
-  -- Clinician information
-  a.clinician,
-  a.clinician_ref_id,
-  COALESCE(cl.name, a.clinician, 'Unknown Clinician') as clinician_name,
-  
-  -- Activity details
-  a.activity_id,
-  a.start_at as activity_start_date,
-  a.type as activity_type,
-  a.code as activity_code,
-  a.quantity,
-  ara.activity_net_amount,
-  
-  -- Rejection details (aggregated per activity)
-  ara.latest_denial_code as activity_denial_code,
-  COALESCE(dc.description, ara.latest_denial_code, 'No Denial Code') as denial_type,
-  ara.rejection_type,
-  ara.rejected_amount,
-  
-  -- Time-based fields
-  DATE_TRUNC('month', COALESCE(ara.latest_settlement_date, c.tx_at)) as report_month,
-  EXTRACT(YEAR FROM COALESCE(ara.latest_settlement_date, c.tx_at)) as report_year,
-  EXTRACT(MONTH FROM COALESCE(ara.latest_settlement_date, c.tx_at)) as report_month_num,
-  
-  -- Aging
-  EXTRACT(DAYS FROM (CURRENT_DATE - DATE_TRUNC('day', a.start_at))) as aging_days,
-  
-  -- Reference data
-  s.id as submission_id,
-  s.tx_at as submission_date,
-  ara.latest_remittance_claim_id as remittance_claim_id,
-  ara.latest_settlement_date as date_settlement,
-  ara.latest_payment_reference as payment_reference,
-  
-  -- Additional aggregated metrics
-  ara.remittance_count,
-  ara.total_payment_amount,
-  ara.max_payment_amount
-
-FROM claims.claim_key ck
-JOIN claims.claim c ON c.claim_key_id = ck.id
-LEFT JOIN claims.encounter e ON e.claim_id = c.id
-LEFT JOIN claims.activity a ON a.claim_id = c.id
-LEFT JOIN activity_rejection_agg ara ON ara.activity_id = a.activity_id AND ara.claim_id = c.id
-LEFT JOIN claims.submission s ON s.id = c.submission_id
-LEFT JOIN claims_ref.payer p ON p.id = c.payer_ref_id
-LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
-LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
-LEFT JOIN claims_ref.denial_code dc ON dc.code = ara.latest_denial_code
-WHERE ara.has_rejection_data = 1; -- Only include activities that have rejection data
-
--- SUB-SECOND PERFORMANCE INDEXES
-CREATE UNIQUE INDEX IF NOT EXISTS mv_rejected_claims_summary_pk 
-ON claims.mv_rejected_claims_summary (claim_key_id, activity_id);
-
-CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_payer_idx 
-ON claims.mv_rejected_claims_summary (payer_id, report_month);
-
-CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_facility_idx 
-ON claims.mv_rejected_claims_summary (facility_id, report_month);
-
-CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_clinician_idx 
-ON claims.mv_rejected_claims_summary (clinician_ref_id, report_month);
-
-CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_denial_code_idx 
-ON claims.mv_rejected_claims_summary (activity_denial_code);
-
-CREATE INDEX IF NOT EXISTS mv_rejected_claims_summary_aging_idx 
-ON claims.mv_rejected_claims_summary (aging_days);
-
-COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_summary IS 'Pre-computed rejected claims data for sub-second report performance - FIXED: Use correct payer ID field (c.payer_id)';
-
--- 8. Materialized View for Claim Summary Payerwise Report
--- This MV pre-aggregates payerwise summary data for quick access
--- FIXED: Added remittance aggregation to prevent duplicates from multiple remittances per claim
-DROP MATERIALIZED VIEW IF EXISTS claims.mv_claim_summary_payerwise CASCADE;
-CREATE MATERIALIZED VIEW claims.mv_claim_summary_payerwise AS
-WITH remittance_aggregated AS (
-  -- Pre-aggregate all remittance data per claim_key_id to prevent duplicates
-  SELECT 
-    rc.claim_key_id,
-    COUNT(*) as remittance_count,
-    SUM(ra.payment_amount) as total_payment_amount,
-    SUM(ra.net) as total_remitted_amount,
-    COUNT(CASE WHEN ra.payment_amount > 0 THEN 1 END) as paid_activity_count,
-    COUNT(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN 1 END) as partially_paid_activity_count,
-    COUNT(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN 1 END) as rejected_activity_count,
-    COUNT(CASE WHEN rc.payment_reference IS NOT NULL THEN 1 END) as taken_back_count,
-    COUNT(CASE WHEN rc.date_settlement IS NULL THEN 1 END) as pending_remittance_count,
-    MIN(rc.date_settlement) as first_remittance_date,
-    MAX(rc.date_settlement) as last_remittance_date,
-    -- Use the most recent remittance for payer/provider info
-    (ARRAY_AGG(rc.id_payer ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_id_payer,
-    (ARRAY_AGG(rc.provider_id ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_provider_id
-  FROM claims.remittance_claim rc
-  LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-  GROUP BY rc.claim_key_id
-)
-SELECT 
-  -- Use COALESCE with a default date to ensure we always have a valid month bucket
-  DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as month_bucket,
-  EXTRACT(YEAR FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as year,
-  EXTRACT(MONTH FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as month,
-  
-  -- Payer information with fallbacks - FIXED: Use correct payer fields and make unique for NULL cases
-  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text) as payer_id,
-  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer') as payer_name,
-  
-  -- Facility information with fallbacks
-  COALESCE(e.facility_id, 'Unknown') as facility_id,
-  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_name,
-  
-  -- Claim counts and amounts
-  COUNT(*) as total_claims,
-  COUNT(CASE WHEN ra.claim_key_id IS NOT NULL THEN 1 END) as claims_with_remittances,
-  COUNT(CASE WHEN ra.claim_key_id IS NULL THEN 1 END) as claims_without_remittances,
-  
-  -- Financial metrics
-  SUM(COALESCE(c.net, 0)) as total_claim_amount,
-  SUM(COALESCE(ra.total_payment_amount, 0)) as total_paid_amount,
-  SUM(COALESCE(ra.total_remitted_amount, 0)) as total_remitted_amount,
-  
-  -- Remittance metrics
-  SUM(COALESCE(ra.remittance_count, 0)) as total_remittances,
-  SUM(COALESCE(ra.paid_activity_count, 0)) as total_paid_activities,
-  SUM(COALESCE(ra.partially_paid_activity_count, 0)) as total_partially_paid_activities,
-  SUM(COALESCE(ra.rejected_activity_count, 0)) as total_rejected_activities,
-  SUM(COALESCE(ra.taken_back_count, 0)) as total_taken_back,
-  SUM(COALESCE(ra.pending_remittance_count, 0)) as total_pending_remittances,
-  
-  -- Date ranges
-  MIN(COALESCE(ra.first_remittance_date, c.tx_at, ck.created_at)) as earliest_date,
-  MAX(COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at)) as latest_date,
-  
-  -- Additional identifiers
-  c.payer_ref_id,
-  e.facility_id as raw_facility_id,
-  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_display_name
-
-FROM claims.claim_key ck
-JOIN claims.claim c ON c.claim_key_id = ck.id
-LEFT JOIN claims.encounter e ON e.claim_id = c.id
-LEFT JOIN remittance_aggregated ra ON ra.claim_key_id = ck.id
-LEFT JOIN claims_ref.payer p ON p.id = c.payer_ref_id
-LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
-
--- REMOVED: WHERE DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at)) IS NOT NULL
--- This was filtering out all rows where both dates were NULL
-
-GROUP BY 
-  DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
-  EXTRACT(YEAR FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
-  EXTRACT(MONTH FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
-  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text),
-  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer'),
-  COALESCE(e.facility_id, 'Unknown'),
-  COALESCE(f.name, e.facility_id, 'Unknown Facility'),
-  c.payer_ref_id,
-  e.facility_id;
-
--- SUB-SECOND PERFORMANCE INDEXES
-CREATE UNIQUE INDEX IF NOT EXISTS mv_claim_summary_payerwise_pk 
-ON claims.mv_claim_summary_payerwise (month_bucket, payer_id, facility_id);
-
-CREATE INDEX IF NOT EXISTS mv_claim_summary_payerwise_month_idx 
-ON claims.mv_claim_summary_payerwise (month_bucket);
-
-CREATE INDEX IF NOT EXISTS mv_claim_summary_payerwise_payer_idx 
-ON claims.mv_claim_summary_payerwise (payer_id);
-
-CREATE INDEX IF NOT EXISTS mv_claim_summary_payerwise_facility_idx 
-ON claims.mv_claim_summary_payerwise (facility_id);
-
-COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_payerwise IS 'Pre-computed payerwise summary data for sub-second report performance - FIXED: Use correct payer ID fields (c.payer_id and rc.id_payer), made payer_id unique for NULL cases to prevent duplicate key violations';
-
--- 9. Materialized View for Claim Summary Encounterwise Report
--- This MV pre-aggregates encounterwise summary data for quick access
--- FIXED: Added remittance aggregation to prevent duplicates from multiple remittances per claim
-DROP MATERIALIZED VIEW IF EXISTS claims.mv_claim_summary_encounterwise CASCADE;
-CREATE MATERIALIZED VIEW claims.mv_claim_summary_encounterwise AS
-WITH remittance_aggregated AS (
-  -- Pre-aggregate all remittance data per claim_key_id to prevent duplicates
-  SELECT 
-    rc.claim_key_id,
-    COUNT(*) as remittance_count,
-    SUM(ra.payment_amount) as total_payment_amount,
-    SUM(ra.net) as total_remitted_amount,
-    COUNT(CASE WHEN ra.payment_amount > 0 THEN 1 END) as paid_activity_count,
-    COUNT(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < ra.net THEN 1 END) as partially_paid_activity_count,
-    COUNT(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN 1 END) as rejected_activity_count,
-    COUNT(CASE WHEN rc.payment_reference IS NOT NULL THEN 1 END) as taken_back_count,
-    COUNT(CASE WHEN rc.date_settlement IS NULL THEN 1 END) as pending_remittance_count,
-    MIN(rc.date_settlement) as first_remittance_date,
-    MAX(rc.date_settlement) as last_remittance_date,
-    -- Use the most recent remittance for payer/provider info
-    (ARRAY_AGG(rc.id_payer ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_id_payer,
-    (ARRAY_AGG(rc.provider_id ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_provider_id
-  FROM claims.remittance_claim rc
-  LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-  GROUP BY rc.claim_key_id
-)
-SELECT 
-  -- Use COALESCE with a default date to ensure we always have a valid month bucket
-  DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as month_bucket,
-  EXTRACT(YEAR FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as year,
-  EXTRACT(MONTH FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)) as month,
-  
-  -- Encounter type information
-  COALESCE(e.type, 'Unknown') as encounter_type,
-  COALESCE(et.name, e.type, 'Unknown Encounter Type') as encounter_type_name,
-  
-  -- Facility information with fallbacks
-  COALESCE(e.facility_id, 'Unknown') as facility_id,
-  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_name,
-  
-  -- Payer information with fallbacks - FIXED: Use correct payer fields and make unique for NULL cases
-  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text) as payer_id,
-  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer') as payer_name,
-  
-  -- Claim counts and amounts
-  COUNT(*) as total_claims,
-  COUNT(CASE WHEN ra.claim_key_id IS NOT NULL THEN 1 END) as claims_with_remittances,
-  COUNT(CASE WHEN ra.claim_key_id IS NULL THEN 1 END) as claims_without_remittances,
-  
-  -- Financial metrics
-  SUM(COALESCE(c.net, 0)) as total_claim_amount,
-  SUM(COALESCE(ra.total_payment_amount, 0)) as total_paid_amount,
-  SUM(COALESCE(ra.total_remitted_amount, 0)) as total_remitted_amount,
-  
-  -- Remittance metrics
-  SUM(COALESCE(ra.remittance_count, 0)) as total_remittances,
-  SUM(COALESCE(ra.paid_activity_count, 0)) as total_paid_activities,
-  SUM(COALESCE(ra.partially_paid_activity_count, 0)) as total_partially_paid_activities,
-  SUM(COALESCE(ra.rejected_activity_count, 0)) as total_rejected_activities,
-  SUM(COALESCE(ra.taken_back_count, 0)) as total_taken_back,
-  SUM(COALESCE(ra.pending_remittance_count, 0)) as total_pending_remittances,
-  
-  -- Date ranges
-  MIN(COALESCE(ra.first_remittance_date, c.tx_at, ck.created_at)) as earliest_date,
-  MAX(COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at)) as latest_date,
-  
-  -- Additional identifiers
-  c.payer_ref_id,
-  e.facility_id as raw_facility_id,
-  COALESCE(f.name, e.facility_id, 'Unknown Facility') as facility_display_name,
-  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text) as raw_payer_id,
-  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer') as payer_display_name
-
-FROM claims.claim_key ck
-JOIN claims.claim c ON c.claim_key_id = ck.id
-LEFT JOIN claims.encounter e ON e.claim_id = c.id
-LEFT JOIN remittance_aggregated ra ON ra.claim_key_id = ck.id
-LEFT JOIN claims_ref.payer p ON p.id = c.payer_ref_id
-LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
-LEFT JOIN claims_ref.encounter_type et ON et.type_code = e.type
-
--- REMOVED: WHERE DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at)) IS NOT NULL
--- This was filtering out all rows where both dates were NULL
-
-GROUP BY 
-  DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
-  EXTRACT(YEAR FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
-  EXTRACT(MONTH FROM COALESCE(ra.last_remittance_date, c.tx_at, ck.created_at, CURRENT_DATE)),
-  e.type,
-  COALESCE(et.name, e.type, 'Unknown Encounter Type'),
-  COALESCE(e.facility_id, 'Unknown'),
-  COALESCE(f.name, e.facility_id, 'Unknown Facility'),
-  COALESCE(ra.latest_id_payer, c.payer_id, 'Unknown_' || ck.id::text),
-  COALESCE(p.name, ra.latest_id_payer, c.payer_id, 'Unknown Payer'),
-  c.payer_ref_id,
-  e.facility_id;
-
--- SUB-SECOND PERFORMANCE INDEXES
-CREATE UNIQUE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_pk 
-ON claims.mv_claim_summary_encounterwise (month_bucket, encounter_type, facility_id, payer_id);
-
-CREATE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_month_idx 
-ON claims.mv_claim_summary_encounterwise (month_bucket);
-
-CREATE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_type_idx 
-ON claims.mv_claim_summary_encounterwise (encounter_type);
-
-CREATE INDEX IF NOT EXISTS mv_claim_summary_encounterwise_facility_idx 
-ON claims.mv_claim_summary_encounterwise (facility_id);
-
-COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_encounterwise IS 'Pre-computed encounterwise summary data for sub-second report performance - FIXED: Use correct payer ID fields (c.payer_id and rc.id_payer), made payer_id unique for NULL cases to prevent duplicate key violations';
 
 -- ==========================================================================================================
 -- INITIAL DATA POPULATION - CALL AFTER ALL MVs ARE CREATED

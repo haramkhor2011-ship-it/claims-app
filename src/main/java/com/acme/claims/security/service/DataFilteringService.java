@@ -274,7 +274,7 @@ public class DataFilteringService {
         
         try {
             UserContext userContext = userContextService.getCurrentUserContext();
-            Set<String> reports = userContext.getReportTypeNames();
+            Set<String> reports = userContext.getReportCodes();
             
             log.debug("User accessible reports - User: {} (ID: {}), Reports: {}", 
                     userContext.getUsername(), userContext.getUserId(), reports);
@@ -301,7 +301,7 @@ public class DataFilteringService {
                     "MultiTenancy: {}, IsSuperAdmin: {}, Facilities: {}, Reports: {}", 
                     operation, userContext.getUsername(), userContext.getUserId(),
                     isMultiTenancyEnabled(), userContext.isSuperAdmin(),
-                    userContext.getFacilities(), userContext.getReportTypeNames());
+                    userContext.getFacilities(), userContext.getReportCodes());
             
         } catch (Exception e) {
             log.warn("Could not log filtering status for operation '{}': {}", operation, e.getMessage());

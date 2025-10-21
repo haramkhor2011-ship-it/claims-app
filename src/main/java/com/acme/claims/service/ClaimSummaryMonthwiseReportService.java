@@ -1,5 +1,7 @@
 package com.acme.claims.service;
 
+import com.acme.claims.controller.dto.ClaimDetailsResponse;
+import com.acme.claims.soap.db.ToggleRepo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +33,7 @@ import java.util.*;
 public class ClaimSummaryMonthwiseReportService {
 
     private final DataSource dataSource;
+    private final ToggleRepo toggleRepo;
 
     /**
      * Get Monthwise Tab data for Claim Summary Monthwise report (Tab A)
@@ -506,28 +509,37 @@ public class ClaimSummaryMonthwiseReportService {
             String facilityCode,
             String payerCode,
             String receiverCode,
-            String encounterType) {
+            String encounterType    ) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Claim Summary Report - useMv: {}", useMv);
 
         String sql = """
             SELECT * FROM claims.get_claim_summary_monthwise_params(
-                ?::timestamptz,
-                ?::timestamptz,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text
+                p_use_mv := ?,
+                p_tab_name := 'monthwise',
+                p_from_date := ?::timestamptz,
+                p_to_date := ?::timestamptz,
+                p_facility_code := ?::text,
+                p_payer_code := ?::text,
+                p_receiver_code := ?::text,
+                p_encounter_type := ?::text
             )
             """;
 
         try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
-            stmt.setObject(1, fromDate);
-            stmt.setObject(2, toDate);
-            stmt.setString(3, facilityCode);
-            stmt.setString(4, payerCode);
-            stmt.setString(5, receiverCode);
-            stmt.setString(6, encounterType);
+            // OPTION 3: Set useMv and tabName parameters first
+            stmt.setBoolean(1, useMv);
+            stmt.setString(2, "monthwise"); // p_tab_name
+            stmt.setObject(3, fromDate);
+            stmt.setObject(4, toDate);
+            stmt.setString(5, facilityCode);
+            stmt.setString(6, payerCode);
+            stmt.setString(7, receiverCode);
+            stmt.setString(8, encounterType);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
@@ -684,46 +696,93 @@ public class ClaimSummaryMonthwiseReportService {
     /**
      * Get comprehensive claim details by claim ID for UI rendering
      * This API returns all information related to a specific claim in a structured format
+     * 
+     * @param claimId The claim ID to retrieve details for
+     * @return ClaimDetailsResponse containing all claim information
+     * @throws IllegalArgumentException if claimId is null or empty
+     * @throws RuntimeException if claim is not found or database error occurs
      */
-    public Map<String, Object> getClaimDetailsById(String claimId) {
-        Map<String, Object> claimDetails = new HashMap<>();
-
-        try (Connection conn = dataSource.getConnection()) {
-            // 1. Get basic claim information
-            claimDetails.put("claimInfo", getClaimBasicInfo(conn, claimId));
-
-            // 2. Get encounter information
-            claimDetails.put("encounterInfo", getClaimEncounterInfo(conn, claimId));
-
-            // 3. Get diagnosis information
-            claimDetails.put("diagnosisInfo", getClaimDiagnosisInfo(conn, claimId));
-
-            // 4. Get activities information
-            claimDetails.put("activitiesInfo", getClaimActivitiesInfo(conn, claimId));
-
-            // 5. Get remittance information
-            claimDetails.put("remittanceInfo", getClaimRemittanceInfo(conn, claimId));
-
-            // 6. Get claim events/timeline
-            claimDetails.put("claimTimeline", getClaimTimeline(conn, claimId));
-
-            // 7. Get attachments
-            claimDetails.put("attachments", getClaimAttachments(conn, claimId));
-
-            // 8. Get transaction types (claim lifecycle)
-            claimDetails.put("transactionTypes", getClaimTransactionTypes(conn, claimId));
-
-            log.info("Retrieved comprehensive claim details for claim ID: {}", claimId);
-
-        } catch (SQLException e) {
-            log.error("Error retrieving claim details for claim ID: {}", claimId, e);
-            throw new RuntimeException("Failed to retrieve claim details", e);
+    public ClaimDetailsResponse getClaimDetailsById(String claimId) {
+        if (claimId == null || claimId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Claim ID cannot be null or empty");
         }
 
-        return claimDetails;
+        long startTime = System.currentTimeMillis();
+        
+        try (Connection conn = dataSource.getConnection()) {
+            // 1. Get basic claim information
+            ClaimDetailsResponse.ClaimBasicInfo claimInfo = getClaimBasicInfo(conn, claimId);
+            if (claimInfo == null) {
+                log.warn("Claim not found: {}", claimId);
+                throw new RuntimeException("Claim not found: " + claimId);
+            }
+
+            // 2. Get encounter information
+            ClaimDetailsResponse.EncounterInfo encounterInfo = getClaimEncounterInfo(conn, claimId);
+
+            // 3. Get diagnosis information
+            List<ClaimDetailsResponse.DiagnosisInfo> diagnosisInfo = getClaimDiagnosisInfo(conn, claimId);
+
+            // 4. Get activities information
+            List<ClaimDetailsResponse.ActivityInfo> activitiesInfo = getClaimActivitiesInfo(conn, claimId);
+
+            // 5. Get remittance information
+            ClaimDetailsResponse.RemittanceInfo remittanceInfo = getClaimRemittanceInfo(conn, claimId);
+
+            // 6. Get claim events/timeline
+            List<ClaimDetailsResponse.ClaimTimelineEvent> claimTimeline = getClaimTimeline(conn, claimId);
+
+            // 7. Get attachments
+            List<ClaimDetailsResponse.AttachmentInfo> attachments = getClaimAttachments(conn, claimId);
+
+            // 8. Get transaction types (claim lifecycle)
+            List<ClaimDetailsResponse.TransactionType> transactionTypes = getClaimTransactionTypes(conn, claimId);
+
+            long executionTime = System.currentTimeMillis() - startTime;
+
+            // Build response with metadata
+            ClaimDetailsResponse.ClaimDetailsMetadata metadata = ClaimDetailsResponse.ClaimDetailsMetadata.builder()
+                    .timestamp(LocalDateTime.now())
+                    .executionTimeMs(executionTime)
+                    .additionalMetadata(Map.of(
+                            "dataRetrievalTime", executionTime + "ms",
+                            "sectionsRetrieved", 8,
+                            "hasEncounterInfo", encounterInfo != null,
+                            "hasRemittanceInfo", remittanceInfo != null,
+                            "diagnosisCount", diagnosisInfo.size(),
+                            "activitiesCount", activitiesInfo.size(),
+                            "timelineEventsCount", claimTimeline.size(),
+                            "attachmentsCount", attachments.size(),
+                            "transactionTypesCount", transactionTypes.size()
+                    ))
+                    .build();
+
+            ClaimDetailsResponse response = ClaimDetailsResponse.builder()
+                    .claimId(claimId)
+                    .claimInfo(claimInfo)
+                    .encounterInfo(encounterInfo)
+                    .diagnosisInfo(diagnosisInfo)
+                    .activitiesInfo(activitiesInfo)
+                    .remittanceInfo(remittanceInfo)
+                    .claimTimeline(claimTimeline)
+                    .attachments(attachments)
+                    .transactionTypes(transactionTypes)
+                    .metadata(metadata)
+                    .build();
+
+            log.info("Retrieved comprehensive claim details for claim ID: {} in {}ms", claimId, executionTime);
+            return response;
+
+        } catch (SQLException e) {
+            log.error("Database error retrieving claim details for claim ID: {}", claimId, e);
+            throw new RuntimeException("Failed to retrieve claim details due to database error", e);
+        } catch (Exception e) {
+            log.error("Unexpected error retrieving claim details for claim ID: {}", claimId, e);
+            throw new RuntimeException("Failed to retrieve claim details", e);
+        }
     }
 
-    private Map<String, Object> getClaimBasicInfo(Connection conn, String claimId) throws SQLException {
+    private ClaimDetailsResponse.ClaimBasicInfo getClaimBasicInfo(Connection conn, String claimId) throws SQLException {
         String sql = """
             SELECT
                 ck.claim_id,
@@ -755,32 +814,33 @@ public class ClaimSummaryMonthwiseReportService {
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
-                    Map<String, Object> claimInfo = new LinkedHashMap<>();
-                    claimInfo.put("claimId", rs.getString("claim_id"));
-                    claimInfo.put("claimDbId", rs.getLong("claim_db_id"));
-                    claimInfo.put("payerId", rs.getString("payer_id"));
-                    claimInfo.put("providerId", rs.getString("provider_id"));
-                    claimInfo.put("memberId", rs.getString("member_id"));
-                    claimInfo.put("emiratesIdNumber", rs.getString("emirates_id_number"));
-                    claimInfo.put("grossAmount", rs.getBigDecimal("gross"));
-                    claimInfo.put("patientShare", rs.getBigDecimal("patient_share"));
-                    claimInfo.put("netAmount", rs.getBigDecimal("net"));
-                    claimInfo.put("comments", rs.getString("comments"));
-                    claimInfo.put("submissionDate", rs.getTimestamp("submission_date"));
-                    claimInfo.put("submissionId", rs.getLong("submission_id"));
-                    claimInfo.put("providerName", rs.getString("provider_name"));
-                    claimInfo.put("providerCode", rs.getString("provider_code"));
-                    claimInfo.put("payerName", rs.getString("payer_name"));
-                    claimInfo.put("payerCode", rs.getString("payer_code"));
-                    return claimInfo;
+                    return ClaimDetailsResponse.ClaimBasicInfo.builder()
+                            .claimId(rs.getString("claim_id"))
+                            .claimDbId(rs.getLong("claim_db_id"))
+                            .payerId(rs.getString("payer_id"))
+                            .providerId(rs.getString("provider_id"))
+                            .memberId(rs.getString("member_id"))
+                            .emiratesIdNumber(rs.getString("emirates_id_number"))
+                            .grossAmount(rs.getBigDecimal("gross"))
+                            .patientShare(rs.getBigDecimal("patient_share"))
+                            .netAmount(rs.getBigDecimal("net"))
+                            .comments(rs.getString("comments"))
+                            .submissionDate(rs.getTimestamp("submission_date") != null ? 
+                                    rs.getTimestamp("submission_date").toLocalDateTime() : null)
+                            .submissionId(rs.getLong("submission_id"))
+                            .providerName(rs.getString("provider_name"))
+                            .providerCode(rs.getString("provider_code"))
+                            .payerName(rs.getString("payer_name"))
+                            .payerCode(rs.getString("payer_code"))
+                            .build();
                 }
             }
         }
 
-        return new HashMap<>();
+        return null;
     }
 
-    private Map<String, Object> getClaimEncounterInfo(Connection conn, String claimId) throws SQLException {
+    private ClaimDetailsResponse.EncounterInfo getClaimEncounterInfo(Connection conn, String claimId) throws SQLException {
         String sql = """
             SELECT
                 e.id,
@@ -807,28 +867,30 @@ public class ClaimSummaryMonthwiseReportService {
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
-                    Map<String, Object> encounterInfo = new LinkedHashMap<>();
-                    encounterInfo.put("encounterId", rs.getLong("id"));
-                    encounterInfo.put("facilityId", rs.getString("facility_id"));
-                    encounterInfo.put("encounterType", rs.getString("encounter_type"));
-                    encounterInfo.put("patientId", rs.getString("patient_id"));
-                    encounterInfo.put("startDate", rs.getTimestamp("start_at"));
-                    encounterInfo.put("endDate", rs.getTimestamp("end_at"));
-                    encounterInfo.put("startType", rs.getString("start_type"));
-                    encounterInfo.put("endType", rs.getString("end_type"));
-                    encounterInfo.put("transferSource", rs.getString("transfer_source"));
-                    encounterInfo.put("transferDestination", rs.getString("transfer_destination"));
-                    encounterInfo.put("facilityName", rs.getString("facility_name"));
-                    encounterInfo.put("facilityCode", rs.getString("facility_code"));
-                    return encounterInfo;
+                    return ClaimDetailsResponse.EncounterInfo.builder()
+                            .encounterId(rs.getLong("id"))
+                            .facilityId(rs.getString("facility_id"))
+                            .encounterType(rs.getString("encounter_type"))
+                            .patientId(rs.getString("patient_id"))
+                            .startDate(rs.getTimestamp("start_at") != null ? 
+                                    rs.getTimestamp("start_at").toLocalDateTime() : null)
+                            .endDate(rs.getTimestamp("end_at") != null ? 
+                                    rs.getTimestamp("end_at").toLocalDateTime() : null)
+                            .startType(rs.getString("start_type"))
+                            .endType(rs.getString("end_type"))
+                            .transferSource(rs.getString("transfer_source"))
+                            .transferDestination(rs.getString("transfer_destination"))
+                            .facilityName(rs.getString("facility_name"))
+                            .facilityCode(rs.getString("facility_code"))
+                            .build();
                 }
             }
         }
 
-        return new HashMap<>();
+        return null;
     }
 
-    private List<Map<String, Object>> getClaimDiagnosisInfo(Connection conn, String claimId) throws SQLException {
+    private List<ClaimDetailsResponse.DiagnosisInfo> getClaimDiagnosisInfo(Connection conn, String claimId) throws SQLException {
         String sql = """
             SELECT
                 d.id,
@@ -843,19 +905,19 @@ public class ClaimSummaryMonthwiseReportService {
             ORDER BY d.diag_type, d.code
             """;
 
-        List<Map<String, Object>> diagnoses = new ArrayList<>();
+        List<ClaimDetailsResponse.DiagnosisInfo> diagnoses = new ArrayList<>();
 
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, claimId);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    Map<String, Object> diagnosis = new LinkedHashMap<>();
-                    diagnosis.put("diagnosisId", rs.getLong("id"));
-                    diagnosis.put("diagnosisType", rs.getString("diag_type"));
-                    diagnosis.put("diagnosisCode", rs.getString("code"));
-                    diagnosis.put("diagnosisDescription", rs.getString("diagnosis_description"));
-                    diagnoses.add(diagnosis);
+                    diagnoses.add(ClaimDetailsResponse.DiagnosisInfo.builder()
+                            .diagnosisId(rs.getLong("id"))
+                            .diagnosisType(rs.getString("diag_type"))
+                            .diagnosisCode(rs.getString("code"))
+                            .diagnosisDescription(rs.getString("diagnosis_description"))
+                            .build());
                 }
             }
         }
@@ -863,7 +925,7 @@ public class ClaimSummaryMonthwiseReportService {
         return diagnoses;
     }
 
-    private List<Map<String, Object>> getClaimActivitiesInfo(Connection conn, String claimId) throws SQLException {
+    private List<ClaimDetailsResponse.ActivityInfo> getClaimActivitiesInfo(Connection conn, String claimId) throws SQLException {
         String sql = """
             SELECT
                 a.id,
@@ -887,27 +949,28 @@ public class ClaimSummaryMonthwiseReportService {
             ORDER BY a.start_at, a.activity_id
             """;
 
-        List<Map<String, Object>> activities = new ArrayList<>();
+        List<ClaimDetailsResponse.ActivityInfo> activities = new ArrayList<>();
 
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, claimId);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    Map<String, Object> activity = new LinkedHashMap<>();
-                    activity.put("activityId", rs.getLong("id"));
-                    activity.put("activityNumber", rs.getString("activity_id"));
-                    activity.put("startDate", rs.getTimestamp("start_at"));
-                    activity.put("activityType", rs.getString("activity_type"));
-                    activity.put("activityCode", rs.getString("activity_code"));
-                    activity.put("quantity", rs.getBigDecimal("quantity"));
-                    activity.put("netAmount", rs.getBigDecimal("activity_net"));
-                    activity.put("clinician", rs.getString("clinician"));
-                    activity.put("priorAuthorizationId", rs.getString("prior_authorization_id"));
-                    activity.put("clinicianName", rs.getString("clinician_name"));
-                    activity.put("clinicianSpecialty", rs.getString("clinician_specialty"));
-                    activity.put("activityDescription", rs.getString("activity_description"));
-                    activities.add(activity);
+                    activities.add(ClaimDetailsResponse.ActivityInfo.builder()
+                            .activityId(rs.getLong("id"))
+                            .activityNumber(rs.getString("activity_id"))
+                            .startDate(rs.getTimestamp("start_at") != null ? 
+                                    rs.getTimestamp("start_at").toLocalDateTime() : null)
+                            .activityType(rs.getString("activity_type"))
+                            .activityCode(rs.getString("activity_code"))
+                            .quantity(rs.getBigDecimal("quantity"))
+                            .netAmount(rs.getBigDecimal("activity_net"))
+                            .clinician(rs.getString("clinician"))
+                            .priorAuthorizationId(rs.getString("prior_authorization_id"))
+                            .clinicianName(rs.getString("clinician_name"))
+                            .clinicianSpecialty(rs.getString("clinician_specialty"))
+                            .activityDescription(rs.getString("activity_description"))
+                            .build());
                 }
             }
         }
@@ -915,7 +978,7 @@ public class ClaimSummaryMonthwiseReportService {
         return activities;
     }
 
-    private Map<String, Object> getClaimRemittanceInfo(Connection conn, String claimId) throws SQLException {
+    private ClaimDetailsResponse.RemittanceInfo getClaimRemittanceInfo(Connection conn, String claimId) throws SQLException {
         String sql = """
             SELECT
                 rc.id,
@@ -933,34 +996,38 @@ public class ClaimSummaryMonthwiseReportService {
             WHERE ck.claim_id = ?
             """;
 
-        Map<String, Object> remittanceInfo = new HashMap<>();
+        ClaimDetailsResponse.RemittanceInfo.RemittanceInfoBuilder builder = ClaimDetailsResponse.RemittanceInfo.builder();
 
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, claimId);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
-                    remittanceInfo.put("remittanceClaimId", rs.getLong("id"));
-                    remittanceInfo.put("remittancePayerId", rs.getString("id_payer"));
-                    remittanceInfo.put("remittanceProviderId", rs.getString("remittance_provider_id"));
-                    remittanceInfo.put("denialCode", rs.getString("denial_code"));
-                    remittanceInfo.put("paymentReference", rs.getString("payment_reference"));
-                    remittanceInfo.put("settlementDate", rs.getTimestamp("date_settlement"));
-                    remittanceInfo.put("remittanceDate", rs.getTimestamp("remittance_date"));
-                    remittanceInfo.put("remittanceId", rs.getLong("remittance_id"));
+                    builder.remittanceClaimId(rs.getLong("id"))
+                            .remittancePayerId(rs.getString("id_payer"))
+                            .remittanceProviderId(rs.getString("remittance_provider_id"))
+                            .denialCode(rs.getString("denial_code"))
+                            .paymentReference(rs.getString("payment_reference"))
+                            .settlementDate(rs.getTimestamp("date_settlement") != null ? 
+                                    rs.getTimestamp("date_settlement").toLocalDateTime() : null)
+                            .remittanceDate(rs.getTimestamp("remittance_date") != null ? 
+                                    rs.getTimestamp("remittance_date").toLocalDateTime() : null)
+                            .remittanceId(rs.getLong("remittance_id"));
                 }
             }
         }
 
-        // Get remittance activities
-        if (!remittanceInfo.isEmpty()) {
-            remittanceInfo.put("remittanceActivities", getClaimRemittanceActivities(conn, claimId));
+        ClaimDetailsResponse.RemittanceInfo remittanceInfo = builder.build();
+
+        // Get remittance activities if remittance info exists
+        if (remittanceInfo.getRemittanceClaimId() != null) {
+            remittanceInfo.setRemittanceActivities(getClaimRemittanceActivities(conn, claimId));
         }
 
-        return remittanceInfo;
+        return remittanceInfo.getRemittanceClaimId() != null ? remittanceInfo : null;
     }
 
-    private List<Map<String, Object>> getClaimRemittanceActivities(Connection conn, String claimId) throws SQLException {
+    private List<ClaimDetailsResponse.RemittanceActivityInfo> getClaimRemittanceActivities(Connection conn, String claimId) throws SQLException {
         String sql = """
             SELECT
                 ra.id,
@@ -984,28 +1051,29 @@ public class ClaimSummaryMonthwiseReportService {
             ORDER BY ra.start_at, ra.activity_id
             """;
 
-        List<Map<String, Object>> remittanceActivities = new ArrayList<>();
+        List<ClaimDetailsResponse.RemittanceActivityInfo> remittanceActivities = new ArrayList<>();
 
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, claimId);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    Map<String, Object> activity = new LinkedHashMap<>();
-                    activity.put("remittanceActivityId", rs.getLong("id"));
-                    activity.put("activityId", rs.getString("activity_id"));
-                    activity.put("startDate", rs.getTimestamp("start_at"));
-                    activity.put("activityType", rs.getString("activity_type"));
-                    activity.put("activityCode", rs.getString("activity_code"));
-                    activity.put("quantity", rs.getBigDecimal("quantity"));
-                    activity.put("netAmount", rs.getBigDecimal("activity_net"));
-                    activity.put("listPrice", rs.getBigDecimal("list_price"));
-                    activity.put("grossAmount", rs.getBigDecimal("gross"));
-                    activity.put("patientShare", rs.getBigDecimal("patient_share"));
-                    activity.put("paymentAmount", rs.getBigDecimal("payment_amount"));
-                    activity.put("denialCode", rs.getString("activity_denial_code"));
-                    activity.put("clinician", rs.getString("clinician"));
-                    remittanceActivities.add(activity);
+                    remittanceActivities.add(ClaimDetailsResponse.RemittanceActivityInfo.builder()
+                            .remittanceActivityId(rs.getLong("id"))
+                            .activityId(rs.getString("activity_id"))
+                            .startDate(rs.getTimestamp("start_at") != null ? 
+                                    rs.getTimestamp("start_at").toLocalDateTime() : null)
+                            .activityType(rs.getString("activity_type"))
+                            .activityCode(rs.getString("activity_code"))
+                            .quantity(rs.getBigDecimal("quantity"))
+                            .netAmount(rs.getBigDecimal("activity_net"))
+                            .listPrice(rs.getBigDecimal("list_price"))
+                            .grossAmount(rs.getBigDecimal("gross"))
+                            .patientShare(rs.getBigDecimal("patient_share"))
+                            .paymentAmount(rs.getBigDecimal("payment_amount"))
+                            .denialCode(rs.getString("activity_denial_code"))
+                            .clinician(rs.getString("clinician"))
+                            .build());
                 }
             }
         }
@@ -1013,7 +1081,7 @@ public class ClaimSummaryMonthwiseReportService {
         return remittanceActivities;
     }
 
-    private List<Map<String, Object>> getClaimTimeline(Connection conn, String claimId) throws SQLException {
+    private List<ClaimDetailsResponse.ClaimTimelineEvent> getClaimTimeline(Connection conn, String claimId) throws SQLException {
         String sql = """
             SELECT
                 ce.id,
@@ -1033,24 +1101,26 @@ public class ClaimSummaryMonthwiseReportService {
             ORDER BY ce.event_time DESC
             """;
 
-        List<Map<String, Object>> timeline = new ArrayList<>();
+        List<ClaimDetailsResponse.ClaimTimelineEvent> timeline = new ArrayList<>();
 
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, claimId);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    Map<String, Object> event = new LinkedHashMap<>();
-                    event.put("eventId", rs.getLong("id"));
-                    event.put("eventTime", rs.getTimestamp("event_time"));
-                    event.put("eventType", getEventTypeDescription(rs.getInt("event_type")));
-                    event.put("submissionId", rs.getLong("submission_id"));
-                    event.put("remittanceId", rs.getLong("remittance_id"));
-                    event.put("currentStatus", rs.getInt("current_status"));
-                    event.put("statusTime", rs.getTimestamp("status_time"));
-                    event.put("resubmissionType", rs.getString("resubmission_type"));
-                    event.put("resubmissionComment", rs.getString("resubmission_comment"));
-                    timeline.add(event);
+                    timeline.add(ClaimDetailsResponse.ClaimTimelineEvent.builder()
+                            .eventId(rs.getLong("id"))
+                            .eventTime(rs.getTimestamp("event_time") != null ? 
+                                    rs.getTimestamp("event_time").toLocalDateTime() : null)
+                            .eventType(getEventTypeDescription(rs.getInt("event_type")))
+                            .submissionId(rs.getLong("submission_id"))
+                            .remittanceId(rs.getLong("remittance_id"))
+                            .currentStatus(rs.getInt("current_status"))
+                            .statusTime(rs.getTimestamp("status_time") != null ? 
+                                    rs.getTimestamp("status_time").toLocalDateTime() : null)
+                            .resubmissionType(rs.getString("resubmission_type"))
+                            .resubmissionComment(rs.getString("resubmission_comment"))
+                            .build());
                 }
             }
         }
@@ -1058,7 +1128,7 @@ public class ClaimSummaryMonthwiseReportService {
         return timeline;
     }
 
-    private List<Map<String, Object>> getClaimAttachments(Connection conn, String claimId) throws SQLException {
+    private List<ClaimDetailsResponse.AttachmentInfo> getClaimAttachments(Connection conn, String claimId) throws SQLException {
         String sql = """
             SELECT
                 ca.id,
@@ -1075,22 +1145,24 @@ public class ClaimSummaryMonthwiseReportService {
             ORDER BY ca.created_at DESC
             """;
 
-        List<Map<String, Object>> attachments = new ArrayList<>();
+        List<ClaimDetailsResponse.AttachmentInfo> attachments = new ArrayList<>();
 
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, claimId);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    Map<String, Object> attachment = new LinkedHashMap<>();
-                    attachment.put("attachmentId", rs.getLong("id"));
-                    attachment.put("fileName", rs.getString("file_name"));
-                    attachment.put("mimeType", rs.getString("mime_type"));
-                    attachment.put("dataLength", rs.getInt("data_length"));
-                    attachment.put("createdAt", rs.getTimestamp("created_at"));
-                    attachment.put("attachmentEventTime", rs.getTimestamp("attachment_event_time"));
-                    attachment.put("attachmentEventType", getEventTypeDescription(rs.getInt("attachment_event_type")));
-                    attachments.add(attachment);
+                    attachments.add(ClaimDetailsResponse.AttachmentInfo.builder()
+                            .attachmentId(rs.getLong("id"))
+                            .fileName(rs.getString("file_name"))
+                            .mimeType(rs.getString("mime_type"))
+                            .dataLength(rs.getInt("data_length"))
+                            .createdAt(rs.getTimestamp("created_at") != null ? 
+                                    rs.getTimestamp("created_at").toLocalDateTime() : null)
+                            .attachmentEventTime(rs.getTimestamp("attachment_event_time") != null ? 
+                                    rs.getTimestamp("attachment_event_time").toLocalDateTime() : null)
+                            .attachmentEventType(getEventTypeDescription(rs.getInt("attachment_event_type")))
+                            .build());
                 }
             }
         }
@@ -1098,7 +1170,7 @@ public class ClaimSummaryMonthwiseReportService {
         return attachments;
     }
 
-    private List<Map<String, Object>> getClaimTransactionTypes(Connection conn, String claimId) throws SQLException {
+    private List<ClaimDetailsResponse.TransactionType> getClaimTransactionTypes(Connection conn, String claimId) throws SQLException {
         String sql = """
             SELECT
                 ce.id,
@@ -1129,24 +1201,25 @@ public class ClaimSummaryMonthwiseReportService {
             ORDER BY ce.event_time ASC
             """;
 
-        List<Map<String, Object>> transactionTypes = new ArrayList<>();
+        List<ClaimDetailsResponse.TransactionType> transactionTypes = new ArrayList<>();
 
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, claimId);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    Map<String, Object> transaction = new LinkedHashMap<>();
-                    transaction.put("transactionId", rs.getLong("id"));
-                    transaction.put("eventTime", rs.getTimestamp("event_time"));
-                    transaction.put("eventType", rs.getInt("event_type"));
-                    transaction.put("transactionType", rs.getString("transaction_type"));
-                    transaction.put("transactionDescription", rs.getString("transaction_description"));
-                    transaction.put("submissionId", rs.getLong("submission_id"));
-                    transaction.put("remittanceId", rs.getLong("remittance_id"));
-                    transaction.put("resubmissionType", rs.getString("resubmission_type"));
-                    transaction.put("resubmissionComment", rs.getString("resubmission_comment"));
-                    transactionTypes.add(transaction);
+                    transactionTypes.add(ClaimDetailsResponse.TransactionType.builder()
+                            .transactionId(rs.getLong("id"))
+                            .eventTime(rs.getTimestamp("event_time") != null ? 
+                                    rs.getTimestamp("event_time").toLocalDateTime() : null)
+                            .eventType(rs.getInt("event_type"))
+                            .transactionType(rs.getString("transaction_type"))
+                            .transactionDescription(rs.getString("transaction_description"))
+                            .submissionId(rs.getLong("submission_id"))
+                            .remittanceId(rs.getLong("remittance_id"))
+                            .resubmissionType(rs.getString("resubmission_type"))
+                            .resubmissionComment(rs.getString("resubmission_comment"))
+                            .build());
                 }
             }
         }

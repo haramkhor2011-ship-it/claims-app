@@ -174,29 +174,33 @@ remittance_cycles AS (
     JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id
 ),
 activity_financials AS (
-    -- Calculate financial metrics per activity (FIXED)
+    -- CUMULATIVE-WITH-CAP: Calculate financial metrics per activity using pre-computed summary
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     SELECT 
         a.id as activity_internal_id,
         a.claim_id,
         a.activity_id,
         a.net::numeric as submitted_amount,
-        COALESCE(SUM(ra.payment_amount), 0::numeric) as total_paid,
-        COALESCE(SUM(ra.net), 0::numeric) as total_remitted,
-        -- FIXED: Enhanced calculation with proper bounds checking
-        CASE
-            WHEN a.net > COALESCE(SUM(ra.payment_amount), 0::numeric) THEN a.net - COALESCE(SUM(ra.payment_amount), 0::numeric)
-            ELSE 0::numeric
-        END as rejected_amount,
-        COUNT(DISTINCT ra.remittance_claim_id) as remittance_count,
-        MAX(ra.denial_code) as latest_denial_code,
-        MIN(ra.denial_code) as initial_denial_code,
-        -- Additional calculated fields from JSON mapping
-        COUNT(CASE WHEN ra.payment_amount = a.net THEN 1 END) as fully_paid_count,
-        SUM(CASE WHEN ra.payment_amount = a.net THEN ra.payment_amount ELSE 0::numeric END) as fully_paid_amount,
-        COUNT(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN 1 END) as fully_rejected_count,
-        SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN a.net ELSE 0::numeric END) as fully_rejected_amount,
-        COUNT(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < a.net THEN 1 END) as partially_paid_count,
-        SUM(CASE WHEN ra.payment_amount > 0 AND ra.payment_amount < a.net THEN ra.payment_amount ELSE 0::numeric END) as partially_paid_amount,
+        -- OPTIMIZED: Use pre-computed capped paid amount (prevents overcounting)
+        COALESCE(cas.paid_amount, 0::numeric) as total_paid,
+        -- OPTIMIZED: Use submitted as remitted baseline (consistent with other reports)
+        COALESCE(cas.submitted_amount, 0::numeric) as total_remitted,
+        -- OPTIMIZED: Use pre-computed rejected amount (latest denial and zero paid logic)
+        COALESCE(cas.rejected_amount, 0::numeric) as rejected_amount,
+        -- OPTIMIZED: Use pre-computed remittance count
+        COALESCE(cas.remittance_count, 0) as remittance_count,
+        -- OPTIMIZED: Use latest denial from pre-computed summary
+        (cas.denial_codes)[1] as latest_denial_code,
+        -- OPTIMIZED: Use first denial from pre-computed summary (if available)
+        (cas.denial_codes)[array_length(cas.denial_codes, 1)] as initial_denial_code,
+        -- OPTIMIZED: Use pre-computed activity status for counts
+        CASE WHEN cas.activity_status = 'FULLY_PAID' THEN 1 ELSE 0 END as fully_paid_count,
+        CASE WHEN cas.activity_status = 'FULLY_PAID' THEN cas.paid_amount ELSE 0::numeric END as fully_paid_amount,
+        CASE WHEN cas.activity_status = 'REJECTED' THEN 1 ELSE 0 END as fully_rejected_count,
+        CASE WHEN cas.activity_status = 'REJECTED' THEN cas.denied_amount ELSE 0::numeric END as fully_rejected_amount,
+        CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 1 ELSE 0 END as partially_paid_count,
+        CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.paid_amount ELSE 0::numeric END as partially_paid_amount,
         -- Self-pay detection (based on payer_id)
         COUNT(CASE WHEN c.payer_id = 'Self-Paid' THEN 1 END) as self_pay_count,
         SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN a.net ELSE 0::numeric END) as self_pay_amount,
@@ -209,11 +213,18 @@ activity_financials AS (
         NULL as write_off_comment
     FROM claims.activity a
     LEFT JOIN claims.claim c ON a.claim_id = c.id
+    -- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+    -- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+    LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = c.claim_key_id 
+      AND cas.activity_id = a.activity_id
+    -- Keep legacy join for self-pay and taken-back calculations (these need raw data)
     LEFT JOIN claims.remittance_activity ra ON a.activity_id = ra.activity_id
       AND ra.remittance_claim_id IN (
         SELECT id FROM claims.remittance_claim rc2 WHERE rc2.claim_key_id = c.claim_key_id
       )
-    GROUP BY a.id, a.claim_id, a.activity_id, a.net, c.payer_id
+    GROUP BY a.id, a.claim_id, a.activity_id, a.net, c.payer_id, 
+             cas.paid_amount, cas.submitted_amount, cas.rejected_amount, cas.denied_amount,
+             cas.remittance_count, cas.denial_codes, cas.activity_status
 ),
 claim_resubmission_summary AS (
     -- Calculate resubmission metrics per claim
@@ -352,7 +363,6 @@ SELECT
     d2.code AS secondary_diagnosis,
     
     -- Additional fields from JSON mapping (derived calculations)
-    c.payer_id,
     a.prior_authorization_id,
     -- FIXED: Proper JOIN for remittance_claim
     rc.payment_reference,
@@ -386,7 +396,7 @@ LEFT JOIN claims_ref.provider pr ON pr.id = c.provider_ref_id
 LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
 LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
 LEFT JOIN activity_financials af ON a.id = af.activity_internal_id
-LEFT JOIN claims_ref.denial_code dc ON ra.denial_code_ref_id = dc.id
+LEFT JOIN claims_ref.denial_code dc ON af.latest_denial_code = dc.code
 LEFT JOIN claims.submission s ON c.submission_id = s.id
 LEFT JOIN claims.ingestion_file if_sender ON s.ingestion_file_id = if_sender.id
 LEFT JOIN claim_resubmission_summary crs ON ck.id = crs.claim_key_id
@@ -414,24 +424,19 @@ COMMENT ON VIEW claims.v_remittances_resubmission_activity_level IS 'Activity-le
 DROP VIEW IF EXISTS claims.v_remittances_resubmission_claim_level CASCADE;
 CREATE OR REPLACE VIEW claims.v_remittances_resubmission_claim_level AS
 WITH claim_financials AS (
-    -- Calculate financial metrics per claim (FIXED)
+    -- CUMULATIVE-WITH-CAP: Calculate financial metrics per claim using claim_activity_summary
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     SELECT 
         c.id as claim_id,
         SUM(a.net)::numeric as total_submitted_amount,
-        SUM(COALESCE(ra.payment_amount, 0::numeric)) as total_paid_amount,
-        -- FIXED: Enhanced calculation with proper bounds checking
-        SUM(CASE
-            WHEN a.net > COALESCE(ra.payment_amount, 0::numeric) THEN a.net - COALESCE(ra.payment_amount, 0::numeric)
-            ELSE 0::numeric
-        END) as total_rejected_amount,
-        COUNT(DISTINCT ra.remittance_claim_id) as remittance_count,
+        SUM(COALESCE(cas.paid_amount, 0::numeric)) as total_paid_amount,                    -- capped paid across remittances
+        SUM(COALESCE(cas.denied_amount, 0::numeric)) as total_rejected_amount,             -- denied only when latest denial and zero paid
+        MAX(cas.remittance_count) as remittance_count,                                     -- max across activities
         COUNT(DISTINCT CASE WHEN ce.type = 2 THEN ce.id END) as resubmission_count
     FROM claims.claim c
     JOIN claims.activity a ON c.id = a.claim_id
-    LEFT JOIN claims.remittance_activity ra ON a.activity_id = ra.activity_id
-      AND ra.remittance_claim_id IN (
-        SELECT id FROM claims.remittance_claim rc2 WHERE rc2.claim_key_id = c.claim_key_id
-      )
+    LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = c.claim_key_id AND cas.activity_id = a.activity_id
     LEFT JOIN claims.claim_event ce ON c.claim_key_id = ce.claim_key_id AND ce.type = 2
     GROUP BY c.id
 ),
@@ -553,6 +558,8 @@ CREATE INDEX IF NOT EXISTS idx_remittances_resubmission_remittance_activity_id O
 
 -- Function for Activity Level report (ENHANCED)
 CREATE OR REPLACE FUNCTION claims.get_remittances_resubmission_activity_level(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'activity_level',
     p_facility_id TEXT DEFAULT NULL,
     p_facility_ids TEXT[] DEFAULT NULL,
     p_payer_ids TEXT[] DEFAULT NULL,
@@ -673,22 +680,30 @@ BEGIN
         RAISE EXCEPTION 'Invalid date range: from_date (%) > to_date (%)', p_from_date, p_to_date;
     END IF;
 
-    RETURN QUERY
-    SELECT 
-        mv.*
-    FROM claims.mv_remittances_resubmission_activity_level mv
-    WHERE 
-        (p_facility_id IS NULL OR mv.facility_id = p_facility_id)
-        AND (p_facility_ids IS NULL OR mv.facility_id = ANY(p_facility_ids))
-        AND (p_payer_ids IS NULL OR mv.payer_id = ANY(p_payer_ids))
-        AND (p_receiver_ids IS NULL OR mv.receiver_id = ANY(p_receiver_ids))
-        AND (p_from_date IS NULL OR mv.encounter_start >= p_from_date)
-        AND (p_to_date IS NULL OR mv.encounter_start <= p_to_date)
-        AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
-        AND (p_clinician_ids IS NULL OR mv.clinician = ANY(p_clinician_ids))
-        AND (p_claim_number IS NULL OR mv.claim_id = p_claim_number)
-        AND (p_cpt_code IS NULL OR mv.cpt_code = p_cpt_code)
-        AND (p_denial_filter IS NULL OR 
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use tab-specific MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'activity_level' THEN
+                RETURN QUERY
+                SELECT 
+                    mv.*
+                FROM claims.mv_remittances_resubmission_activity_level mv
+                WHERE 
+                    (p_facility_id IS NULL OR mv.facility_id = p_facility_id)
+                    AND (p_facility_ids IS NULL OR mv.facility_id = ANY(p_facility_ids))
+                    AND (p_payer_ids IS NULL OR mv.payer_id = ANY(p_payer_ids))
+                    AND (p_receiver_ids IS NULL OR mv.receiver_id = ANY(p_receiver_ids))
+                    AND (p_from_date IS NULL OR mv.encounter_start >= p_from_date)
+                    AND (p_to_date IS NULL OR mv.encounter_start <= p_to_date)
+                    AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
+                    AND (p_clinician_ids IS NULL OR mv.clinician = ANY(p_clinician_ids))
+                    AND (p_claim_number IS NULL OR mv.claim_id = p_claim_number)
+                    AND (p_cpt_code IS NULL OR mv.cpt_code = p_cpt_code)
+                    AND (p_denial_filter IS NULL OR 
              (p_denial_filter = 'HAS_DENIAL' AND mv.denial_code IS NOT NULL) OR
              (p_denial_filter = 'NO_DENIAL' AND mv.denial_code IS NULL) OR
              (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND mv.rejected_not_resubmitted = TRUE))
@@ -710,6 +725,128 @@ BEGIN
         CASE WHEN p_order_by = 'ageing_days DESC' THEN mv.ageing_days END DESC,
         mv.encounter_start
     LIMIT p_limit OFFSET p_offset;
+            ELSE
+                -- Default to activity_level
+                RETURN QUERY
+                SELECT 
+                    mv.*
+                FROM claims.mv_remittances_resubmission_activity_level mv
+                WHERE 
+                    (p_facility_id IS NULL OR mv.facility_id = p_facility_id)
+                    AND (p_facility_ids IS NULL OR mv.facility_id = ANY(p_facility_ids))
+                    AND (p_payer_ids IS NULL OR mv.payer_id = ANY(p_payer_ids))
+                    AND (p_receiver_ids IS NULL OR mv.receiver_id = ANY(p_receiver_ids))
+                    AND (p_from_date IS NULL OR mv.encounter_start >= p_from_date)
+                    AND (p_to_date IS NULL OR mv.encounter_start <= p_to_date)
+                    AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
+                    AND (p_clinician_ids IS NULL OR mv.clinician = ANY(p_clinician_ids))
+                    AND (p_claim_number IS NULL OR mv.claim_id = p_claim_number)
+                    AND (p_cpt_code IS NULL OR mv.cpt_code = p_cpt_code)
+                    AND (p_denial_filter IS NULL OR 
+             (p_denial_filter = 'HAS_DENIAL' AND mv.denial_code IS NOT NULL) OR
+             (p_denial_filter = 'NO_DENIAL' AND mv.denial_code IS NULL) OR
+             (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND mv.rejected_not_resubmitted = TRUE))
+        AND (p_facility_ref_ids IS NULL OR mv.facility_id IN (
+            SELECT facility_id FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE rf.id = ANY(p_facility_ref_ids)
+        ))
+        AND (p_payer_ref_ids IS NULL OR mv.payer_id IN (
+            SELECT payer_code FROM claims_ref.payer WHERE id = ANY(p_payer_ref_ids)
+        ))
+        AND (p_clinician_ref_ids IS NULL OR mv.clinician IN (
+            SELECT clinician_code FROM claims_ref.clinician WHERE id = ANY(p_clinician_ref_ids)
+        ))
+    ORDER BY 
+        CASE WHEN p_order_by = 'encounter_start ASC' THEN mv.encounter_start END ASC,
+        CASE WHEN p_order_by = 'encounter_start DESC' THEN mv.encounter_start END DESC,
+        CASE WHEN p_order_by = 'submitted_amount ASC' THEN mv.submitted_amount END ASC,
+        CASE WHEN p_order_by = 'submitted_amount DESC' THEN mv.submitted_amount END DESC,
+        CASE WHEN p_order_by = 'ageing_days ASC' THEN mv.ageing_days END ASC,
+        CASE WHEN p_order_by = 'ageing_days DESC' THEN mv.ageing_days END DESC,
+        mv.encounter_start
+    LIMIT p_limit OFFSET p_offset;
+        END CASE;
+    ELSE
+        -- Use traditional views for real-time data
+        CASE p_tab_name
+            WHEN 'activity_level' THEN
+                RETURN QUERY
+                SELECT 
+                    v.*
+                FROM claims.v_remittances_resubmission_activity_level v
+                WHERE 
+                    (p_facility_id IS NULL OR v.facility_id = p_facility_id)
+                    AND (p_facility_ids IS NULL OR v.facility_id = ANY(p_facility_ids))
+                    AND (p_payer_ids IS NULL OR v.payer_id = ANY(p_payer_ids))
+                    AND (p_receiver_ids IS NULL OR v.receiver_id = ANY(p_receiver_ids))
+                    AND (p_from_date IS NULL OR v.encounter_start >= p_from_date)
+                    AND (p_to_date IS NULL OR v.encounter_start <= p_to_date)
+                    AND (p_encounter_type IS NULL OR v.encounter_type = p_encounter_type)
+                    AND (p_clinician_ids IS NULL OR v.clinician = ANY(p_clinician_ids))
+                    AND (p_claim_number IS NULL OR v.claim_id = p_claim_number)
+                    AND (p_cpt_code IS NULL OR v.cpt_code = p_cpt_code)
+                    AND (p_denial_filter IS NULL OR 
+             (p_denial_filter = 'HAS_DENIAL' AND v.denial_code IS NOT NULL) OR
+             (p_denial_filter = 'NO_DENIAL' AND v.denial_code IS NULL) OR
+             (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND v.rejected_not_resubmitted = TRUE))
+        AND (p_facility_ref_ids IS NULL OR v.facility_id IN (
+            SELECT facility_id FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE rf.id = ANY(p_facility_ref_ids)
+        ))
+        AND (p_payer_ref_ids IS NULL OR v.payer_id IN (
+            SELECT payer_code FROM claims_ref.payer WHERE id = ANY(p_payer_ref_ids)
+        ))
+        AND (p_clinician_ref_ids IS NULL OR v.clinician IN (
+            SELECT clinician_code FROM claims_ref.clinician WHERE id = ANY(p_clinician_ref_ids)
+        ))
+    ORDER BY 
+        CASE WHEN p_order_by = 'encounter_start ASC' THEN v.encounter_start END ASC,
+        CASE WHEN p_order_by = 'encounter_start DESC' THEN v.encounter_start END DESC,
+        CASE WHEN p_order_by = 'submitted_amount ASC' THEN v.submitted_amount END ASC,
+        CASE WHEN p_order_by = 'submitted_amount DESC' THEN v.submitted_amount END DESC,
+        CASE WHEN p_order_by = 'ageing_days ASC' THEN v.ageing_days END ASC,
+        CASE WHEN p_order_by = 'ageing_days DESC' THEN v.ageing_days END DESC,
+        v.encounter_start
+    LIMIT p_limit OFFSET p_offset;
+            ELSE
+                -- Default to activity_level
+                RETURN QUERY
+                SELECT 
+                    v.*
+                FROM claims.v_remittances_resubmission_activity_level v
+                WHERE 
+                    (p_facility_id IS NULL OR v.facility_id = p_facility_id)
+                    AND (p_facility_ids IS NULL OR v.facility_id = ANY(p_facility_ids))
+                    AND (p_payer_ids IS NULL OR v.payer_id = ANY(p_payer_ids))
+                    AND (p_receiver_ids IS NULL OR v.receiver_id = ANY(p_receiver_ids))
+                    AND (p_from_date IS NULL OR v.encounter_start >= p_from_date)
+                    AND (p_to_date IS NULL OR v.encounter_start <= p_to_date)
+                    AND (p_encounter_type IS NULL OR v.encounter_type = p_encounter_type)
+                    AND (p_clinician_ids IS NULL OR v.clinician = ANY(p_clinician_ids))
+                    AND (p_claim_number IS NULL OR v.claim_id = p_claim_number)
+                    AND (p_cpt_code IS NULL OR v.cpt_code = p_cpt_code)
+                    AND (p_denial_filter IS NULL OR 
+             (p_denial_filter = 'HAS_DENIAL' AND v.denial_code IS NOT NULL) OR
+             (p_denial_filter = 'NO_DENIAL' AND v.denial_code IS NULL) OR
+             (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND v.rejected_not_resubmitted = TRUE))
+        AND (p_facility_ref_ids IS NULL OR v.facility_id IN (
+            SELECT facility_id FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE rf.id = ANY(p_facility_ref_ids)
+        ))
+        AND (p_payer_ref_ids IS NULL OR v.payer_id IN (
+            SELECT payer_code FROM claims_ref.payer WHERE id = ANY(p_payer_ref_ids)
+        ))
+        AND (p_clinician_ref_ids IS NULL OR v.clinician IN (
+            SELECT clinician_code FROM claims_ref.clinician WHERE id = ANY(p_clinician_ref_ids)
+        ))
+    ORDER BY 
+        CASE WHEN p_order_by = 'encounter_start ASC' THEN v.encounter_start END ASC,
+        CASE WHEN p_order_by = 'encounter_start DESC' THEN v.encounter_start END DESC,
+        CASE WHEN p_order_by = 'submitted_amount ASC' THEN v.submitted_amount END ASC,
+        CASE WHEN p_order_by = 'submitted_amount DESC' THEN v.submitted_amount END DESC,
+        CASE WHEN p_order_by = 'ageing_days ASC' THEN v.ageing_days END ASC,
+        CASE WHEN p_order_by = 'ageing_days DESC' THEN v.ageing_days END DESC,
+        v.encounter_start
+    LIMIT p_limit OFFSET p_offset;
+        END CASE;
+    END IF;
 END;
 $$;
 
@@ -717,6 +854,8 @@ COMMENT ON FUNCTION claims.get_remittances_resubmission_activity_level IS 'Get a
 
 -- Function for Claim Level report (ENHANCED)
 CREATE OR REPLACE FUNCTION claims.get_remittances_resubmission_claim_level(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'claim_level',
     p_facility_id TEXT DEFAULT NULL,
     p_facility_ids TEXT[] DEFAULT NULL,
     p_payer_ids TEXT[] DEFAULT NULL,
@@ -781,24 +920,32 @@ BEGIN
         RAISE EXCEPTION 'Invalid date range: from_date (%) > to_date (%)', p_from_date, p_to_date;
     END IF;
 
-    RETURN QUERY
-    SELECT 
-        mv.*
-    FROM claims.mv_remittances_resubmission_activity_level mv
-    WHERE 
-        (p_facility_id IS NULL OR mv.facility_id = p_facility_id)
-        AND (p_facility_ids IS NULL OR mv.facility_id = ANY(p_facility_ids))
-        AND (p_payer_ids IS NULL OR mv.payer_id = ANY(p_payer_ids))
-        AND (p_receiver_ids IS NULL OR mv.receiver_id = ANY(p_receiver_ids))
-        AND (p_from_date IS NULL OR mv.encounter_start >= p_from_date)
-        AND (p_to_date IS NULL OR mv.encounter_start <= p_to_date)
-        AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
-        AND (p_clinician_ids IS NULL OR mv.clinician = ANY(p_clinician_ids))
-        AND (p_claim_number IS NULL OR mv.claim_id = p_claim_number)
-        AND (p_denial_filter IS NULL OR
-             (p_denial_filter = 'HAS_DENIAL' AND mv.has_rejected_amount = TRUE) OR
-             (p_denial_filter = 'NO_DENIAL' AND mv.has_rejected_amount = FALSE) OR
-             (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND mv.rejected_not_resubmitted = TRUE))
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use tab-specific MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'claim_level' THEN
+                RETURN QUERY
+                SELECT 
+                    mv.*
+                FROM claims.mv_remittances_resubmission_claim_level mv
+                WHERE 
+                    (p_facility_id IS NULL OR mv.facility_id = p_facility_id)
+                    AND (p_facility_ids IS NULL OR mv.facility_id = ANY(p_facility_ids))
+                    AND (p_payer_ids IS NULL OR mv.payer_id = ANY(p_payer_ids))
+                    AND (p_receiver_ids IS NULL OR mv.receiver_id = ANY(p_receiver_ids))
+                    AND (p_from_date IS NULL OR mv.encounter_start >= p_from_date)
+                    AND (p_to_date IS NULL OR mv.encounter_start <= p_to_date)
+                    AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
+                    AND (p_clinician_ids IS NULL OR mv.clinician = ANY(p_clinician_ids))
+                    AND (p_claim_number IS NULL OR mv.claim_id = p_claim_number)
+                    AND (p_denial_filter IS NULL OR
+                         (p_denial_filter = 'HAS_DENIAL' AND mv.has_rejected_amount = TRUE) OR
+                         (p_denial_filter = 'NO_DENIAL' AND mv.has_rejected_amount = FALSE) OR
+                         (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND mv.rejected_not_resubmitted = TRUE))
         AND (p_facility_ref_ids IS NULL OR mv.facility_id IN (
             SELECT facility_id FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE rf.id = ANY(p_facility_ref_ids)
         ))
@@ -817,6 +964,125 @@ BEGIN
         CASE WHEN p_order_by = 'ageing_days DESC' THEN mv.ageing_days END DESC,
         mv.encounter_start
     LIMIT p_limit OFFSET p_offset;
+            ELSE
+                -- Default to claim_level
+                RETURN QUERY
+                SELECT 
+                    mv.*
+                FROM claims.mv_remittances_resubmission_claim_level mv
+                WHERE 
+                    (p_facility_id IS NULL OR mv.facility_id = p_facility_id)
+                    AND (p_facility_ids IS NULL OR mv.facility_id = ANY(p_facility_ids))
+                    AND (p_payer_ids IS NULL OR mv.payer_id = ANY(p_payer_ids))
+                    AND (p_receiver_ids IS NULL OR mv.receiver_id = ANY(p_receiver_ids))
+                    AND (p_from_date IS NULL OR mv.encounter_start >= p_from_date)
+                    AND (p_to_date IS NULL OR mv.encounter_start <= p_to_date)
+                    AND (p_encounter_type IS NULL OR mv.encounter_type = p_encounter_type)
+                    AND (p_clinician_ids IS NULL OR mv.clinician = ANY(p_clinician_ids))
+                    AND (p_claim_number IS NULL OR mv.claim_id = p_claim_number)
+                    AND (p_denial_filter IS NULL OR
+                         (p_denial_filter = 'HAS_DENIAL' AND mv.has_rejected_amount = TRUE) OR
+                         (p_denial_filter = 'NO_DENIAL' AND mv.has_rejected_amount = FALSE) OR
+                         (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND mv.rejected_not_resubmitted = TRUE))
+        AND (p_facility_ref_ids IS NULL OR mv.facility_id IN (
+            SELECT facility_id FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE rf.id = ANY(p_facility_ref_ids)
+        ))
+        AND (p_payer_ref_ids IS NULL OR mv.payer_id IN (
+            SELECT payer_code FROM claims_ref.payer WHERE id = ANY(p_payer_ref_ids)
+        ))
+        AND (p_clinician_ref_ids IS NULL OR mv.clinician IN (
+            SELECT clinician_code FROM claims_ref.clinician WHERE id = ANY(p_clinician_ref_ids)
+        ))
+    ORDER BY 
+        CASE WHEN p_order_by = 'encounter_start ASC' THEN mv.encounter_start END ASC,
+        CASE WHEN p_order_by = 'encounter_start DESC' THEN mv.encounter_start END DESC,
+        CASE WHEN p_order_by = 'submitted_amount ASC' THEN mv.submitted_amount END ASC,
+        CASE WHEN p_order_by = 'submitted_amount DESC' THEN mv.submitted_amount END DESC,
+        CASE WHEN p_order_by = 'ageing_days ASC' THEN mv.ageing_days END ASC,
+        CASE WHEN p_order_by = 'ageing_days DESC' THEN mv.ageing_days END DESC,
+        mv.encounter_start
+    LIMIT p_limit OFFSET p_offset;
+        END CASE;
+    ELSE
+        -- Use traditional views for real-time data
+        CASE p_tab_name
+            WHEN 'claim_level' THEN
+                RETURN QUERY
+                SELECT 
+                    v.*
+                FROM claims.v_remittances_resubmission_claim_level v
+                WHERE 
+                    (p_facility_id IS NULL OR v.facility_id = p_facility_id)
+                    AND (p_facility_ids IS NULL OR v.facility_id = ANY(p_facility_ids))
+                    AND (p_payer_ids IS NULL OR v.payer_id = ANY(p_payer_ids))
+                    AND (p_receiver_ids IS NULL OR v.receiver_id = ANY(p_receiver_ids))
+                    AND (p_from_date IS NULL OR v.encounter_start >= p_from_date)
+                    AND (p_to_date IS NULL OR v.encounter_start <= p_to_date)
+                    AND (p_encounter_type IS NULL OR v.encounter_type = p_encounter_type)
+                    AND (p_clinician_ids IS NULL OR v.clinician = ANY(p_clinician_ids))
+                    AND (p_claim_number IS NULL OR v.claim_id = p_claim_number)
+                    AND (p_denial_filter IS NULL OR
+                         (p_denial_filter = 'HAS_DENIAL' AND v.has_rejected_amount = TRUE) OR
+                         (p_denial_filter = 'NO_DENIAL' AND v.has_rejected_amount = FALSE) OR
+                         (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND v.rejected_not_resubmitted = TRUE))
+        AND (p_facility_ref_ids IS NULL OR v.facility_id IN (
+            SELECT facility_id FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE rf.id = ANY(p_facility_ref_ids)
+        ))
+        AND (p_payer_ref_ids IS NULL OR v.payer_id IN (
+            SELECT payer_code FROM claims_ref.payer WHERE id = ANY(p_payer_ref_ids)
+        ))
+        AND (p_clinician_ref_ids IS NULL OR v.clinician IN (
+            SELECT clinician_code FROM claims_ref.clinician WHERE id = ANY(p_clinician_ref_ids)
+        ))
+    ORDER BY 
+        CASE WHEN p_order_by = 'encounter_start ASC' THEN v.encounter_start END ASC,
+        CASE WHEN p_order_by = 'encounter_start DESC' THEN v.encounter_start END DESC,
+        CASE WHEN p_order_by = 'submitted_amount ASC' THEN v.submitted_amount END ASC,
+        CASE WHEN p_order_by = 'submitted_amount DESC' THEN v.submitted_amount END DESC,
+        CASE WHEN p_order_by = 'ageing_days ASC' THEN v.ageing_days END ASC,
+        CASE WHEN p_order_by = 'ageing_days DESC' THEN v.ageing_days END DESC,
+        v.encounter_start
+    LIMIT p_limit OFFSET p_offset;
+            ELSE
+                -- Default to claim_level
+                RETURN QUERY
+                SELECT 
+                    v.*
+                FROM claims.v_remittances_resubmission_claim_level v
+                WHERE 
+                    (p_facility_id IS NULL OR v.facility_id = p_facility_id)
+                    AND (p_facility_ids IS NULL OR v.facility_id = ANY(p_facility_ids))
+                    AND (p_payer_ids IS NULL OR v.payer_id = ANY(p_payer_ids))
+                    AND (p_receiver_ids IS NULL OR v.receiver_id = ANY(p_receiver_ids))
+                    AND (p_from_date IS NULL OR v.encounter_start >= p_from_date)
+                    AND (p_to_date IS NULL OR v.encounter_start <= p_to_date)
+                    AND (p_encounter_type IS NULL OR v.encounter_type = p_encounter_type)
+                    AND (p_clinician_ids IS NULL OR v.clinician = ANY(p_clinician_ids))
+                    AND (p_claim_number IS NULL OR v.claim_id = p_claim_number)
+                    AND (p_denial_filter IS NULL OR
+                         (p_denial_filter = 'HAS_DENIAL' AND v.has_rejected_amount = TRUE) OR
+                         (p_denial_filter = 'NO_DENIAL' AND v.has_rejected_amount = FALSE) OR
+                         (p_denial_filter = 'REJECTED_NOT_RESUBMITTED' AND v.rejected_not_resubmitted = TRUE))
+        AND (p_facility_ref_ids IS NULL OR v.facility_id IN (
+            SELECT facility_id FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE rf.id = ANY(p_facility_ref_ids)
+        ))
+        AND (p_payer_ref_ids IS NULL OR v.payer_id IN (
+            SELECT payer_code FROM claims_ref.payer WHERE id = ANY(p_payer_ref_ids)
+        ))
+        AND (p_clinician_ref_ids IS NULL OR v.clinician IN (
+            SELECT clinician_code FROM claims_ref.clinician WHERE id = ANY(p_clinician_ref_ids)
+        ))
+    ORDER BY 
+        CASE WHEN p_order_by = 'encounter_start ASC' THEN v.encounter_start END ASC,
+        CASE WHEN p_order_by = 'encounter_start DESC' THEN v.encounter_start END DESC,
+        CASE WHEN p_order_by = 'submitted_amount ASC' THEN v.submitted_amount END ASC,
+        CASE WHEN p_order_by = 'submitted_amount DESC' THEN v.submitted_amount END DESC,
+        CASE WHEN p_order_by = 'ageing_days ASC' THEN v.ageing_days END ASC,
+        CASE WHEN p_order_by = 'ageing_days DESC' THEN v.ageing_days END DESC,
+        v.encounter_start
+    LIMIT p_limit OFFSET p_offset;
+        END CASE;
+    END IF;
 END;
 $$;
 
@@ -829,8 +1095,8 @@ COMMENT ON FUNCTION claims.get_remittances_resubmission_claim_level IS 'Get clai
 -- Grant permissions to claims_user role
 GRANT SELECT ON claims.v_remittances_resubmission_activity_level TO claims_user;
 GRANT SELECT ON claims.v_remittances_resubmission_claim_level TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_remittances_resubmission_activity_level TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_remittances_resubmission_claim_level TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_remittances_resubmission_activity_level(boolean,text,text,text[],text[],text[],timestamptz,timestamptz,text,text[],text,text,text,text,integer,integer,bigint[],bigint[],bigint[]) TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_remittances_resubmission_claim_level(boolean,text,text,text[],text[],text[],timestamptz,timestamptz,text,text[],text,text,text,integer,integer,bigint[],bigint[],bigint[]) TO claims_user;
 
 -- ==========================================================================================================
 -- END OF FIXED IMPLEMENTATION

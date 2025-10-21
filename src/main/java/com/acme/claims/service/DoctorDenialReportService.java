@@ -1,5 +1,6 @@
 package com.acme.claims.service;
 
+import com.acme.claims.soap.db.ToggleRepo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +32,7 @@ import java.util.*;
 public class DoctorDenialReportService {
 
     private final DataSource dataSource;
+    private final ToggleRepo toggleRepo;
 
     /**
      * Get doctor denial report data for all three tabs with complex filtering
@@ -46,22 +48,27 @@ public class DoctorDenialReportService {
             String sortBy,
             String sortDirection,
             Integer page,
-            Integer size) {
+            Integer size    ) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Doctor Denial Report - useMv: {}, tab: {}", useMv, tab);
 
         // Build ORDER BY clause
         String orderByClause = buildOrderByClause(sortBy, sortDirection, tab);
 
         String sql = """
             SELECT * FROM claims.get_doctor_denial_report(
-                ?::text,
-                ?::text,
-                ?::timestamptz,
-                ?::timestamptz,
-                ?::integer,
-                ?::integer,
-                ?::text,
-                ?::integer,
-                ?::integer
+                p_use_mv := ?,
+                p_tab_name := ?,
+                p_facility_code := ?::text,
+                p_clinician_code := ?::text,
+                p_from_date := ?::timestamptz,
+                p_to_date := ?::timestamptz,
+                p_year := ?::integer,
+                p_month := ?::integer,
+                p_limit := ?::integer,
+                p_offset := ?::integer
             )
             """ + orderByClause;
 
@@ -72,13 +79,15 @@ public class DoctorDenialReportService {
 
             // Set parameters
             int paramIndex = 1;
+            // OPTION 3: Set useMv and tabName parameters first
+            stmt.setBoolean(paramIndex++, useMv);
+            stmt.setString(paramIndex++, tab != null ? tab : "high_denial");
             stmt.setString(paramIndex++, facilityCode);
             stmt.setString(paramIndex++, clinicianCode);
             stmt.setObject(paramIndex++, fromDate);
             stmt.setObject(paramIndex++, toDate);
             stmt.setObject(paramIndex++, year);
             stmt.setObject(paramIndex++, month);
-            stmt.setString(paramIndex++, tab != null ? tab : "high_denial");
             stmt.setInt(paramIndex++, page != null && size != null ? size : 1000);
             stmt.setInt(paramIndex++, page != null && size != null ? page * size : 0);
 
@@ -176,27 +185,34 @@ public class DoctorDenialReportService {
             LocalDateTime toDate,
             Integer year,
             Integer month) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Doctor Denial Summary - useMv: {}", useMv);
 
         String sql = """
             SELECT * FROM claims.get_doctor_denial_summary(
-                ?::text,
-                ?::text,
-                ?::timestamptz,
-                ?::timestamptz,
-                ?::integer,
-                ?::integer
+                p_use_mv := ?,
+                p_facility_code := ?::text,
+                p_clinician_code := ?::text,
+                p_from_date := ?::timestamptz,
+                p_to_date := ?::timestamptz,
+                p_year := ?::integer,
+                p_month := ?::integer
             )
             """;
 
         try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
-            stmt.setString(1, facilityCode);
-            stmt.setString(2, clinicianCode);
-            stmt.setObject(3, fromDate);
-            stmt.setObject(4, toDate);
-            stmt.setObject(5, year);
-            stmt.setObject(6, month);
+            // OPTION 3: Set useMv parameter first
+            stmt.setBoolean(1, useMv);
+            stmt.setString(2, facilityCode);
+            stmt.setString(3, clinicianCode);
+            stmt.setObject(4, fromDate);
+            stmt.setObject(5, toDate);
+            stmt.setObject(6, year);
+            stmt.setObject(7, month);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
@@ -280,21 +296,26 @@ public class DoctorDenialReportService {
             String sortDirection,
             Integer page,
             Integer size) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Clinician Claims - useMv: {}", useMv);
 
         // Build ORDER BY clause
         String orderByClause = buildOrderByClause(sortBy, sortDirection, "detail");
 
         String sql = """
             SELECT * FROM claims.get_doctor_denial_report(
-                ?::text,
-                ?::text,
-                ?::timestamptz,
-                ?::timestamptz,
-                ?::integer,
-                ?::integer,
-                'detail'::text,
-                ?::integer,
-                ?::integer
+                p_use_mv := ?,
+                p_tab_name := 'detail',
+                p_facility_code := ?::text,
+                p_clinician_code := ?::text,
+                p_from_date := ?::timestamptz,
+                p_to_date := ?::timestamptz,
+                p_year := ?::integer,
+                p_month := ?::integer,
+                p_limit := ?::integer,
+                p_offset := ?::integer
             )
             """ + orderByClause;
 
@@ -305,6 +326,8 @@ public class DoctorDenialReportService {
 
             // Set parameters
             int paramIndex = 1;
+            // OPTION 3: Set useMv and tabName parameters first
+            stmt.setBoolean(paramIndex++, useMv);
             stmt.setString(paramIndex++, facilityCode);
             stmt.setString(paramIndex++, clinicianCode); // This is the key - filtering by clinician
             stmt.setObject(paramIndex++, fromDate);

@@ -105,18 +105,19 @@ WITH latest_remittance AS (
   ORDER BY claim_key_id, date_settlement DESC
 ),
 remittance_summary AS (
-  -- Pre-aggregate remittance data to avoid multiple joins
+  -- CUMULATIVE-WITH-CAP: Pre-aggregate remittance data using claim_activity_summary
+  -- Using cumulative-with-cap semantics to prevent overcounting from multiple remittances per activity
   SELECT 
-    rc.claim_key_id,
-    SUM(ra.payment_amount) as total_payment_amount,
-    SUM(CASE WHEN ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) as total_denied_amount,
-    COUNT(*) as remittance_count,
+    cas.claim_key_id,
+    SUM(cas.paid_amount) as total_payment_amount,                    -- capped paid across activities
+    SUM(cas.denied_amount) as total_denied_amount,                   -- denied only when latest denial and zero paid
+    MAX(cas.remittance_count) as remittance_count,                   -- max across activities
     MIN(rc.date_settlement) as first_remittance_date,
     MAX(rc.date_settlement) as last_remittance_date,
     MAX(rc.payment_reference) as last_payment_reference
-  FROM claims.remittance_claim rc
-  JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id
-  GROUP BY rc.claim_key_id
+  FROM claims.claim_activity_summary cas
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = cas.claim_key_id
+  GROUP BY cas.claim_key_id
 ),
 resubmission_summary AS (
   -- Pre-aggregate resubmission data
@@ -488,8 +489,14 @@ COMMENT ON VIEW claims.v_after_resubmission_not_remitted_balance IS 'Tab C: Afte
 -- ==========================================================================================================
 
 -- Tab A API: Balance Amount to be received (CORRECTED)
+-- Drop existing functions with different signatures to avoid conflicts
+DROP FUNCTION IF EXISTS claims.get_balance_amount_to_be_received(TEXT, BIGINT[], TEXT[], TEXT[], TEXT[], TIMESTAMPTZ, TIMESTAMPTZ, INTEGER, INTEGER, BOOLEAN, INTEGER, INTEGER, TEXT, TEXT, BIGINT[], BIGINT[]);
+DROP FUNCTION IF EXISTS claims.get_balance_amount_to_be_received(BOOLEAN, TEXT, TEXT, BIGINT[], TEXT[], TEXT[], TEXT[], TIMESTAMPTZ, TIMESTAMPTZ, INTEGER, INTEGER, BOOLEAN, INTEGER, INTEGER, TEXT, TEXT, BIGINT[], BIGINT[]);
+
 CREATE OR REPLACE FUNCTION claims.get_balance_amount_to_be_received(
-  p_user_id TEXT,
+  p_use_mv BOOLEAN DEFAULT FALSE,
+  p_tab_name TEXT DEFAULT 'overall',
+  p_user_id TEXT DEFAULT NULL,
   p_claim_key_ids BIGINT[] DEFAULT NULL,
   p_facility_codes TEXT[] DEFAULT NULL,
   p_payer_codes TEXT[] DEFAULT NULL,
@@ -553,52 +560,123 @@ BEGIN
     p_date_to := NOW();
   END IF;
   
-  -- Build WHERE clause with proper parameter handling for materialized view
-  v_where_clause := 'WHERE mv.encounter_start >= $6 AND mv.encounter_start <= $7';
+  -- OPTION 3: Hybrid approach with DB toggle and tab selection
+  -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+  -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+  
+  IF p_use_mv THEN
+    -- Use tab-specific MVs for sub-second performance
+    CASE p_tab_name
+      WHEN 'overall' THEN
+        v_where_clause := 'WHERE mv.encounter_start >= $6 AND mv.encounter_start <= $7';
+        -- Build WHERE clause for mv_balance_amount_overall
+      WHEN 'initial' THEN
+        v_where_clause := 'WHERE mv.encounter_start >= $6 AND mv.encounter_start <= $7';
+        -- Build WHERE clause for mv_balance_amount_initial
+      WHEN 'resubmission' THEN
+        v_where_clause := 'WHERE mv.encounter_start >= $6 AND mv.encounter_start <= $7';
+        -- Build WHERE clause for mv_balance_amount_resubmission
+      ELSE
+        v_where_clause := 'WHERE mv.encounter_start >= $6 AND mv.encounter_start <= $7';
+        -- Default to overall
+    END CASE;
+  ELSE
+    -- Use traditional views for real-time data
+    CASE p_tab_name
+      WHEN 'overall' THEN
+        v_where_clause := 'WHERE bab.encounter_start >= $6 AND bab.encounter_start <= $7';
+        -- Build WHERE clause for v_balance_amount_to_be_received
+      WHEN 'initial' THEN
+        v_where_clause := 'WHERE bab.encounter_start >= $6 AND bab.encounter_start <= $7';
+        -- Build WHERE clause for v_initial_not_remitted_balance
+      WHEN 'resubmission' THEN
+        v_where_clause := 'WHERE bab.encounter_start >= $6 AND bab.encounter_start <= $7';
+        -- Build WHERE clause for v_after_resubmission_not_remitted_balance
+      ELSE
+        v_where_clause := 'WHERE bab.encounter_start >= $6 AND bab.encounter_start <= $7';
+        -- Default to overall
+    END CASE;
+  END IF;
   
   -- Claim key filtering
   IF p_claim_key_ids IS NOT NULL AND array_length(p_claim_key_ids, 1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND mv.claim_key_id = ANY($2)';
+    IF p_use_mv THEN
+      v_where_clause := v_where_clause || ' AND mv.claim_key_id = ANY($2)';
+    ELSE
+      v_where_clause := v_where_clause || ' AND bab.claim_key_id = ANY($2)';
+    END IF;
   END IF;
   
   -- Facility filtering with scoping
   IF p_facility_codes IS NOT NULL AND array_length(p_facility_codes, 1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND mv.facility_id = ANY($3)';
+    IF p_use_mv THEN
+      v_where_clause := v_where_clause || ' AND mv.facility_id = ANY($3)';
+    ELSE
+      v_where_clause := v_where_clause || ' AND bab.facility_id = ANY($3)';
+    END IF;
   ELSE
     -- v_where_clause := v_where_clause || ' AND claims.check_user_facility_access($1, mv.facility_id, ''READ'')';
   END IF;
   
   -- Payer filtering (code)
   IF p_payer_codes IS NOT NULL AND array_length(p_payer_codes, 1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND mv.payer_id = ANY($4)';
+    IF p_use_mv THEN
+      v_where_clause := v_where_clause || ' AND mv.payer_id = ANY($4)';
+    ELSE
+      v_where_clause := v_where_clause || ' AND bab.payer_id = ANY($4)';
+    END IF;
   END IF;
   
   -- Receiver filtering
   IF p_receiver_ids IS NOT NULL AND array_length(p_receiver_ids, 1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND mv.payer_name = ANY($5)';
+    IF p_use_mv THEN
+      v_where_clause := v_where_clause || ' AND mv.payer_name = ANY($5)';
+    ELSE
+      v_where_clause := v_where_clause || ' AND bab.payer_name = ANY($5)';
+    END IF;
   END IF;
   
   -- Year filtering
   IF p_year IS NOT NULL THEN
-    v_where_clause := v_where_clause || ' AND EXTRACT(YEAR FROM mv.encounter_start) = $8';
+    IF p_use_mv THEN
+      v_where_clause := v_where_clause || ' AND EXTRACT(YEAR FROM mv.encounter_start) = $8';
+    ELSE
+      v_where_clause := v_where_clause || ' AND EXTRACT(YEAR FROM bab.encounter_start) = $8';
+    END IF;
   END IF;
   
   -- Month filtering
   IF p_month IS NOT NULL THEN
-    v_where_clause := v_where_clause || ' AND EXTRACT(MONTH FROM mv.encounter_start) = $9';
+    IF p_use_mv THEN
+      v_where_clause := v_where_clause || ' AND EXTRACT(MONTH FROM mv.encounter_start) = $9';
+    ELSE
+      v_where_clause := v_where_clause || ' AND EXTRACT(MONTH FROM bab.encounter_start) = $9';
+    END IF;
   END IF;
   
   -- Based on initial net amount filtering
   IF p_based_on_initial_net THEN
-    v_where_clause := v_where_clause || ' AND mv.initial_net > 0';
+    IF p_use_mv THEN
+      v_where_clause := v_where_clause || ' AND mv.initial_net > 0';
+    ELSE
+      v_where_clause := v_where_clause || ' AND bab.initial_net > 0';
+    END IF;
   END IF;
 
   -- Ref-id optional filters via EXISTS
   IF p_facility_ref_ids IS NOT NULL AND array_length(p_facility_ref_ids,1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE e.claim_id = mv.claim_internal_id AND rf.id = ANY($14))';
+    IF p_use_mv THEN
+      v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE e.claim_id = mv.claim_internal_id AND rf.id = ANY($14))';
+    ELSE
+      v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.encounter e JOIN claims_ref.facility rf ON e.facility_ref_id = rf.id WHERE e.claim_id = bab.claim_internal_id AND rf.id = ANY($14))';
+    END IF;
   END IF;
   IF p_payer_ref_ids IS NOT NULL AND array_length(p_payer_ref_ids,1) > 0 THEN
-    v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.claim c2 WHERE c2.id = mv.claim_internal_id AND c2.payer_ref_id = ANY($15))';
+    IF p_use_mv THEN
+      v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.claim c2 WHERE c2.id = mv.claim_internal_id AND c2.payer_ref_id = ANY($15))';
+    ELSE
+      v_where_clause := v_where_clause || ' AND EXISTS (SELECT 1 FROM claims.claim c2 WHERE c2.id = bab.claim_internal_id AND c2.payer_ref_id = ANY($15))';
+    END IF;
   END IF;
   
   -- Build ORDER BY clause with validation
@@ -612,62 +690,461 @@ BEGIN
   
   v_order_clause := 'ORDER BY ' || p_order_by || ' ' || p_order_direction;
   
-  -- Get total count using materialized view for sub-second performance
-  v_sql := FORMAT('
-    SELECT COUNT(*)
-    FROM claims.mv_balance_amount_summary mv
-    %s
-  ', v_where_clause);
+  -- OPTION 3: Execute query based on p_use_mv and p_tab_name parameters
+  -- WHY: Provides flexibility to choose between traditional views and MVs with tab-specific logic
+  -- HOW: Uses CASE statements to select appropriate data source and tab
   
-  EXECUTE v_sql
-  USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
-  INTO v_total_count;
-  
-  -- Return paginated results using materialized view for sub-second performance
-  v_sql := FORMAT('
-    SELECT 
-      mv.claim_key_id,
-      mv.claim_id,
-      mv.facility_id as facility_group_id,
-      mv.payer_name as health_authority,
-      mv.facility_id,
-      mv.facility_name,
-      mv.claim_id as claim_number,
-      mv.encounter_start as encounter_start_date,
-      mv.encounter_start as encounter_end_date,
-      EXTRACT(YEAR FROM mv.encounter_start) as encounter_start_year,
-      EXTRACT(MONTH FROM mv.encounter_start) as encounter_start_month,
-      mv.payer_id as id_payer,
-      ''N/A'' as patient_id,
-      ''N/A'' as member_id,
-      ''N/A'' as emirates_id_number,
-      mv.initial_net as billed_amount,
-      mv.total_payment as amount_received,
-      mv.total_denied as denied_amount,
-      mv.pending_amount as outstanding_balance,
-      mv.tx_at as submission_date,
-      ''N/A'' as submission_reference_file,
-      mv.current_status as claim_status,
-      mv.remittance_count,
-      mv.resubmission_count,
-      mv.aging_days,
-      CASE 
-        WHEN mv.aging_days <= 30 THEN ''0-30''
-        WHEN mv.aging_days <= 60 THEN ''31-60''
-        WHEN mv.aging_days <= 90 THEN ''61-90''
-        ELSE ''90+''
-      END as aging_bucket,
-      mv.current_status as current_claim_status,
-      mv.last_status_date,
-      %s as total_records
-    FROM claims.mv_balance_amount_summary mv
-    %s
-    %s
-    LIMIT $10 OFFSET $11
-  ', v_total_count, v_where_clause, v_order_clause);
-  
-  RETURN QUERY EXECUTE v_sql
-  USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids;
+  IF p_use_mv THEN
+    -- Use tab-specific MVs for sub-second performance
+    CASE p_tab_name
+      WHEN 'overall' THEN
+        -- Get total count from mv_balance_amount_overall
+        v_sql := FORMAT('
+          SELECT COUNT(*)
+          FROM claims.mv_balance_amount_overall mv
+          %s
+        ', v_where_clause);
+        
+        EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
+        INTO v_total_count;
+        
+        -- Return paginated results from mv_balance_amount_overall
+        v_sql := FORMAT('
+          SELECT 
+            mv.claim_key_id,
+            mv.claim_id,
+            mv.facility_id as facility_group_id,
+            mv.payer_name as health_authority,
+            mv.facility_id,
+            mv.facility_name,
+            mv.claim_id as claim_number,
+            mv.encounter_start as encounter_start_date,
+            mv.encounter_start as encounter_end_date,
+            EXTRACT(YEAR FROM mv.encounter_start) as encounter_start_year,
+            EXTRACT(MONTH FROM mv.encounter_start) as encounter_start_month,
+            mv.payer_id as id_payer,
+            ''N/A'' as patient_id,
+            ''N/A'' as member_id,
+            ''N/A'' as emirates_id_number,
+            mv.initial_net as billed_amount,
+            mv.total_payment as amount_received,
+            mv.total_denied as denied_amount,
+            mv.pending_amount as outstanding_balance,
+            mv.tx_at as submission_date,
+            ''N/A'' as submission_reference_file,
+            mv.current_status as claim_status,
+            mv.remittance_count,
+            mv.resubmission_count,
+            mv.aging_days,
+            CASE 
+              WHEN mv.aging_days <= 30 THEN ''0-30''
+              WHEN mv.aging_days <= 60 THEN ''31-60''
+              WHEN mv.aging_days <= 90 THEN ''61-90''
+              ELSE ''90+''
+            END as aging_bucket,
+            mv.current_status as current_claim_status,
+            mv.last_status_date,
+            %s as total_records
+          FROM claims.mv_balance_amount_overall mv
+          %s
+          %s
+          LIMIT $10 OFFSET $11
+        ', v_total_count, v_where_clause, v_order_clause);
+        
+        RETURN QUERY EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids;
+      
+      WHEN 'initial' THEN
+        -- Similar logic for initial tab
+        v_sql := FORMAT('
+          SELECT COUNT(*)
+          FROM claims.mv_balance_amount_initial mv
+          %s
+        ', v_where_clause);
+        
+        EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
+        INTO v_total_count;
+        
+        -- Return paginated results from mv_balance_amount_initial
+        v_sql := FORMAT('
+          SELECT 
+            mv.claim_key_id,
+            mv.claim_id,
+            mv.facility_id as facility_group_id,
+            mv.payer_name as health_authority,
+            mv.facility_id,
+            mv.facility_name,
+            mv.claim_id as claim_number,
+            mv.encounter_start as encounter_start_date,
+            mv.encounter_start as encounter_end_date,
+            EXTRACT(YEAR FROM mv.encounter_start) as encounter_start_year,
+            EXTRACT(MONTH FROM mv.encounter_start) as encounter_start_month,
+            mv.payer_id as id_payer,
+            ''N/A'' as patient_id,
+            ''N/A'' as member_id,
+            ''N/A'' as emirates_id_number,
+            mv.initial_net as billed_amount,
+            mv.total_payment as amount_received,
+            mv.total_denied as denied_amount,
+            mv.pending_amount as outstanding_balance,
+            mv.tx_at as submission_date,
+            ''N/A'' as submission_reference_file,
+            ''INITIAL_PENDING'' as claim_status,
+            mv.remittance_count,
+            mv.resubmission_count,
+            mv.aging_days,
+            CASE 
+              WHEN mv.aging_days <= 30 THEN ''0-30''
+              WHEN mv.aging_days <= 60 THEN ''31-60''
+              WHEN mv.aging_days <= 90 THEN ''61-90''
+              ELSE ''90+''
+            END as aging_bucket,
+            mv.current_status as current_claim_status,
+            mv.last_status_date,
+            %s as total_records
+          FROM claims.mv_balance_amount_initial mv
+          %s
+          %s
+          LIMIT $10 OFFSET $11
+        ', v_total_count, v_where_clause, v_order_clause);
+        
+        RETURN QUERY EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids;
+      
+      WHEN 'resubmission' THEN
+        -- Similar logic for resubmission tab
+        v_sql := FORMAT('
+          SELECT COUNT(*)
+          FROM claims.mv_balance_amount_resubmission mv
+          %s
+        ', v_where_clause);
+        
+        EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
+        INTO v_total_count;
+        
+        -- Return paginated results from mv_balance_amount_resubmission
+        v_sql := FORMAT('
+          SELECT 
+            mv.claim_key_id,
+            mv.claim_id,
+            mv.facility_id as facility_group_id,
+            mv.payer_name as health_authority,
+            mv.facility_id,
+            mv.facility_name,
+            mv.claim_id as claim_number,
+            mv.encounter_start as encounter_start_date,
+            mv.encounter_start as encounter_end_date,
+            EXTRACT(YEAR FROM mv.encounter_start) as encounter_start_year,
+            EXTRACT(MONTH FROM mv.encounter_start) as encounter_start_month,
+            mv.payer_id as id_payer,
+            ''N/A'' as patient_id,
+            ''N/A'' as member_id,
+            ''N/A'' as emirates_id_number,
+            mv.initial_net as billed_amount,
+            mv.total_payment as amount_received,
+            mv.total_denied as denied_amount,
+            mv.pending_amount as outstanding_balance,
+            mv.tx_at as submission_date,
+            ''N/A'' as submission_reference_file,
+            ''RESUBMITTED_PENDING'' as claim_status,
+            mv.remittance_count,
+            mv.resubmission_count,
+            mv.aging_days,
+            CASE 
+              WHEN mv.aging_days <= 30 THEN ''0-30''
+              WHEN mv.aging_days <= 60 THEN ''31-60''
+              WHEN mv.aging_days <= 90 THEN ''61-90''
+              ELSE ''90+''
+            END as aging_bucket,
+            mv.current_status as current_claim_status,
+            mv.last_status_date,
+            %s as total_records
+          FROM claims.mv_balance_amount_resubmission mv
+          %s
+          %s
+          LIMIT $10 OFFSET $11
+        ', v_total_count, v_where_clause, v_order_clause);
+        
+        RETURN QUERY EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids;
+      
+      ELSE
+        -- Default to overall
+        v_sql := FORMAT('
+          SELECT COUNT(*)
+          FROM claims.mv_balance_amount_overall mv
+          %s
+        ', v_where_clause);
+        
+        EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
+        INTO v_total_count;
+        
+        -- Return paginated results from mv_balance_amount_overall
+        v_sql := FORMAT('
+          SELECT 
+            mv.claim_key_id,
+            mv.claim_id,
+            mv.facility_id as facility_group_id,
+            mv.payer_name as health_authority,
+            mv.facility_id,
+            mv.facility_name,
+            mv.claim_id as claim_number,
+            mv.encounter_start as encounter_start_date,
+            mv.encounter_start as encounter_end_date,
+            EXTRACT(YEAR FROM mv.encounter_start) as encounter_start_year,
+            EXTRACT(MONTH FROM mv.encounter_start) as encounter_start_month,
+            mv.payer_id as id_payer,
+            ''N/A'' as patient_id,
+            ''N/A'' as member_id,
+            ''N/A'' as emirates_id_number,
+            mv.initial_net as billed_amount,
+            mv.total_payment as amount_received,
+            mv.total_denied as denied_amount,
+            mv.pending_amount as outstanding_balance,
+            mv.tx_at as submission_date,
+            ''N/A'' as submission_reference_file,
+            mv.current_status as claim_status,
+            mv.remittance_count,
+            mv.resubmission_count,
+            mv.aging_days,
+            CASE 
+              WHEN mv.aging_days <= 30 THEN ''0-30''
+              WHEN mv.aging_days <= 60 THEN ''31-60''
+              WHEN mv.aging_days <= 90 THEN ''61-90''
+              ELSE ''90+''
+            END as aging_bucket,
+            mv.current_status as current_claim_status,
+            mv.last_status_date,
+            %s as total_records
+          FROM claims.mv_balance_amount_overall mv
+          %s
+          %s
+          LIMIT $10 OFFSET $11
+        ', v_total_count, v_where_clause, v_order_clause);
+        
+        RETURN QUERY EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids;
+    END CASE;
+  ELSE
+    -- Use traditional views for real-time data
+    CASE p_tab_name
+      WHEN 'overall' THEN
+        -- Get total count from v_balance_amount_to_be_received
+        v_sql := FORMAT('
+          SELECT COUNT(*)
+          FROM claims.v_balance_amount_to_be_received bab
+          %s
+        ', v_where_clause);
+        
+        EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
+        INTO v_total_count;
+        
+        -- Return paginated results from v_balance_amount_to_be_received
+        v_sql := FORMAT('
+          SELECT 
+            bab.claim_key_id,
+            bab.claim_id,
+            bab.facility_group_id,
+            bab.health_authority,
+            bab.facility_id,
+            bab.facility_name,
+            bab.claim_number,
+            bab.encounter_start_date,
+            bab.encounter_end_date,
+            bab.encounter_start_year,
+            bab.encounter_start_month,
+            bab.id_payer,
+            bab.patient_id,
+            bab.member_id,
+            bab.emirates_id_number,
+            bab.billed_amount,
+            bab.amount_received,
+            bab.denied_amount,
+            bab.outstanding_balance,
+            bab.submission_date,
+            bab.submission_reference_file,
+            bab.claim_status,
+            bab.remittance_count,
+            bab.resubmission_count,
+            bab.aging_days,
+            bab.aging_bucket,
+            bab.current_claim_status,
+            bab.last_status_date,
+            %s as total_records
+          FROM claims.v_balance_amount_to_be_received bab
+          %s
+          %s
+          LIMIT $10 OFFSET $11
+        ', v_total_count, v_where_clause, v_order_clause);
+        
+        RETURN QUERY EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids;
+      
+      WHEN 'initial' THEN
+        -- Get total count from v_initial_not_remitted_balance
+        v_sql := FORMAT('
+          SELECT COUNT(*)
+          FROM claims.v_initial_not_remitted_balance bab
+          %s
+        ', v_where_clause);
+        
+        EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
+        INTO v_total_count;
+        
+        -- Return paginated results from v_initial_not_remitted_balance
+        v_sql := FORMAT('
+          SELECT 
+            bab.claim_key_id,
+            bab.claim_id,
+            bab.facility_group_id,
+            bab.health_authority,
+            bab.facility_id,
+            bab.facility_name,
+            bab.claim_number,
+            bab.encounter_start_date,
+            bab.encounter_end_date,
+            bab.encounter_start_year,
+            bab.encounter_start_month,
+            bab.id_payer,
+            bab.patient_id,
+            bab.member_id,
+            bab.emirates_id_number,
+            bab.billed_amount,
+            bab.amount_received,
+            bab.denied_amount,
+            bab.outstanding_balance,
+            bab.submission_date,
+            ''N/A'' as submission_reference_file,
+            bab.claim_status,
+            bab.remittance_count,
+            bab.resubmission_count,
+            bab.aging_days,
+            bab.aging_bucket,
+            ''N/A'' as current_claim_status,
+            NULL as last_status_date,
+            %s as total_records
+          FROM claims.v_initial_not_remitted_balance bab
+          %s
+          %s
+          LIMIT $10 OFFSET $11
+        ', v_total_count, v_where_clause, v_order_clause);
+        
+        RETURN QUERY EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids;
+      
+      WHEN 'resubmission' THEN
+        -- Get total count from v_after_resubmission_not_remitted_balance
+        v_sql := FORMAT('
+          SELECT COUNT(*)
+          FROM claims.v_after_resubmission_not_remitted_balance bab
+          %s
+        ', v_where_clause);
+        
+        EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
+        INTO v_total_count;
+        
+        -- Return paginated results from v_after_resubmission_not_remitted_balance
+        v_sql := FORMAT('
+          SELECT 
+            bab.claim_key_id,
+            bab.claim_id,
+            bab.facility_group_id,
+            bab.health_authority,
+            bab.facility_id,
+            bab.facility_name,
+            bab.claim_number,
+            bab.encounter_start_date,
+            bab.encounter_end_date,
+            bab.encounter_start_year,
+            bab.encounter_start_month,
+            bab.id_payer,
+            bab.patient_id,
+            bab.member_id,
+            bab.emirates_id_number,
+            bab.billed_amount,
+            bab.amount_received,
+            bab.denied_amount,
+            bab.outstanding_balance,
+            bab.submission_date,
+            ''N/A'' as submission_reference_file,
+            bab.claim_status,
+            bab.remittance_count,
+            bab.resubmission_count,
+            bab.aging_days,
+            bab.aging_bucket,
+            ''N/A'' as current_claim_status,
+            NULL as last_status_date,
+            %s as total_records
+          FROM claims.v_after_resubmission_not_remitted_balance bab
+          %s
+          %s
+          LIMIT $10 OFFSET $11
+        ', v_total_count, v_where_clause, v_order_clause);
+        
+        RETURN QUERY EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids;
+      
+      ELSE
+        -- Default to overall
+        v_sql := FORMAT('
+          SELECT COUNT(*)
+          FROM claims.v_balance_amount_to_be_received bab
+          %s
+        ', v_where_clause);
+        
+        EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids
+        INTO v_total_count;
+        
+        -- Return paginated results from v_balance_amount_to_be_received
+        v_sql := FORMAT('
+          SELECT 
+            bab.claim_key_id,
+            bab.claim_id,
+            bab.facility_group_id,
+            bab.health_authority,
+            bab.facility_id,
+            bab.facility_name,
+            bab.claim_number,
+            bab.encounter_start_date,
+            bab.encounter_end_date,
+            bab.encounter_start_year,
+            bab.encounter_start_month,
+            bab.id_payer,
+            bab.patient_id,
+            bab.member_id,
+            bab.emirates_id_number,
+            bab.billed_amount,
+            bab.amount_received,
+            bab.denied_amount,
+            bab.outstanding_balance,
+            bab.submission_date,
+            bab.submission_reference_file,
+            bab.claim_status,
+            bab.remittance_count,
+            bab.resubmission_count,
+            bab.aging_days,
+            bab.aging_bucket,
+            bab.current_claim_status,
+            bab.last_status_date,
+            %s as total_records
+          FROM claims.v_balance_amount_to_be_received bab
+          %s
+          %s
+          LIMIT $10 OFFSET $11
+        ', v_total_count, v_where_clause, v_order_clause);
+        
+        RETURN QUERY EXECUTE v_sql
+        USING p_user_id, p_claim_key_ids, p_facility_codes, p_payer_codes, p_receiver_ids, p_date_from, p_date_to, p_year, p_month, p_limit, p_offset, p_order_by, p_order_direction, p_facility_ref_ids, p_payer_ref_ids;
+    END CASE;
+  END IF;
 END;
 $$;
 

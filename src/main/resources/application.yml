@@ -15,6 +15,13 @@ spring:
           batch_size: 100
         order_inserts: true
         order_updates: true
+  # Cache configuration for reference data endpoints
+  cache:
+    type: redis  # Will auto-fallback to caffeine if Redis unavailable
+  redis:
+    host: localhost
+    port: 6379
+    timeout: 2000ms
 
 # Flyway stays off by default; enable in prod profile
 flyway:
@@ -46,6 +53,12 @@ logging:
     org.hibernate.orm.jdbc.bind: INFO
 
 claims:
+  # Cache configuration for reference data endpoints
+  cache:
+    enabled: true
+    ttl-minutes: 360  # 6 hours
+    max-entries: 10000
+    redis-enabled: true  # Toggle for Redis vs in-memory
   ingestion:
     mode: localfs
     stage-to-disk: false
@@ -139,6 +152,13 @@ claims:
       username: "admin"
       password: "admin123"
       email: "admin@claims.local"
+  
+  # OPTION 3: Hybrid approach with DB toggle for switching between traditional views and MVs
+  reports:
+    option3:
+      enabled: true                           # Enable Option 3 functionality
+      cache-ttl-ms: 300000                    # Toggle cache TTL (5 minutes)
+      fallback-to-traditional: true           # Fallback to traditional views if MVs fail
 
 # Parser defaults (used by ClaimXmlParserStax)
 claims.parser:

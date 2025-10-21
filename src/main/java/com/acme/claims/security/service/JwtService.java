@@ -44,6 +44,13 @@ public class JwtService {
         claims.put("facilities", user.getFacilityCodes());
         claims.put("primaryFacility", user.getPrimaryFacilityCode());
         
+        // TODO: When multi-tenancy is enabled, uncomment the following logic:
+        // When multi-tenancy is disabled, return empty facilities in JWT (no restrictions)
+        if (!securityProperties.getMultiTenancy().isEnabled()) {
+            claims.put("facilities", new String[0]); // Empty array means no restrictions
+            claims.put("primaryFacility", null); // No primary facility when multi-tenancy disabled
+        }
+        
         return createToken(claims, user.getUsername(), securityProperties.getJwt().getAccessTokenExpiration());
     }
     

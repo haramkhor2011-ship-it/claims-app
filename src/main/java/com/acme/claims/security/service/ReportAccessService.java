@@ -1,8 +1,10 @@
 package com.acme.claims.security.service;
 
 import com.acme.claims.security.ReportType;
+import com.acme.claims.security.entity.ReportsMetadata;
 import com.acme.claims.security.entity.User;
 import com.acme.claims.security.entity.UserReportPermission;
+import com.acme.claims.security.repository.ReportsMetadataRepository;
 import com.acme.claims.security.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -27,18 +30,19 @@ import java.util.stream.Collectors;
 public class ReportAccessService {
     
     private final UserRepository userRepository;
+    private final ReportsMetadataRepository reportsMetadataRepository;
     private final UserContextService userContextService;
     
     /**
      * Grant report access to a user
      * 
      * @param userId User ID to grant access to
-     * @param reportType Report type to grant access to
+     * @param reportCode Report code to grant access to
      * @param grantedBy User ID of the person granting access
      * @return true if access was granted successfully
      */
     @Transactional
-    public boolean grantReportAccess(Long userId, ReportType reportType, Long grantedBy) {
+    public boolean grantReportAccess(Long userId, String reportCode, Long grantedBy) {
         try {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new IllegalArgumentException("User not found with ID: " + userId));
@@ -46,20 +50,23 @@ public class ReportAccessService {
             User grantedByUser = userRepository.findById(grantedBy)
                     .orElseThrow(() -> new IllegalArgumentException("Granting user not found with ID: " + grantedBy));
 
+            ReportsMetadata reportMetadata = reportsMetadataRepository.findByReportCode(reportCode)
+                    .orElseThrow(() -> new IllegalArgumentException("Report not found with code: " + reportCode));
+
             // Check if user already has access to this report
             boolean alreadyHasAccess = user.getReportPermissions().stream()
-                    .anyMatch(permission -> permission.getReportType().equals(reportType));
+                    .anyMatch(permission -> permission.getReportMetadata().getReportCode().equals(reportCode));
 
             if (alreadyHasAccess) {
                 log.info("User {} (ID: {}) already has access to report: {}",
-                        user.getUsername(), userId, reportType);
+                        user.getUsername(), userId, reportCode);
                 return true;
             }
 
             // Grant access
             UserReportPermission permission = UserReportPermission.builder()
                     .user(user)
-                    .reportType(reportType)
+                    .reportMetadata(reportMetadata)
                     .grantedBy(grantedByUser)
                     .grantedAt(LocalDateTime.now())
                     .build();
@@ -68,13 +75,13 @@ public class ReportAccessService {
             userRepository.save(user);
             
             log.info("Report access granted - User: {} (ID: {}), Report: {}, GrantedBy: {}", 
-                    user.getUsername(), userId, reportType, grantedBy);
+                    user.getUsername(), userId, reportCode, grantedBy);
             
             return true;
             
         } catch (Exception e) {
             log.error("Error granting report access - UserID: {}, Report: {}, GrantedBy: {}", 
-                    userId, reportType, grantedBy, e);
+                    userId, reportCode, grantedBy, e);
             return false;
         }
     }
@@ -83,46 +90,57 @@ public class ReportAccessService {
      * Revoke report access from a user
      * 
      * @param userId User ID to revoke access from
-     * @param reportType Report type to revoke access to
+     * @param reportCode Report code to revoke access to
      * @param revokedBy User ID of the person revoking access
      * @return true if access was revoked successfully
      */
     @Transactional
-    public boolean revokeReportAccess(Long userId, ReportType reportType, Long revokedBy) {
+    public boolean revokeReportAccess(Long userId, String reportCode, Long revokedBy) {
         try {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new IllegalArgumentException("User not found with ID: " + userId));
             
             // Remove the permission
             boolean removed = user.getReportPermissions().removeIf(
-                    permission -> permission.getReportType().equals(reportType));
+                    permission -> permission.getReportMetadata().getReportCode().equals(reportCode));
             
             if (removed) {
                 userRepository.save(user);
                 log.info("Report access revoked - User: {} (ID: {}), Report: {}, RevokedBy: {}", 
-                        user.getUsername(), userId, reportType, revokedBy);
+                        user.getUsername(), userId, reportCode, revokedBy);
                 return true;
             } else {
                 log.info("User {} (ID: {}) did not have access to report: {}", 
-                        user.getUsername(), userId, reportType);
+                        user.getUsername(), userId, reportCode);
                 return false;
             }
             
         } catch (Exception e) {
             log.error("Error revoking report access - UserID: {}, Report: {}, RevokedBy: {}", 
-                    userId, reportType, revokedBy, e);
+                    userId, reportCode, revokedBy, e);
             return false;
         }
     }
     
     /**
-     * Check if a user has access to a specific report type
+     * Check if a user has access to a specific report type (backward compatibility)
      * 
      * @param userId User ID to check
      * @param reportType Report type to check
      * @return true if user has access
      */
     public boolean hasReportAccess(Long userId, ReportType reportType) {
+        return hasReportAccess(userId, reportType.name());
+    }
+    
+    /**
+     * Check if a user has access to a specific report code
+     * 
+     * @param userId User ID to check
+     * @param reportCode Report code to check
+     * @return true if user has access
+     */
+    public boolean hasReportAccess(Long userId, String reportCode) {
         try {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new IllegalArgumentException("User not found with ID: " + userId));
@@ -131,52 +149,59 @@ public class ReportAccessService {
             if (user.hasRole(com.acme.claims.security.Role.SUPER_ADMIN) || 
                 user.hasRole(com.acme.claims.security.Role.FACILITY_ADMIN)) {
                 log.debug("Admin user {} (ID: {}) has access to all reports including: {}", 
-                        user.getUsername(), userId, reportType);
+                        user.getUsername(), userId, reportCode);
                 return true;
+            }
+            
+            // Check if report exists and is active
+            Optional<ReportsMetadata> reportMetadata = reportsMetadataRepository.findByReportCode(reportCode);
+            if (reportMetadata.isEmpty() || !reportMetadata.get().isActive()) {
+                log.debug("Report {} not found or inactive for user {} (ID: {})", 
+                        reportCode, user.getUsername(), userId);
+                return false;
             }
             
             // Check specific report permissions
             boolean hasAccess = user.getReportPermissions().stream()
-                    .anyMatch(permission -> permission.getReportType().equals(reportType));
+                    .anyMatch(permission -> permission.getReportMetadata().getReportCode().equals(reportCode));
             
             log.debug("Report access check - User: {} (ID: {}), Report: {}, HasAccess: {}", 
-                    user.getUsername(), userId, reportType, hasAccess);
+                    user.getUsername(), userId, reportCode, hasAccess);
             
             return hasAccess;
             
         } catch (Exception e) {
-            log.error("Error checking report access - UserID: {}, Report: {}", userId, reportType, e);
+            log.error("Error checking report access - UserID: {}, Report: {}", userId, reportCode, e);
             return false; // Deny access on error for security
         }
     }
     
     /**
-     * Get all report types a user has access to
+     * Get all active report metadata a user has access to
      * 
      * @param userId User ID to check
-     * @return Set of report types the user can access
+     * @return Set of active report metadata the user can access
      */
-    public Set<ReportType> getUserReportAccess(Long userId) {
+    public Set<ReportsMetadata> getUserReportAccess(Long userId) {
         try {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new IllegalArgumentException("User not found with ID: " + userId));
             
-            // Super admin and facility admin have access to all reports
+            // Super admin and facility admin have access to all active reports
             if (user.hasRole(com.acme.claims.security.Role.SUPER_ADMIN) || 
                 user.hasRole(com.acme.claims.security.Role.FACILITY_ADMIN)) {
-                Set<ReportType> allReports = Set.of(ReportType.values());
-                log.debug("Admin user {} (ID: {}) has access to all reports: {}", 
-                        user.getUsername(), userId, allReports);
-                return allReports;
+                Set<ReportsMetadata> allActiveReports = reportsMetadataRepository.findAllActiveReports()
+                        .stream().collect(Collectors.toSet());
+                log.debug("Admin user {} (ID: {}) has access to all active reports: {}", 
+                        user.getUsername(), userId, allActiveReports.size());
+                return allActiveReports;
             }
             
-            // Get specific report permissions
-            Set<ReportType> userReports = user.getReportPermissions().stream()
-                    .map(UserReportPermission::getReportType)
-                    .collect(Collectors.toSet());
+            // Get specific report permissions (only active reports)
+            Set<ReportsMetadata> userReports = user.getActiveReportMetadata();
             
             log.debug("User report access - User: {} (ID: {}), Reports: {}", 
-                    user.getUsername(), userId, userReports);
+                    user.getUsername(), userId, userReports.size());
             
             return userReports;
             
@@ -187,12 +212,12 @@ public class ReportAccessService {
     }
     
     /**
-     * Get all users who have access to a specific report type
+     * Get all users who have access to a specific report code
      * 
-     * @param reportType Report type to check
+     * @param reportCode Report code to check
      * @return List of users with access to the report
      */
-    public List<User> getUsersWithReportAccess(ReportType reportType) {
+    public List<User> getUsersWithReportAccess(String reportCode) {
         try {
             List<User> allUsers = userRepository.findAll();
             
@@ -206,16 +231,16 @@ public class ReportAccessService {
                         
                         // Check specific report permissions
                         return user.getReportPermissions().stream()
-                                .anyMatch(permission -> permission.getReportType().equals(reportType));
+                                .anyMatch(permission -> permission.getReportMetadata().getReportCode().equals(reportCode));
                     })
                     .collect(Collectors.toList());
             
-            log.info("Found {} users with access to report: {}", usersWithAccess.size(), reportType);
+            log.info("Found {} users with access to report: {}", usersWithAccess.size(), reportCode);
             
             return usersWithAccess;
             
         } catch (Exception e) {
-            log.error("Error getting users with report access - Report: {}", reportType, e);
+            log.error("Error getting users with report access - Report: {}", reportCode, e);
             return List.of();
         }
     }
@@ -224,22 +249,22 @@ public class ReportAccessService {
      * Grant multiple report access permissions to a user
      * 
      * @param userId User ID to grant access to
-     * @param reportTypes Set of report types to grant access to
+     * @param reportCodes Set of report codes to grant access to
      * @param grantedBy User ID of the person granting access
      * @return Number of permissions granted
      */
     @Transactional
-    public int grantMultipleReportAccess(Long userId, Set<ReportType> reportTypes, Long grantedBy) {
+    public int grantMultipleReportAccess(Long userId, Set<String> reportCodes, Long grantedBy) {
         int grantedCount = 0;
         
-        for (ReportType reportType : reportTypes) {
-            if (grantReportAccess(userId, reportType, grantedBy)) {
+        for (String reportCode : reportCodes) {
+            if (grantReportAccess(userId, reportCode, grantedBy)) {
                 grantedCount++;
             }
         }
         
         log.info("Granted {} out of {} report permissions to user ID: {}", 
-                grantedCount, reportTypes.size(), userId);
+                grantedCount, reportCodes.size(), userId);
         
         return grantedCount;
     }
@@ -283,8 +308,8 @@ public class ReportAccessService {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new IllegalArgumentException("User not found with ID: " + userId));
             
-            Set<ReportType> accessibleReports = getUserReportAccess(userId);
-            Set<ReportType> allReports = Set.of(ReportType.values());
+            Set<ReportsMetadata> accessibleReports = getUserReportAccess(userId);
+            List<ReportsMetadata> allActiveReports = reportsMetadataRepository.findAllActiveReports();
             
             java.util.Map<String, Object> summary = new java.util.HashMap<>();
             summary.put("userId", userId);
@@ -293,9 +318,9 @@ public class ReportAccessService {
             summary.put("isFacilityAdmin", user.hasRole(com.acme.claims.security.Role.FACILITY_ADMIN));
             summary.put("isStaff", user.hasRole(com.acme.claims.security.Role.STAFF));
             summary.put("accessibleReports", accessibleReports);
-            summary.put("totalReports", allReports.size());
+            summary.put("totalActiveReports", allActiveReports.size());
             summary.put("accessibleCount", accessibleReports.size());
-            summary.put("hasAllReports", accessibleReports.containsAll(allReports));
+            summary.put("hasAllReports", accessibleReports.size() == allActiveReports.size());
             
             log.debug("Report access summary generated for user: {} (ID: {})", 
                     user.getUsername(), userId);

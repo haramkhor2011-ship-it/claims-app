@@ -1,5 +1,6 @@
 package com.acme.claims.service;
 
+import com.acme.claims.soap.db.ToggleRepo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -25,6 +26,7 @@ import java.util.*;
 public class RejectedClaimsReportService {
 
     private final DataSource dataSource;
+    private final ToggleRepo toggleRepo;
 
     public List<Map<String, Object>> getSummaryTabData(
             String userId,
@@ -41,47 +43,34 @@ public class RejectedClaimsReportService {
             Integer size,
             List<Long> facilityRefIds,
             List<Long> payerRefIds,
-            List<Long> clinicianRefIds) {
+            List<Long> clinicianRefIds    ) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Rejected Claims Report - useMv: {}", useMv);
 
-        // Use optimized materialized view for sub-second performance
+        // Use Option 3 function with dynamic data source selection
         String sql = """
-            SELECT 
-                facility_id,
-                facility_name,
-                claim_year,
-                claim_month_name,
-                payer_id,
-                payer_name,
-                total_claim,
-                claim_amt,
-                remitted_claim,
-                remitted_amt,
-                rejected_claim,
-                rejected_amt,
-                pending_remittance,
-                pending_remittance_amt,
-                rejected_percentage_remittance,
-                rejected_percentage_submission,
-                claim_id,
-                member_id,
-                emirates_id_number,
-                claim_amt_detail,
-                remitted_amt_detail,
-                rejected_amt_detail,
-                rejection_type,
-                activity_start_date,
-                activity_code,
-                activity_denial_code,
-                denial_type,
-                clinician_name,
-                ageing_days,
-                current_status,
-                resubmission_type,
-                submission_file_id,
-                remittance_file_id
-            FROM claims.mv_rejected_claims_summary mv
-            WHERE 1=1
-            """;
+            SELECT * FROM claims.get_rejected_claims_summary(
+                p_use_mv := ?,
+                p_tab_name := 'summary',
+                p_user_id := ?,
+                p_facility_codes := ?,
+                p_payer_codes := ?,
+                p_receiver_ids := ?,
+                p_from_date := ?,
+                p_to_date := ?,
+                p_year := ?,
+                p_month := ?,
+                p_sort_by := ?,
+                p_sort_direction := ?,
+                p_limit := ?,
+                p_offset := ?,
+                p_facility_ref_ids := ?,
+                p_payer_ref_ids := ?,
+                p_clinician_ref_ids := ?
+            )
+        """;
 
         int limit = page != null && size != null && page >= 0 && size != null && size > 0 ? size : 1000;
         int offset = page != null && size != null && page >= 0 && size != null && size > 0 ? page * size : 0;
@@ -91,64 +80,27 @@ public class RejectedClaimsReportService {
 
         List<Map<String, Object>> results = new ArrayList<>();
 
-        // Build WHERE clause dynamically
-        StringBuilder whereClause = new StringBuilder();
-        List<Object> parameters = new ArrayList<>();
-        
-        if (facilityCodes != null && !facilityCodes.isEmpty()) {
-            whereClause.append(" AND mv.facility_id = ANY(?)");
-            parameters.add(facilityCodes.toArray(new String[0]));
-        }
-        if (payerCodes != null && !payerCodes.isEmpty()) {
-            whereClause.append(" AND mv.payer_id = ANY(?)");
-            parameters.add(payerCodes.toArray(new String[0]));
-        }
-        if (receiverIds != null && !receiverIds.isEmpty()) {
-            whereClause.append(" AND mv.payer_name = ANY(?)");
-            parameters.add(receiverIds.toArray(new String[0]));
-        }
-        if (fromDate != null) {
-            whereClause.append(" AND mv.activity_start_date >= ?");
-            parameters.add(fromDate);
-        }
-        if (toDate != null) {
-            whereClause.append(" AND mv.activity_start_date <= ?");
-            parameters.add(toDate);
-        }
-        if (year != null) {
-            whereClause.append(" AND mv.report_year = ?");
-            parameters.add(year);
-        }
-        if (month != null) {
-            whereClause.append(" AND mv.report_month_num = ?");
-            parameters.add(month);
-        }
-        if (facilityRefIds != null && !facilityRefIds.isEmpty()) {
-            whereClause.append(" AND mv.facility_ref_id = ANY(?)");
-            parameters.add(facilityRefIds.toArray(new Long[0]));
-        }
-        if (payerRefIds != null && !payerRefIds.isEmpty()) {
-            whereClause.append(" AND mv.payer_ref_id = ANY(?)");
-            parameters.add(payerRefIds.toArray(new Long[0]));
-        }
-        if (clinicianRefIds != null && !clinicianRefIds.isEmpty()) {
-            whereClause.append(" AND mv.clinician_ref_id = ANY(?)");
-            parameters.add(clinicianRefIds.toArray(new Long[0]));
-        }
-        
-        // Add ORDER BY and pagination
-        String orderByClause = " ORDER BY " + safeOrderBy + " " + safeDirection;
-        String paginationClause = " LIMIT " + limit + " OFFSET " + offset;
-        
-        sql += whereClause.toString() + orderByClause + paginationClause;
-
         try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             int i = 1;
-            for (Object param : parameters) {
-                stmt.setObject(i++, param);
-            }
+            // OPTION 3: Set useMv and tabName parameters first
+            stmt.setBoolean(i++, useMv);
+            stmt.setString(i++, userId);
+            setTextArrayParam(conn, stmt, i++, facilityCodes);
+            setTextArrayParam(conn, stmt, i++, payerCodes);
+            setTextArrayParam(conn, stmt, i++, receiverIds);
+            stmt.setObject(i++, fromDate);
+            stmt.setObject(i++, toDate);
+            stmt.setObject(i++, year);
+            stmt.setObject(i++, month);
+            stmt.setString(i++, safeOrderBy);
+            stmt.setString(i++, safeDirection);
+            stmt.setInt(i++, limit);
+            stmt.setInt(i++, offset);
+            setBigintArrayParam(conn, stmt, i++, facilityRefIds);
+            setBigintArrayParam(conn, stmt, i++, payerRefIds);
+            setBigintArrayParam(conn, stmt, i++, clinicianRefIds);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
@@ -215,24 +167,30 @@ public class RejectedClaimsReportService {
             List<Long> facilityRefIds,
             List<Long> payerRefIds,
             List<Long> clinicianRefIds) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Rejected Claims Receiver Payer - useMv: {}", useMv);
 
         String sql = """
             SELECT * FROM claims.get_rejected_claims_receiver_payer(
-              ?::text,
-              ?::text[],
-              ?::text[],
-              ?::text[],
-              ?::timestamptz,
-              ?::timestamptz,
-              ?::integer,
-              ?::text[],
-              ?::integer,
-              ?::integer,
-              ?::text,
-              ?::text,
-              ?::bigint[],
-              ?::bigint[],
-              ?::bigint[]
+              p_use_mv := ?,
+              p_tab_name := 'receiver_payer',
+              p_user_id := ?::text,
+              p_facility_codes := ?::text[],
+              p_payer_codes := ?::text[],
+              p_receiver_ids := ?::text[],
+              p_from_date := ?::timestamptz,
+              p_to_date := ?::timestamptz,
+              p_year := ?::integer,
+              p_denial_codes := ?::text[],
+              p_limit := ?::integer,
+              p_offset := ?::integer,
+              p_sort_by := ?::text,
+              p_sort_direction := ?::text,
+              p_facility_ref_ids := ?::bigint[],
+              p_payer_ref_ids := ?::bigint[],
+              p_clinician_ref_ids := ?::bigint[]
             )
         """;
 
@@ -248,6 +206,8 @@ public class RejectedClaimsReportService {
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             int i = 1;
+            // OPTION 3: Set useMv and tabName parameters first
+            stmt.setBoolean(i++, useMv);
             stmt.setString(i++, userId);
             setTextArrayParam(conn, stmt, i++, facilityCodes);
             setTextArrayParam(conn, stmt, i++, payerCodes);
@@ -314,24 +274,30 @@ public class RejectedClaimsReportService {
             List<Long> facilityRefIds,
             List<Long> payerRefIds,
             List<Long> clinicianRefIds) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Rejected Claims Claim Wise - useMv: {}", useMv);
 
         String sql = """
             SELECT * FROM claims.get_rejected_claims_claim_wise(
-              ?::text,
-              ?::text[],
-              ?::text[],
-              ?::text[],
-              ?::timestamptz,
-              ?::timestamptz,
-              ?::integer,
-              ?::text[],
-              ?::integer,
-              ?::integer,
-              ?::text,
-              ?::text,
-              ?::bigint[],
-              ?::bigint[],
-              ?::bigint[]
+              p_use_mv := ?,
+              p_tab_name := 'claim_wise',
+              p_user_id := ?::text,
+              p_facility_codes := ?::text[],
+              p_payer_codes := ?::text[],
+              p_receiver_ids := ?::text[],
+              p_from_date := ?::timestamptz,
+              p_to_date := ?::timestamptz,
+              p_year := ?::integer,
+              p_denial_codes := ?::text[],
+              p_limit := ?::integer,
+              p_offset := ?::integer,
+              p_sort_by := ?::text,
+              p_sort_direction := ?::text,
+              p_facility_ref_ids := ?::bigint[],
+              p_payer_ref_ids := ?::bigint[],
+              p_clinician_ref_ids := ?::bigint[]
             )
         """;
 
@@ -347,6 +313,8 @@ public class RejectedClaimsReportService {
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             int i = 1;
+            // OPTION 3: Set useMv and tabName parameters first
+            stmt.setBoolean(i++, useMv);
             stmt.setString(i++, userId);
             setTextArrayParam(conn, stmt, i++, facilityCodes);
             setTextArrayParam(conn, stmt, i++, payerCodes);

@@ -74,36 +74,40 @@ SELECT
     e.facility_ref_id as facility_ref_id,
     f.name as facility_name,
     f.facility_code as facility_group,
-    COALESCE(py.payer_code, 'Unknown') as health_authority,
-    COALESCE(c.payer_ref_id, rc.payer_ref_id) as payer_ref_id,
+    -- Aggregate payer information across all payers for this clinician-facility-month
+    STRING_AGG(DISTINCT COALESCE(py.payer_code, 'Unknown'), ', ') as health_authority,
+    -- Use the most common payer_ref_id for this combination
+    MODE() WITHIN GROUP (ORDER BY COALESCE(c.payer_ref_id, rc.payer_ref_id)) as payer_ref_id,
 
     -- Date filtering context
     DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)) as report_month,
     EXTRACT(YEAR FROM COALESCE(rc.date_settlement, c.tx_at)) as report_year,
     EXTRACT(MONTH FROM COALESCE(rc.date_settlement, c.tx_at)) as report_month_num,
 
-    -- Claim Counts (COMPREHENSIVE)
+    -- Claim Counts (CUMULATIVE-WITH-CAP: Using pre-computed activity status)
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     COUNT(DISTINCT ck.claim_id) as total_claims,
-    COUNT(DISTINCT CASE WHEN ra.id IS NOT NULL THEN ck.claim_id END) as remitted_claims,
-    COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ck.claim_id END) as rejected_claims,
-    COUNT(DISTINCT CASE WHEN rc.date_settlement IS NULL THEN ck.claim_id END) as pending_remittance_claims,
+    COUNT(DISTINCT CASE WHEN cas.activity_status IN ('FULLY_PAID', 'PARTIALLY_PAID') THEN ck.claim_id END) as remitted_claims,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN ck.claim_id END) as rejected_claims,
+    COUNT(DISTINCT CASE WHEN cas.activity_status = 'PENDING' THEN ck.claim_id END) as pending_remittance_claims,
 
-    -- Amount Metrics (COMPREHENSIVE)
+    -- Amount Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
     SUM(a.net) as total_claim_amount,
-    SUM(COALESCE(ra.payment_amount, 0)) as remitted_amount,
-    SUM(CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) as rejected_amount,
-    SUM(CASE WHEN rc.date_settlement IS NULL THEN a.net ELSE 0 END) as pending_remittance_amount,
+    SUM(COALESCE(cas.paid_amount, 0)) as remitted_amount,                    -- capped paid across remittances
+    SUM(COALESCE(cas.denied_amount, 0)) as rejected_amount,                 -- denied only when latest denial and zero paid
+    SUM(CASE WHEN cas.activity_status = 'PENDING' THEN a.net ELSE 0 END) as pending_remittance_amount,
 
-    -- Calculated Metrics (COMPREHENSIVE)
+    -- Calculated Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity status)
     CASE
         WHEN COUNT(DISTINCT ck.claim_id) > 0 THEN
-            ROUND((COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ck.claim_id END) * 100.0) / COUNT(DISTINCT ck.claim_id), 2)
+            ROUND((COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN ck.claim_id END) * 100.0) / COUNT(DISTINCT ck.claim_id), 2)
         ELSE 0
     END as rejection_percentage,
 
     CASE
         WHEN SUM(a.net) > 0 THEN
-            ROUND((SUM(COALESCE(ra.payment_amount, 0)) / SUM(a.net)) * 100, 2)
+            ROUND((SUM(COALESCE(cas.paid_amount, 0)) / SUM(a.net)) * 100, 2)
         ELSE 0
     END as collection_rate,
 
@@ -126,6 +130,10 @@ LEFT JOIN claims.encounter e ON e.claim_id = c.id
 LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
 LEFT JOIN claims.activity a ON a.claim_id = c.id
 LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
+-- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+-- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id AND cas.activity_id = a.activity_id
+-- Keep legacy join for backward compatibility (if needed for other calculations)
 LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
 LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
@@ -140,8 +148,6 @@ GROUP BY
     e.facility_ref_id,
     f.name,
     f.facility_code,
-    COALESCE(py.payer_code, 'Unknown'),
-    COALESCE(c.payer_ref_id, rc.payer_ref_id),
     DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)),
     EXTRACT(YEAR FROM COALESCE(rc.date_settlement, c.tx_at)),
     EXTRACT(MONTH FROM COALESCE(rc.date_settlement, c.tx_at))
@@ -169,8 +175,10 @@ SELECT
     e.facility_ref_id as facility_ref_id,
     f.name as facility_name,
     f.facility_code as facility_group,
-    COALESCE(py.payer_code, 'Unknown') as health_authority,
-    COALESCE(c.payer_ref_id, rc.payer_ref_id) as payer_ref_id,
+    -- Aggregate payer information across all payers for this clinician-facility-month
+    STRING_AGG(DISTINCT COALESCE(py.payer_code, 'Unknown'), ', ') as health_authority,
+    -- Use the most common payer_ref_id for this combination
+    MODE() WITHIN GROUP (ORDER BY COALESCE(c.payer_ref_id, rc.payer_ref_id)) as payer_ref_id,
 
     -- Date filtering context
     DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)) as report_month,
@@ -210,16 +218,18 @@ SELECT
     ) top
     JOIN claims_ref.payer p2 ON p2.id = top.payer_ref_id) as top_payer_code,
 
-    -- Calculated Metrics (AGGREGATED)
+    -- Calculated Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     CASE
         WHEN COUNT(DISTINCT ck.claim_id) > 0 THEN
-            ROUND((COUNT(DISTINCT CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ck.claim_id END) * 100.0) / COUNT(DISTINCT ck.claim_id), 2)
+            ROUND((COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN ck.claim_id END) * 100.0) / COUNT(DISTINCT ck.claim_id), 2)
         ELSE 0
     END as rejection_percentage,
 
     CASE
-        WHEN SUM(a.net) > 0 THEN
-            ROUND((SUM(COALESCE(ra.payment_amount, 0)) / SUM(a.net)) * 100, 2)
+        WHEN SUM(COALESCE(cas.submitted_amount, a.net)) > 0 THEN
+            ROUND((SUM(COALESCE(cas.paid_amount, 0)) / SUM(COALESCE(cas.submitted_amount, a.net))) * 100, 2)
         ELSE 0
     END as collection_rate,
 
@@ -244,6 +254,9 @@ LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
 LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
 LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
+-- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+-- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id AND cas.activity_id = a.activity_id
 LEFT JOIN claims_ref.payer py ON py.id = COALESCE(c.payer_ref_id, rc.payer_ref_id)
 
 GROUP BY
@@ -256,8 +269,6 @@ GROUP BY
     e.facility_ref_id,
     f.name,
     f.facility_code,
-    COALESCE(py.payer_code, 'Unknown'),
-    COALESCE(c.payer_ref_id, rc.payer_ref_id),
     DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at)),
     EXTRACT(YEAR FROM COALESCE(rc.date_settlement, c.tx_at)),
     EXTRACT(MONTH FROM COALESCE(rc.date_settlement, c.tx_at))
@@ -308,13 +319,15 @@ SELECT
     f.name as facility_name,
     f.facility_code as facility_group,
 
-    -- Remittance Information
+    -- Remittance Information (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     rc.id as remittance_claim_id,
     rc.payment_reference,
     rc.date_settlement,
-    COALESCE(ra.payment_amount, 0) as remitted_amount,
-    CASE WHEN ra.payment_amount = 0 OR ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END as rejected_amount,
-    CASE WHEN rc.date_settlement IS NULL THEN c.net ELSE 0 END as pending_remittance_amount,
+    COALESCE(cas.paid_amount, 0) as remitted_amount,                    -- capped paid across remittances
+    COALESCE(cas.denied_amount, 0) as rejected_amount,                 -- denied only when latest denial and zero paid
+    CASE WHEN cas.activity_status = 'PENDING' THEN c.net ELSE 0 END as pending_remittance_amount,
 
     -- Activity Information
     a.start_at as activity_start_date,
@@ -339,6 +352,10 @@ LEFT JOIN claims.encounter e ON e.claim_id = c.id
 LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
 LEFT JOIN claims.activity a ON a.claim_id = c.id
 LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
+-- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+-- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id AND cas.activity_id = a.activity_id
+-- Keep legacy join for backward compatibility (if needed for other calculations)
 LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
 LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
@@ -355,6 +372,8 @@ COMMENT ON VIEW claims.v_doctor_denial_detail IS 'Doctor Denial Report - Tab C: 
 -- FUNCTION: get_doctor_denial_report (Complex filtering for all tabs)
 -- ==========================================================================================================
 CREATE OR REPLACE FUNCTION claims.get_doctor_denial_report(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'high_denial',
     p_facility_code TEXT DEFAULT NULL,
     p_clinician_code TEXT DEFAULT NULL,
     p_from_date TIMESTAMPTZ DEFAULT NULL,
@@ -428,26 +447,30 @@ CREATE OR REPLACE FUNCTION claims.get_doctor_denial_report(
     remittance_date TIMESTAMPTZ
 ) AS $$
 BEGIN
-    -- Determine which view to query based on tab parameter
-    CASE p_tab
-        WHEN 'high_denial' THEN
-            RETURN QUERY
-            -- Use materialized view for sub-second performance
-            SELECT
-                mv.clinician_id,
-                mv.clinician_name,
-                mv.clinician_specialty,
-                mv.facility_id,
-                mv.facility_name,
-                mv.facility_group,
-                mv.health_authority,
-                mv.report_month,
-                mv.report_year,
-                mv.report_month_num,
-                mv.total_claims,
-                mv.remitted_claims,
-                mv.rejected_claims,
-                mv.pending_remittance_claims,
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use tab-specific MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'high_denial' THEN
+                RETURN QUERY
+                SELECT
+                    mv.clinician_id,
+                    mv.clinician_name,
+                    mv.clinician_specialty,
+                    mv.facility_id,
+                    mv.facility_name,
+                    mv.facility_group,
+                    mv.health_authority,
+                    mv.report_month,
+                    mv.report_year,
+                    mv.report_month_num,
+                    mv.total_claims,
+                    mv.remitted_claims,
+                    mv.rejected_claims,
+                    mv.pending_remittance_claims,
                 mv.total_claim_amount,
                 mv.remitted_amount,
                 mv.rejected_amount,
@@ -643,7 +666,224 @@ BEGIN
                 p_year, p_month, p_facility_ref_id, p_clinician_ref_id, p_payer_ref_id,
                 'high_denial', p_limit, p_offset
             );
-    END CASE;
+        END CASE;
+    ELSE
+        -- Use traditional views for backward compatibility
+        CASE p_tab_name
+            WHEN 'high_denial' THEN
+                RETURN QUERY
+                SELECT
+                    vddh.clinician_id,
+                    vddh.clinician_name,
+                    vddh.clinician_specialty,
+                    vddh.facility_id,
+                    vddh.facility_name,
+                    vddh.facility_group,
+                    vddh.health_authority,
+                    vddh.report_month,
+                    vddh.report_year,
+                    vddh.report_month_num,
+                    vddh.total_claims,
+                    vddh.remitted_claims,
+                    vddh.rejected_claims,
+                    vddh.pending_remittance_claims,
+                    vddh.total_claim_amount,
+                    vddh.remitted_amount,
+                    vddh.rejected_amount,
+                    vddh.pending_remittance_amount,
+                    vddh.rejection_percentage,
+                    vddh.collection_rate,
+                    vddh.avg_claim_value,
+                    NULL::NUMERIC(14,2) as net_balance,
+                    NULL::TEXT as top_payer_code,
+                    vddh.unique_providers,
+                    vddh.unique_patients,
+                    vddh.earliest_submission,
+                    vddh.latest_submission,
+                    vddh.avg_processing_days,
+                    NULL::TEXT as claim_id,
+                    NULL::BIGINT as claim_db_id,
+                    NULL::TEXT as payer_id,
+                    NULL::TEXT as provider_id,
+                    NULL::TEXT as member_id,
+                    NULL::TEXT as emirates_id_number,
+                    NULL::TEXT as patient_id,
+                    NULL::NUMERIC(14,2) as claim_amount,
+                    NULL::TEXT as provider_name,
+                    NULL::TEXT as receiver_id,
+                    NULL::TEXT as payer_name,
+                    NULL::TEXT as payer_code,
+                    NULL::TEXT as id_payer,
+                    NULL::TEXT as claim_activity_number,
+                    NULL::TIMESTAMPTZ as activity_start_date,
+                    NULL::TEXT as activity_type,
+                    NULL::TEXT as cpt_code,
+                    NULL::NUMERIC(14,2) as quantity,
+                    NULL::BIGINT as remittance_claim_id,
+                    NULL::TEXT as payment_reference,
+                    NULL::TIMESTAMPTZ as date_settlement,
+                    NULL::TIMESTAMPTZ as submission_date,
+                    NULL::TIMESTAMPTZ as remittance_date
+                FROM claims.v_doctor_denial_high_denial vddh
+                WHERE
+                    (p_facility_code IS NULL OR vddh.facility_id = p_facility_code)
+                    AND (p_clinician_code IS NULL OR vddh.clinician_id = p_clinician_code)
+                    AND (p_facility_ref_id IS NULL OR vddh.facility_ref_id = p_facility_ref_id)
+                    AND (p_clinician_ref_id IS NULL OR vddh.clinician_ref_id = p_clinician_ref_id)
+                    AND (p_payer_ref_id IS NULL OR vddh.payer_ref_id = p_payer_ref_id)
+                    AND (p_from_date IS NULL OR vddh.report_month >= DATE_TRUNC('month', p_from_date))
+                    AND (p_to_date IS NULL OR vddh.report_month <= DATE_TRUNC('month', p_to_date))
+                    AND (p_year IS NULL OR vddh.report_year = p_year)
+                    AND (p_month IS NULL OR vddh.report_month_num = p_month)
+                ORDER BY vddh.rejection_percentage DESC, vddh.total_claims DESC
+                LIMIT p_limit OFFSET p_offset;
+
+            WHEN 'summary' THEN
+                RETURN QUERY
+                SELECT
+                    vds.clinician_id,
+                    vds.clinician_name,
+                    vds.clinician_specialty,
+                    vds.facility_id,
+                    vds.facility_name,
+                    vds.facility_group,
+                    vds.health_authority,
+                    vds.report_month,
+                    vds.report_year,
+                    vds.report_month_num,
+                    vds.total_claims,
+                    vds.remitted_claims,
+                    vds.rejected_claims,
+                    vds.pending_remittance_claims,
+                    vds.total_claim_amount,
+                    vds.remitted_amount,
+                    vds.rejected_amount,
+                    vds.pending_remittance_amount,
+                    vds.rejection_percentage,
+                    vds.collection_rate,
+                    vds.avg_claim_value,
+                    vds.net_balance,
+                    vds.top_payer_code,
+                    vds.unique_providers,
+                    vds.unique_patients,
+                    vds.earliest_submission,
+                    vds.latest_submission,
+                    NULL::NUMERIC(5,2) as avg_processing_days,
+                    NULL::TEXT as claim_id,
+                    NULL::BIGINT as claim_db_id,
+                    NULL::TEXT as payer_id,
+                    NULL::TEXT as provider_id,
+                    NULL::TEXT as member_id,
+                    NULL::TEXT as emirates_id_number,
+                    NULL::TEXT as patient_id,
+                    NULL::NUMERIC(14,2) as claim_amount,
+                    NULL::TEXT as provider_name,
+                    NULL::TEXT as receiver_id,
+                    NULL::TEXT as payer_name,
+                    NULL::TEXT as payer_code,
+                    NULL::TEXT as id_payer,
+                    NULL::TEXT as claim_activity_number,
+                    NULL::TIMESTAMPTZ as activity_start_date,
+                    NULL::TEXT as activity_type,
+                    NULL::TEXT as cpt_code,
+                    NULL::NUMERIC(14,2) as quantity,
+                    NULL::BIGINT as remittance_claim_id,
+                    NULL::TEXT as payment_reference,
+                    NULL::TIMESTAMPTZ as date_settlement,
+                    NULL::TIMESTAMPTZ as submission_date,
+                    NULL::TIMESTAMPTZ as remittance_date
+                FROM claims.v_doctor_denial_summary vds
+                WHERE
+                    (p_facility_code IS NULL OR vds.facility_id = p_facility_code)
+                    AND (p_clinician_code IS NULL OR vds.clinician_id = p_clinician_code)
+                    AND (p_facility_ref_id IS NULL OR vds.facility_ref_id = p_facility_ref_id)
+                    AND (p_clinician_ref_id IS NULL OR vds.clinician_ref_id = p_clinician_ref_id)
+                    AND (p_payer_ref_id IS NULL OR vds.payer_ref_id = p_payer_ref_id)
+                    AND (p_from_date IS NULL OR vds.report_month >= DATE_TRUNC('month', p_from_date))
+                    AND (p_to_date IS NULL OR vds.report_month <= DATE_TRUNC('month', p_to_date))
+                    AND (p_year IS NULL OR vds.report_year = p_year)
+                    AND (p_month IS NULL OR vds.report_month_num = p_month)
+                ORDER BY vds.rejection_percentage DESC, vds.total_claims DESC
+                LIMIT p_limit OFFSET p_offset;
+
+            WHEN 'detail' THEN
+                RETURN QUERY
+                SELECT
+                    NULL::TEXT as clinician_id,
+                    NULL::TEXT as clinician_name,
+                    NULL::TEXT as clinician_specialty,
+                    vdd.facility_id,
+                    vdd.facility_name,
+                    vdd.facility_group,
+                    NULL::TEXT as health_authority,
+                    vdd.report_month,
+                    vdd.report_year,
+                    vdd.report_month_num,
+                    NULL::BIGINT as total_claims,
+                    NULL::BIGINT as remitted_claims,
+                    NULL::BIGINT as rejected_claims,
+                    NULL::BIGINT as pending_remittance_claims,
+                    NULL::NUMERIC(14,2) as total_claim_amount,
+                    NULL::NUMERIC(14,2) as remitted_amount,
+                    NULL::NUMERIC(14,2) as rejected_amount,
+                    NULL::NUMERIC(14,2) as pending_remittance_amount,
+                    NULL::NUMERIC(5,2) as rejection_percentage,
+                    NULL::NUMERIC(5,2) as collection_rate,
+                    NULL::NUMERIC(14,2) as avg_claim_value,
+                    NULL::NUMERIC(14,2) as net_balance,
+                    NULL::TEXT as top_payer_code,
+                    NULL::BIGINT as unique_providers,
+                    NULL::BIGINT as unique_patients,
+                    NULL::TIMESTAMPTZ as earliest_submission,
+                    NULL::TIMESTAMPTZ as latest_submission,
+                    NULL::NUMERIC(5,2) as avg_processing_days,
+                    vdd.claim_id,
+                    vdd.claim_db_id,
+                    vdd.payer_id,
+                    vdd.provider_id,
+                    vdd.member_id,
+                    vdd.emirates_id_number,
+                    vdd.patient_id,
+                    vdd.claim_amount,
+                    vdd.provider_name,
+                    vdd.receiver_id,
+                    vdd.payer_name,
+                    vdd.payer_code,
+                    vdd.id_payer,
+                    vdd.claim_activity_number,
+                    vdd.activity_start_date,
+                    vdd.activity_type,
+                    vdd.cpt_code,
+                    vdd.quantity,
+                    vdd.remittance_claim_id,
+                    vdd.payment_reference,
+                    vdd.date_settlement,
+                    vdd.submission_date,
+                    vdd.remittance_date
+                FROM claims.v_doctor_denial_detail vdd
+                WHERE
+                    (p_facility_code IS NULL OR vdd.facility_id = p_facility_code)
+                    AND (p_clinician_code IS NULL OR vdd.clinician_id = p_clinician_code)
+                    AND (p_facility_ref_id IS NULL OR vdd.facility_ref_id = p_facility_ref_id)
+                    AND (p_clinician_ref_id IS NULL OR vdd.clinician_ref_id = p_clinician_ref_id)
+                    AND (p_payer_ref_id IS NULL OR vdd.payer_ref_id = p_payer_ref_id)
+                    AND (p_from_date IS NULL OR vdd.submission_date >= p_from_date)
+                    AND (p_to_date IS NULL OR vdd.submission_date <= p_to_date)
+                    AND (p_year IS NULL OR vdd.report_year = p_year)
+                    AND (p_month IS NULL OR vdd.report_month_num = p_month)
+                ORDER BY vdd.submission_date DESC, vdd.claim_id
+                LIMIT p_limit OFFSET p_offset;
+
+            ELSE
+                -- Default to high_denial tab
+                RETURN QUERY
+                SELECT * FROM claims.get_doctor_denial_report(
+                    p_facility_code, p_clinician_code, p_from_date, p_to_date,
+                    p_year, p_month, p_facility_ref_id, p_clinician_ref_id, p_payer_ref_id,
+                    'high_denial', p_limit, p_offset
+                );
+        END CASE;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -653,6 +893,8 @@ COMMENT ON FUNCTION claims.get_doctor_denial_report IS 'Get filtered doctor deni
 -- FUNCTION: get_doctor_denial_summary (Dashboard metrics)
 -- ==========================================================================================================
 CREATE OR REPLACE FUNCTION claims.get_doctor_denial_summary(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'summary',
     p_facility_code TEXT DEFAULT NULL,
     p_clinician_code TEXT DEFAULT NULL,
     p_from_date TIMESTAMPTZ DEFAULT NULL,
@@ -673,39 +915,119 @@ CREATE OR REPLACE FUNCTION claims.get_doctor_denial_summary(
     improvement_potential NUMERIC(14,2)
 ) AS $$
 BEGIN
-    RETURN QUERY
-    WITH filtered_data AS (
-        SELECT
-            vhd.clinician_id,
-            vhd.total_claims,
-            vhd.total_claim_amount,
-            vhd.remitted_amount,
-            vhd.rejected_amount,
-            vhd.pending_remittance_amount,
-            vhd.rejection_percentage,
-            vhd.collection_rate
-        FROM claims.v_doctor_denial_high_denial vhd
-        WHERE
-            (p_facility_code IS NULL OR vhd.facility_id = p_facility_code)
-            AND (p_clinician_code IS NULL OR vhd.clinician_id = p_clinician_code)
-            AND (p_from_date IS NULL OR vhd.report_month >= DATE_TRUNC('month', p_from_date))
-            AND (p_to_date IS NULL OR vhd.report_month <= DATE_TRUNC('month', p_to_date))
-            AND (p_year IS NULL OR vhd.report_year = p_year)
-            AND (p_month IS NULL OR vhd.report_month_num = p_month)
-    )
-    SELECT
-        COUNT(DISTINCT clinician_id) as total_doctors,
-        SUM(total_claims) as total_claims,
-        SUM(total_claim_amount) as total_claim_amount,
-        SUM(remitted_amount) as total_remitted_amount,
-        SUM(rejected_amount) as total_rejected_amount,
-        SUM(pending_remittance_amount) as total_pending_amount,
-        ROUND(AVG(rejection_percentage), 2) as avg_rejection_rate,
-        ROUND(AVG(collection_rate), 2) as avg_collection_rate,
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'summary' THEN
+                RETURN QUERY
+                WITH filtered_data AS (
+                    SELECT
+                        mv.clinician_id,
+                        mv.total_claims,
+                        mv.total_claim_amount,
+                        mv.remitted_amount,
+                        mv.rejected_amount,
+                        mv.pending_remittance_amount,
+                        mv.rejection_percentage,
+                        mv.collection_rate
+                    FROM claims.mv_doctor_denial_high_denial mv
+                    WHERE
+                        (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+                        AND (p_clinician_code IS NULL OR mv.clinician_id = p_clinician_code)
+                        AND (p_from_date IS NULL OR mv.report_month >= DATE_TRUNC('month', p_from_date))
+                        AND (p_to_date IS NULL OR mv.report_month <= DATE_TRUNC('month', p_to_date))
+                        AND (p_year IS NULL OR mv.report_year = p_year)
+                        AND (p_month IS NULL OR mv.report_month_num = p_month)
+                )
+                SELECT
+                    COUNT(DISTINCT clinician_id) as total_doctors,
+                    SUM(total_claims) as total_claims,
+                    SUM(total_claim_amount) as total_claim_amount,
+                    SUM(remitted_amount) as total_remitted_amount,
+                    SUM(rejected_amount) as total_rejected_amount,
+                    SUM(pending_remittance_amount) as total_pending_amount,
+                    ROUND(AVG(rejection_percentage), 2) as avg_rejection_rate,
+                    ROUND(AVG(collection_rate), 2) as avg_collection_rate,
         COUNT(DISTINCT CASE WHEN rejection_percentage > 20 THEN clinician_id END) as doctors_with_high_denial,
         COUNT(DISTINCT CASE WHEN rejection_percentage > 50 THEN clinician_id END) as high_risk_doctors,
         SUM(CASE WHEN rejection_percentage > 20 THEN rejected_amount ELSE 0 END) as improvement_potential
     FROM filtered_data;
+            ELSE
+                -- Default to summary tab
+                RETURN QUERY
+                WITH filtered_data AS (
+                    SELECT
+                        vds.clinician_id,
+                        vds.total_claims,
+                        vds.total_claim_amount,
+                        vds.remitted_amount,
+                        vds.rejected_amount,
+                        vds.pending_remittance_amount,
+                        vds.rejection_percentage,
+                        vds.collection_rate
+                    FROM claims.v_doctor_denial_summary vds
+                    WHERE
+                        (p_facility_code IS NULL OR vds.facility_id = p_facility_code)
+                        AND (p_clinician_code IS NULL OR vds.clinician_id = p_clinician_code)
+                        AND (p_from_date IS NULL OR vds.report_month >= DATE_TRUNC('month', p_from_date))
+                        AND (p_to_date IS NULL OR vds.report_month <= DATE_TRUNC('month', p_to_date))
+                        AND (p_year IS NULL OR vds.report_year = p_year)
+                        AND (p_month IS NULL OR vds.report_month_num = p_month)
+                )
+                SELECT
+                    COUNT(DISTINCT clinician_id) as total_doctors,
+                    SUM(total_claims) as total_claims,
+                    SUM(total_claim_amount) as total_claim_amount,
+                    SUM(remitted_amount) as total_remitted_amount,
+                    SUM(rejected_amount) as total_rejected_amount,
+                    SUM(pending_remittance_amount) as total_pending_amount,
+                    ROUND(AVG(rejection_percentage), 2) as avg_rejection_rate,
+                    ROUND(AVG(collection_rate), 2) as avg_collection_rate,
+                    COUNT(DISTINCT CASE WHEN rejection_percentage > 20 THEN clinician_id END) as doctors_with_high_denial,
+                    COUNT(DISTINCT CASE WHEN rejection_percentage > 50 THEN clinician_id END) as high_risk_doctors,
+                    SUM(CASE WHEN rejection_percentage > 20 THEN rejected_amount ELSE 0 END) as improvement_potential
+                FROM filtered_data;
+        END CASE;
+    ELSE
+        -- Use traditional views for backward compatibility
+        RETURN QUERY
+        WITH filtered_data AS (
+            SELECT
+                vds.clinician_id,
+                vds.total_claims,
+                vds.total_claim_amount,
+                vds.remitted_amount,
+                vds.rejected_amount,
+                vds.pending_remittance_amount,
+                vds.rejection_percentage,
+                vds.collection_rate
+            FROM claims.v_doctor_denial_summary vds
+            WHERE
+                (p_facility_code IS NULL OR vds.facility_id = p_facility_code)
+                AND (p_clinician_code IS NULL OR vds.clinician_id = p_clinician_code)
+                AND (p_from_date IS NULL OR vds.report_month >= DATE_TRUNC('month', p_from_date))
+                AND (p_to_date IS NULL OR vds.report_month <= DATE_TRUNC('month', p_to_date))
+                AND (p_year IS NULL OR vds.report_year = p_year)
+                AND (p_month IS NULL OR vds.report_month_num = p_month)
+        )
+        SELECT
+            COUNT(DISTINCT clinician_id) as total_doctors,
+            SUM(total_claims) as total_claims,
+            SUM(total_claim_amount) as total_claim_amount,
+            SUM(remitted_amount) as total_remitted_amount,
+            SUM(rejected_amount) as total_rejected_amount,
+            SUM(pending_remittance_amount) as total_pending_amount,
+            ROUND(AVG(rejection_percentage), 2) as avg_rejection_rate,
+            ROUND(AVG(collection_rate), 2) as avg_collection_rate,
+            COUNT(DISTINCT CASE WHEN rejection_percentage > 20 THEN clinician_id END) as doctors_with_high_denial,
+            COUNT(DISTINCT CASE WHEN rejection_percentage > 50 THEN clinician_id END) as high_risk_doctors,
+            SUM(CASE WHEN rejection_percentage > 20 THEN rejected_amount ELSE 0 END) as improvement_potential
+        FROM filtered_data;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -786,5 +1108,5 @@ SELECT * FROM claims.get_doctor_denial_report(
 GRANT SELECT ON claims.v_doctor_denial_high_denial TO claims_user;
 GRANT SELECT ON claims.v_doctor_denial_summary TO claims_user;
 GRANT SELECT ON claims.v_doctor_denial_detail TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_doctor_denial_report(text,text,timestamptz,timestamptz,integer,integer,bigint,bigint,bigint,text,integer,integer) TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_doctor_denial_summary(text,text,timestamptz,timestamptz,integer,integer) TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_doctor_denial_report(boolean,text,text,text,timestamptz,timestamptz,integer,integer,bigint,bigint,bigint,text,integer,integer) TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_doctor_denial_summary(boolean,text,text,text,timestamptz,timestamptz,integer,integer) TO claims_user;

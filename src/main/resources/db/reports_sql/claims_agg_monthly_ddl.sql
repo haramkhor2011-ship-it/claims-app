@@ -453,6 +453,9 @@ BEGIN
            EXTRACT(MONTH FROM gs)::INT AS month
     FROM GENERATE_SERIES(v_start, v_end, INTERVAL '1 month') gs
   ), base AS (
+    -- CUMULATIVE-WITH-CAP: Use claim_activity_summary for accurate financial data
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     SELECT
       ck.claim_id,
       c.id AS claim_db_id,
@@ -460,13 +463,15 @@ BEGIN
       e.facility_ref_id,
       COALESCE(c.payer_ref_id, rc.payer_ref_id) AS payer_ref_id,
       a.net AS activity_net_amount,
-      ra.payment_amount AS activity_payment_amount
+      COALESCE(cas.paid_amount, 0) AS activity_payment_amount,                    -- capped paid across remittances
+      COALESCE(cas.denied_amount, 0) AS activity_denied_amount,                  -- denied only when latest denial and zero paid
+      cas.activity_status                                                         -- pre-computed activity status
     FROM claims.claim_key ck
     JOIN claims.claim c ON c.claim_key_id = ck.id
     LEFT JOIN claims.encounter e ON e.claim_id = c.id
     LEFT JOIN claims.activity a ON a.claim_id = c.id
+    LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id AND cas.activity_id = a.activity_id
     LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
-    LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id AND ra.activity_id = a.activity_id
     WHERE DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))::DATE BETWEEN v_start AND v_end
   )
   SELECT
@@ -477,19 +482,19 @@ BEGIN
     e.payer_ref_id,
     COUNT(DISTINCT e.claim_id) AS total_claim,
     COALESCE(SUM(e.activity_net_amount), 0) AS claim_amt,
-    COUNT(DISTINCT CASE WHEN e.activity_payment_amount IS NOT NULL THEN e.claim_id END) AS remitted_claim,
-    COALESCE(SUM(COALESCE(e.activity_payment_amount, 0)), 0) AS remitted_amt,
-    COUNT(DISTINCT CASE WHEN COALESCE(e.activity_payment_amount, 0) = 0 THEN e.claim_id END) AS rejected_claim,
-    COALESCE(SUM(CASE WHEN COALESCE(e.activity_payment_amount, 0) = 0 THEN e.activity_net_amount ELSE 0 END), 0) AS rejected_amt,
-    COUNT(DISTINCT CASE WHEN COALESCE(e.activity_payment_amount, 0) = 0 THEN e.claim_id END) AS pending_remittance,
-    COALESCE(SUM(CASE WHEN COALESCE(e.activity_payment_amount, 0) = 0 THEN e.activity_net_amount ELSE 0 END), 0) AS pending_remittance_amt,
-    CASE WHEN (COALESCE(SUM(COALESCE(e.activity_payment_amount, 0)), 0) + COALESCE(SUM(CASE WHEN COALESCE(e.activity_payment_amount, 0) = 0 THEN e.activity_net_amount ELSE 0 END), 0)) > 0
-         THEN ROUND((COALESCE(SUM(CASE WHEN COALESCE(e.activity_payment_amount, 0) = 0 THEN e.activity_net_amount ELSE 0 END), 0)
-                    /
-                    (COALESCE(SUM(COALESCE(e.activity_payment_amount, 0)), 0) + COALESCE(SUM(CASE WHEN COALESCE(e.activity_payment_amount, 0) = 0 THEN e.activity_net_amount ELSE 0 END), 0))) * 100, 2)
+    -- CUMULATIVE-WITH-CAP: Use pre-computed activity status for accurate counts
+    COUNT(DISTINCT CASE WHEN e.activity_status IN ('FULLY_PAID', 'PARTIALLY_PAID') THEN e.claim_id END) AS remitted_claim,
+    COALESCE(SUM(e.activity_payment_amount), 0) AS remitted_amt,                    -- capped paid across remittances
+    COUNT(DISTINCT CASE WHEN e.activity_status = 'REJECTED' THEN e.claim_id END) AS rejected_claim,
+    COALESCE(SUM(e.activity_denied_amount), 0) AS rejected_amt,                     -- denied only when latest denial and zero paid
+    COUNT(DISTINCT CASE WHEN e.activity_status = 'PENDING' THEN e.claim_id END) AS pending_remittance,
+    COALESCE(SUM(CASE WHEN e.activity_status = 'PENDING' THEN e.activity_net_amount ELSE 0 END), 0) AS pending_remittance_amt,
+    -- CUMULATIVE-WITH-CAP: Use pre-computed amounts for accurate percentages
+    CASE WHEN (COALESCE(SUM(e.activity_payment_amount), 0) + COALESCE(SUM(e.activity_denied_amount), 0)) > 0
+         THEN ROUND((COALESCE(SUM(e.activity_denied_amount), 0) / (COALESCE(SUM(e.activity_payment_amount), 0) + COALESCE(SUM(e.activity_denied_amount), 0))) * 100, 2)
          ELSE 0 END AS rejected_percentage_remittance,
     CASE WHEN COALESCE(SUM(e.activity_net_amount), 0) > 0
-         THEN ROUND((COALESCE(SUM(CASE WHEN COALESCE(e.activity_payment_amount, 0) = 0 THEN e.activity_net_amount ELSE 0 END), 0) / SUM(e.activity_net_amount)) * 100, 2)
+         THEN ROUND((COALESCE(SUM(e.activity_denied_amount), 0) / SUM(e.activity_net_amount)) * 100, 2)
          ELSE 0 END AS rejected_percentage_submission
   FROM buckets b
   JOIN base e ON e.month_bucket = b.month_bucket
@@ -509,6 +514,9 @@ BEGIN
            EXTRACT(MONTH FROM gs)::INT AS month
     FROM GENERATE_SERIES(v_start, v_end, INTERVAL '1 month') gs
   ), base AS (
+    -- CUMULATIVE-WITH-CAP: Use claim_activity_summary for accurate financial data
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     SELECT
       DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))::DATE AS month_bucket,
       a.clinician_ref_id,
@@ -516,15 +524,16 @@ BEGIN
       COALESCE(c.payer_ref_id, rc.payer_ref_id) AS payer_ref_id,
       ck.claim_id,
       a.net AS activity_net,
-      ra.payment_amount,
-      ra.denial_code,
-      rc.date_settlement
+      COALESCE(cas.paid_amount, 0) AS payment_amount,                    -- capped paid across remittances
+      (cas.denial_codes)[1] AS denial_code,                             -- latest denial from pre-computed summary
+      rc.date_settlement,
+      cas.activity_status                                                -- pre-computed activity status
     FROM claims.claim_key ck
     JOIN claims.claim c ON c.claim_key_id = ck.id
     LEFT JOIN claims.activity a ON a.claim_id = c.id
     LEFT JOIN claims.encounter e ON e.claim_id = c.id
+    LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id AND cas.activity_id = a.activity_id
     LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
-    LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id AND ra.activity_id = a.activity_id
     WHERE DATE_TRUNC('month', COALESCE(rc.date_settlement, c.tx_at))::DATE BETWEEN v_start AND v_end
   )
   SELECT
@@ -536,17 +545,19 @@ BEGIN
     e.payer_ref_id,
     COUNT(DISTINCT e.claim_id) AS total_claims,
     COALESCE(SUM(e.activity_net), 0) AS total_claim_amount,
-    COALESCE(SUM(COALESCE(e.payment_amount, 0)), 0) AS remitted_amount,
-    COALESCE(SUM(CASE WHEN e.payment_amount = 0 OR e.denial_code IS NOT NULL THEN e.activity_net ELSE 0 END), 0) AS rejected_amount,
-    COALESCE(SUM(CASE WHEN e.date_settlement IS NULL THEN e.activity_net ELSE 0 END), 0) AS pending_remittance_amount,
-    COUNT(DISTINCT CASE WHEN e.payment_amount IS NOT NULL THEN e.claim_id END) AS remitted_claims,
-    COUNT(DISTINCT CASE WHEN e.payment_amount = 0 OR e.denial_code IS NOT NULL THEN e.claim_id END) AS rejected_claims,
-    COUNT(DISTINCT CASE WHEN e.date_settlement IS NULL THEN e.claim_id END) AS pending_remittance_claims,
+    COALESCE(SUM(e.payment_amount), 0) AS remitted_amount,                    -- capped paid across remittances
+    COALESCE(SUM(CASE WHEN e.activity_status = 'REJECTED' THEN e.activity_net ELSE 0 END), 0) AS rejected_amount,
+    COALESCE(SUM(CASE WHEN e.activity_status = 'PENDING' THEN e.activity_net ELSE 0 END), 0) AS pending_remittance_amount,
+    -- CUMULATIVE-WITH-CAP: Use pre-computed activity status for accurate counts
+    COUNT(DISTINCT CASE WHEN e.activity_status IN ('FULLY_PAID', 'PARTIALLY_PAID') THEN e.claim_id END) AS remitted_claims,
+    COUNT(DISTINCT CASE WHEN e.activity_status = 'REJECTED' THEN e.claim_id END) AS rejected_claims,
+    COUNT(DISTINCT CASE WHEN e.activity_status = 'PENDING' THEN e.claim_id END) AS pending_remittance_claims,
+    -- CUMULATIVE-WITH-CAP: Use pre-computed activity status for accurate percentages
     CASE WHEN COUNT(DISTINCT e.claim_id) > 0
-         THEN ROUND((COUNT(DISTINCT CASE WHEN e.payment_amount = 0 OR e.denial_code IS NOT NULL THEN e.claim_id END) * 100.0) / COUNT(DISTINCT e.claim_id), 2)
+         THEN ROUND((COUNT(DISTINCT CASE WHEN e.activity_status = 'REJECTED' THEN e.claim_id END) * 100.0) / COUNT(DISTINCT e.claim_id), 2)
          ELSE 0 END AS rejection_percentage,
     CASE WHEN COALESCE(SUM(e.activity_net), 0) > 0
-         THEN ROUND((COALESCE(SUM(COALESCE(e.payment_amount, 0)), 0) / SUM(e.activity_net)) * 100, 2)
+         THEN ROUND((COALESCE(SUM(e.payment_amount), 0) / SUM(e.activity_net)) * 100, 2)
          ELSE 0 END AS collection_rate,
     CASE WHEN COUNT(DISTINCT e.claim_id) > 0
          THEN ROUND(COALESCE(SUM(e.activity_net), 0) / COUNT(DISTINCT e.claim_id), 2)

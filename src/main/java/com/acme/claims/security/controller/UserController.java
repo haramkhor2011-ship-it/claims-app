@@ -1,6 +1,7 @@
 package com.acme.claims.security.controller;
 
 import com.acme.claims.security.Role;
+import com.acme.claims.security.config.SecurityProperties;
 import com.acme.claims.security.entity.User;
 import com.acme.claims.security.service.UserService;
 import jakarta.validation.Valid;
@@ -25,6 +26,7 @@ import java.util.Set;
 public class UserController {
     
     private final UserService userService;
+    private final SecurityProperties securityProperties;
     
     /**
      * Create a new user
@@ -73,7 +75,7 @@ public class UserController {
                         .body(Map.of("error", "Invalid role for user creation"));
             }
             
-            return ResponseEntity.ok(UserResponse.fromUser(newUser));
+            return ResponseEntity.ok(UserResponse.fromUser(newUser, securityProperties));
             
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -92,16 +94,20 @@ public class UserController {
         if (currentUser.hasRole(Role.SUPER_ADMIN)) {
             users = userService.getAllUsers();
         } else {
+            // TODO: When multi-tenancy is enabled, uncomment the following logic:
             // Facility admin can only see users from their facilities
-            Set<String> facilityCodes = currentUser.getFacilityCodes();
-            users = userService.getAllUsers().stream()
-                    .filter(user -> user.getFacilityCodes().stream()
-                            .anyMatch(facilityCodes::contains))
-                    .toList();
+            // Set<String> facilityCodes = currentUser.getFacilityCodes();
+            // users = userService.getAllUsers().stream()
+            //         .filter(user -> user.getFacilityCodes().stream()
+            //                 .anyMatch(facilityCodes::contains))
+            //         .toList();
+            
+            // When multi-tenancy disabled, facility admins can see all users
+            users = userService.getAllUsers();
         }
         
         List<UserResponse> userResponses = users.stream()
-                .map(UserResponse::fromUser)
+                .map(user -> UserResponse.fromUser(user, securityProperties))
                 .toList();
         
         return ResponseEntity.ok(userResponses);
@@ -122,7 +128,7 @@ public class UserController {
                         return ResponseEntity.badRequest()
                                 .body(Map.of("error", "Insufficient permissions to view this user"));
                     }
-                    return ResponseEntity.ok(UserResponse.fromUser(user));
+                    return ResponseEntity.ok(UserResponse.fromUser(user, securityProperties));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -154,7 +160,7 @@ public class UserController {
                     }
                     
                     User updatedUser = userService.updateUser(user);
-                    return ResponseEntity.ok(UserResponse.fromUser(updatedUser));
+                    return ResponseEntity.ok(UserResponse.fromUser(updatedUser, securityProperties));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -284,7 +290,7 @@ public class UserController {
         private Set<String> facilities;
         private String primaryFacility;
         
-        public static UserResponse fromUser(User user) {
+        public static UserResponse fromUser(User user, SecurityProperties securityProperties) {
             UserResponse response = new UserResponse();
             response.id = user.getId();
             response.username = user.getUsername();
@@ -299,6 +305,14 @@ public class UserController {
                     .toList();
             response.facilities = user.getFacilityCodes();
             response.primaryFacility = user.getPrimaryFacilityCode();
+            
+            // TODO: When multi-tenancy is enabled, uncomment the following logic:
+            // When multi-tenancy is disabled, return empty facilities (no restrictions)
+            if (!securityProperties.getMultiTenancy().isEnabled()) {
+                response.facilities = Set.of(); // Empty set means no restrictions
+                response.primaryFacility = null; // No primary facility when multi-tenancy disabled
+            }
+            
             return response;
         }
         

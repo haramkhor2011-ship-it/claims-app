@@ -39,20 +39,20 @@
 DROP VIEW IF EXISTS claims.v_remittance_advice_header CASCADE;
 CREATE OR REPLACE VIEW claims.v_remittance_advice_header AS
 WITH activity_aggregates AS (
-  -- Pre-aggregate activities to avoid multiple GROUP BY operations
+  -- CUMULATIVE-WITH-CAP: Pre-aggregate activities using claim_activity_summary
+  -- Using cumulative-with-cap semantics to prevent overcounting from multiple remittances per activity
   SELECT 
     rc.id as remittance_claim_id,
-    SUM(ra.payment_amount) as total_payment,
-    COUNT(*) as activity_count,
-    SUM(act.net) as total_billed,
-    SUM(CASE WHEN ra.denial_code IS NOT NULL OR ra.payment_amount = 0 THEN act.net ELSE 0 END) as total_denied,
-    COUNT(CASE WHEN ra.denial_code IS NOT NULL OR ra.payment_amount = 0 THEN 1 END) as denied_count,
-    STRING_AGG(DISTINCT ra.denial_code, ',') as denial_codes
+    SUM(cas.paid_amount) as total_payment,                           -- capped paid across activities
+    COUNT(cas.activity_id) as activity_count,                        -- count of activities
+    SUM(cas.submitted_amount) as total_billed,                      -- submitted as billed baseline
+    SUM(cas.denied_amount) as total_denied,                         -- denied only when latest denial and zero paid
+    COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END) as denied_count,  -- activities with latest denial
+    (SELECT STRING_AGG(DISTINCT denial_code, ',') 
+     FROM UNNEST(cas.denial_codes) AS denial_code) as denial_codes  -- flatten denial codes array
   FROM claims.remittance_claim rc
-  JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id
-  JOIN claims.claim c ON c.claim_key_id = rc.claim_key_id
-  JOIN claims.activity act ON act.claim_id = c.id AND act.activity_id = ra.activity_id
-  GROUP BY rc.id
+  JOIN claims.claim_activity_summary cas ON cas.claim_key_id = rc.claim_key_id
+  GROUP BY rc.id, cas.denial_codes
 )
 SELECT
     -- Provider Information
@@ -163,33 +163,39 @@ SELECT
     COALESCE(pc.payer_code, '') AS payer_id,
     pc.id AS claim_payer_ref_id,
 
-    -- Financial Information
+    -- Financial Information (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
     COALESCE(c.net, 0) AS claim_amount,
-    COALESCE(SUM(ra.payment_amount), 0) AS remittance_amount,
+    COALESCE(SUM(cas.paid_amount), 0) AS remittance_amount,                    -- capped paid across remittances
 
     -- File Information
     COALESCE(ifile.file_name, '') AS xml_file_name,
 
-    -- Aggregated Metrics
-    COUNT(ra.id) AS activity_count,
-    SUM(COALESCE(ra.payment_amount, 0)) AS total_paid,
-    SUM(COALESCE(c.net - ra.payment_amount, 0)) AS total_denied,
+    -- Aggregated Metrics (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    COUNT(cas.activity_id) AS activity_count,                                 -- count of activities with remittance data
+    SUM(COALESCE(cas.paid_amount, 0)) AS total_paid,                         -- capped paid across remittances
+    SUM(COALESCE(cas.denied_amount, 0)) AS total_denied,                     -- denied only when latest denial and zero paid
 
-    -- Calculated Fields
+    -- Calculated Fields (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
     ROUND(
         CASE
             WHEN COALESCE(c.net, 0) > 0
-            THEN (SUM(COALESCE(ra.payment_amount, 0)) / c.net) * 100
+            THEN (SUM(COALESCE(cas.paid_amount, 0)) / c.net) * 100
             ELSE 0
         END, 2
     ) AS collection_rate,
 
-    COUNT(CASE WHEN ra.denial_code IS NOT NULL OR ra.payment_amount = 0 THEN 1 END) AS denied_count
+    COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END) AS denied_count  -- activities with latest denial
 
 FROM claims.remittance r
 JOIN claims.remittance_claim rc ON r.id = rc.remittance_id
 JOIN claims.claim_key ck ON rc.claim_key_id = ck.id
 LEFT JOIN claims.claim c ON ck.id = c.claim_key_id
+-- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+-- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = ck.id
+-- Keep legacy join for backward compatibility (if needed for other calculations)
 LEFT JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id
 LEFT JOIN claims.activity act ON act.claim_id = c.id AND act.activity_id = ra.activity_id
 LEFT JOIN claims.encounter enc ON c.id = enc.claim_id
@@ -223,10 +229,13 @@ SELECT
     COALESCE(act.code, '') AS cpt_code,
     COALESCE(act.quantity, 0) AS quantity,
     COALESCE(act.net, 0) AS net_amount,
-    COALESCE(ra.payment_amount, 0) AS payment_amount,
+    -- CUMULATIVE-WITH-CAP: Using pre-computed activity summary
+    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
+    COALESCE(cas.paid_amount, 0) AS payment_amount,                    -- capped paid across remittances
 
-    -- Denial Information
-    COALESCE(ra.denial_code, '') AS denial_code,
+    -- Denial Information (CUMULATIVE-WITH-CAP: Using latest denial from activity summary)
+    COALESCE((cas.denial_codes)[1], '') AS denial_code,                -- latest denial from pre-computed summary
 
     -- Clinician Information
     COALESCE(act.clinician, '') AS clinician,
@@ -234,28 +243,30 @@ SELECT
     -- File Information
     COALESCE(ifile.file_name, '') AS xml_file_name,
 
-    -- Calculated Fields
-    COALESCE(act.net - ra.payment_amount, 0) AS denied_amount,
+    -- Calculated Fields (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
+    COALESCE(cas.denied_amount, 0) AS denied_amount,                   -- denied only when latest denial and zero paid
     ROUND(
         CASE
             WHEN COALESCE(act.net, 0) > 0
-            THEN (COALESCE(ra.payment_amount, 0) / act.net) * 100
+            THEN (COALESCE(cas.paid_amount, 0) / act.net) * 100
             ELSE 0
         END, 2
     ) AS payment_percentage,
 
+    -- Payment Status (CUMULATIVE-WITH-CAP: Using pre-computed activity status)
     CASE
-        WHEN ra.denial_code IS NOT NULL OR ra.payment_amount = 0 THEN 'DENIED'
-        WHEN ra.payment_amount = act.net THEN 'FULLY_PAID'
-        WHEN ra.payment_amount > 0 AND ra.payment_amount < act.net THEN 'PARTIALLY_PAID'
+        WHEN cas.activity_status = 'REJECTED' THEN 'DENIED'
+        WHEN cas.activity_status = 'FULLY_PAID' THEN 'FULLY_PAID'
+        WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 'PARTIALLY_PAID'
+        WHEN cas.activity_status = 'PENDING' THEN 'UNPAID'
         ELSE 'UNPAID'
     END AS payment_status,
 
-    -- Unit Price Calculation
+    -- Unit Price Calculation (CUMULATIVE-WITH-CAP: Using pre-computed activity summary)
     ROUND(
         CASE
             WHEN COALESCE(act.quantity, 0) > 0
-            THEN (COALESCE(ra.payment_amount, 0) / act.quantity)
+            THEN (COALESCE(cas.paid_amount, 0) / act.quantity)
             ELSE 0
         END, 2
     ) AS unit_price,
@@ -268,7 +279,11 @@ SELECT
 
 FROM claims.remittance r
 JOIN claims.remittance_claim rc ON r.id = rc.remittance_id
+-- Keep legacy join for backward compatibility (if needed for other calculations)
 JOIN claims.remittance_activity ra ON rc.id = ra.remittance_claim_id
+-- OPTIMIZED: Join to pre-computed activity summary instead of raw remittance data
+-- WHY: Eliminates complex aggregation and ensures consistent cumulative-with-cap logic
+LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = rc.claim_key_id AND cas.activity_id = ra.activity_id
 LEFT JOIN claims.claim c ON c.claim_key_id = rc.claim_key_id
 JOIN claims.claim_key ck ON rc.claim_key_id = ck.id
 JOIN claims.activity act ON act.claim_id = c.id AND act.activity_id = ra.activity_id
@@ -295,6 +310,8 @@ DROP FUNCTION IF EXISTS claims.get_remittance_advice_report_params(
     BIGINT
 ) CASCADE;
 CREATE OR REPLACE FUNCTION claims.get_remittance_advice_report_params(
+    p_use_mv BOOLEAN DEFAULT FALSE,
+    p_tab_name TEXT DEFAULT 'header',
     p_from_date timestamptz DEFAULT NULL,
     p_to_date timestamptz DEFAULT NULL,
     p_facility_code text DEFAULT NULL,
@@ -313,24 +330,33 @@ RETURNS TABLE(
     avg_collection_rate numeric(5,2)
 ) AS $$
 BEGIN
-    RETURN QUERY
-    -- Use materialized view for sub-second performance
-    SELECT
-        SUM(mv.total_claims) AS total_claims,
-        SUM(mv.total_activities) AS total_activities,
-        SUM(mv.total_billed_amount) AS total_billed_amount,
-        SUM(mv.total_paid_amount) AS total_paid_amount,
-        SUM(mv.total_denied_amount) AS total_denied_amount,
-        AVG(mv.collection_rate) AS avg_collection_rate
-    FROM claims.mv_remittance_advice_summary mv
-    WHERE mv.remittance_date >= COALESCE(p_from_date, mv.remittance_date - INTERVAL '30 days')
-      AND mv.remittance_date <= COALESCE(p_to_date, mv.remittance_date)
-      AND (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
-      AND (p_payer_code IS NULL OR mv.payer_id = p_payer_code)
-      AND (p_receiver_code IS NULL OR mv.receiver_id = p_receiver_code)
-      AND (p_payment_reference IS NULL OR mv.payment_reference = p_payment_reference)
-      AND (p_facility_ref_id IS NULL OR mv.facility_ref_id = p_facility_ref_id)
-      AND (p_payer_ref_id IS NULL OR mv.payer_ref_id = p_payer_ref_id);
+    -- OPTION 3: Hybrid approach with DB toggle and tab selection
+    -- WHY: Allows switching between traditional views and MVs with tab-specific logic
+    -- HOW: Uses p_use_mv parameter to choose data source and p_tab_name for tab selection
+    
+    IF p_use_mv THEN
+        -- Use tab-specific MVs for sub-second performance
+        CASE p_tab_name
+            WHEN 'header' THEN
+                RETURN QUERY
+                SELECT
+                    SUM(mv.total_claims) AS total_claims,
+                    SUM(mv.total_activities) AS total_activities,
+                    SUM(mv.total_billed_amount) AS total_billed_amount,
+                    SUM(mv.total_paid_amount) AS total_paid_amount,
+                    SUM(mv.total_denied_amount) AS total_denied_amount,
+                    AVG(mv.collection_rate) AS avg_collection_rate
+                FROM claims.mv_remittance_advice_header mv
+                WHERE mv.remittance_date >= COALESCE(p_from_date, mv.remittance_date - INTERVAL '30 days')
+                  AND mv.remittance_date <= COALESCE(p_to_date, mv.remittance_date)
+                  AND (p_facility_code IS NULL OR mv.facility_id = p_facility_code)
+                  AND (p_payer_code IS NULL OR mv.payer_id = p_payer_code)
+                  AND (p_receiver_code IS NULL OR mv.receiver_id = p_receiver_code)
+                  AND (p_payment_reference IS NULL OR mv.payment_reference = p_payment_reference)
+                  AND (p_facility_ref_id IS NULL OR mv.facility_ref_id = p_facility_ref_id)
+                  AND (p_payer_ref_id IS NULL OR mv.payer_ref_id = p_payer_ref_id);
+            END CASE;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -408,14 +434,16 @@ ORDER BY start_date DESC;
 
 -- Get Report Summary Parameters
 SELECT * FROM claims.get_remittance_advice_report_params(
-    '2025-01-01'::timestamptz,
-    '2025-01-31'::timestamptz,
-    'FAC001',
-    'PAYER001',
-    'RECEIVER001',
-    'PAYREF001',
-    NULL, -- facility_ref_id
-    NULL  -- payer_ref_id
+    FALSE, -- p_use_mv
+    'header', -- p_tab_name
+    '2025-01-01'::timestamptz, -- p_from_date
+    '2025-01-31'::timestamptz, -- p_to_date
+    'FAC001', -- p_facility_code
+    'PAYER001', -- p_payer_code
+    'RECEIVER001', -- p_receiver_code
+    'PAYREF001', -- p_payment_reference
+    NULL, -- p_facility_ref_id
+    NULL  -- p_payer_ref_id
 );
 */
 
@@ -425,4 +453,4 @@ SELECT * FROM claims.get_remittance_advice_report_params(
 GRANT SELECT ON claims.v_remittance_advice_header TO claims_user;
 GRANT SELECT ON claims.v_remittance_advice_claim_wise TO claims_user;
 GRANT SELECT ON claims.v_remittance_advice_activity_wise TO claims_user;
-GRANT EXECUTE ON FUNCTION claims.get_remittance_advice_report_params(timestamptz,timestamptz,text,text,text,text,bigint,bigint) TO claims_user;
+GRANT EXECUTE ON FUNCTION claims.get_remittance_advice_report_params(boolean,text,timestamptz,timestamptz,text,text,text,text,bigint,bigint) TO claims_user;

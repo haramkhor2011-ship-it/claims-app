@@ -7,11 +7,13 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.context.annotation.EnableAspectJAutoProxy;
 import org.springframework.core.env.Environment;
+import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableScheduling
 @EnableAspectJAutoProxy
+@EnableCaching
 @ConfigurationPropertiesScan(basePackages = "com.acme.claims")
 @Slf4j
 public class ClaimsBackendApplication {
@@ -23,10 +25,9 @@ public class ClaimsBackendApplication {
 
     @jakarta.annotation.PostConstruct
     void logBootEnv() {
-        log
-                .info("boot: profiles={}, url={}, user={}",
-                        String.join(",", environment.getActiveProfiles()),
-                        environment.getProperty("spring.datasource.url"),
-                        environment.getProperty("spring.datasource.username"));
+        log.info("boot: profiles={}, url={}, user={}",
+                String.join(",", environment.getActiveProfiles()),
+                environment.getProperty("spring.datasource.url"),
+                environment.getProperty("spring.datasource.username"));
     }
 }

@@ -255,18 +255,22 @@ public class DhpoFetchCoordinator {
                     scope.fork(() -> {
                         try {
                             // === TEMP BACKFILL START ===
-                            // Temporary multi-window backfill for ingestion only:
-                            // Run 10 consecutive 100-day windows covering ~last 1000 days.
-                            // NOTE: Remove this block and restore the original calls below
-                            // once the initial ingestion is complete.
+                            // Temporary multi-window backfill for testing only:
+                            // Run 30 consecutive 10-day windows covering ~last 300 days.
+                            // This explicitly uses date ranges so dhpoProps.searchDaysBack does NOT apply.
+                            // NOTE: Remove this block and restore the original calls below for live.
                             LocalDateTime now = LocalDateTime.now();
-                            for (int i = 0; i < 10; i++) {
-                                LocalDateTime to = now.minusDays(100L * i);
-                                LocalDateTime from = to.minusDays(100);
-                                // submissions (direction=1, tx=2)
-                                searchWindowRange(f, 1, 2, from, to);
-                                // remittances (direction=2, tx=8)
-                                searchWindowRange(f, 2, 8, from, to);
+                            for (int i = 0; i < 30; i++) {
+                                LocalDateTime to = now.minusDays(10L * i);
+                                LocalDateTime from = to.minusDays(10);
+                                // submissions (direction=1, tx=2) - TransactionStatus=1 (new/undownloaded)
+                                searchWindowRange(f, 1, 2, 1, from, to);
+                                // submissions (direction=1, tx=2) - TransactionStatus=2 (downloaded)
+                                searchWindowRange(f, 1, 2, 2, from, to);
+                                // remittances (direction=2, tx=8) - TransactionStatus=1 (new/undownloaded)
+                                searchWindowRange(f, 2, 8, 1, from, to);
+                                // remittances (direction=2, tx=8) - TransactionStatus=2 (downloaded)
+                                searchWindowRange(f, 2, 8, 2, from, to);
                             }
                             // === TEMP BACKFILL END ===
 
@@ -319,7 +323,7 @@ public class DhpoFetchCoordinator {
         var req = SearchTransactionsRequest.build(
                 plain.login(), plain.pwd(), direction,
                 f.getFacilityCode(), "",                            // callerLicense = facility_code, ePartner blank
-                transactionId, 1,                                   // TransactionStatus=1 (new/undownloaded)
+                transactionId, 0,                                   // TransactionStatus=0 (get ALL files regardless of download status)
                 FMT.format(from), FMT.format(to),
                 1, 500, false /*soap1.1*/
         );
@@ -379,7 +383,7 @@ public class DhpoFetchCoordinator {
     // Temporary explicit-range search used by the backfill loop.
     // TODO: REMOVE after initial ingestion completes (use searchWindow(...) instead)
     private void searchWindowRange(FacilityDhpoConfig f, int direction, int transactionId,
-                                   LocalDateTime from, LocalDateTime to) {
+                                   int transactionStatus, LocalDateTime from, LocalDateTime to) {
         final int downloadConcurrency = Math.max(1, soapProps.downloadConcurrency());
         final Semaphore downloadSlots = new Semaphore(downloadConcurrency);
         List<Future<?>> futures = new ArrayList<>();
@@ -395,9 +399,9 @@ public class DhpoFetchCoordinator {
         var req = SearchTransactionsRequest.build(
                 plain.login(), plain.pwd(), direction,
                 f.getFacilityCode(), "",                            // callerLicense = facility_code, ePartner blank
-                transactionId, 1,                                   // TransactionStatus=1 (new/undownloaded)
+                transactionId, transactionStatus,                                   // TransactionStatus=0 (get ALL files regardless of download status)
                 FMT.format(from), FMT.format(to),
-                1, 500, false /*soap1.1*/
+                -1, -1, false /*soap1.1*/
         );
 
         com.acme.claims.soap.SoapGateway.SoapResponse resp;

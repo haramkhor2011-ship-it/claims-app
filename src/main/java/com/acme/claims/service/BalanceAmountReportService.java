@@ -1,5 +1,6 @@
 package com.acme.claims.service;
 
+import com.acme.claims.soap.db.ToggleRepo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,7 @@ import java.util.*;
 public class BalanceAmountReportService {
 
     private final DataSource dataSource;
+    private final ToggleRepo toggleRepo;
 
     public List<Map<String, Object>> getTabA_BalanceToBeReceived(
             String userId,
@@ -40,42 +42,33 @@ public class BalanceAmountReportService {
             List<Long> facilityRefIds,
             List<Long> payerRefIds
     ) {
-        // Use optimized materialized view for sub-second performance
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Balance Amount Report - useMv: {}", useMv);
+        
+        // Use Option 3 function with dynamic data source selection
         String sql = """
-            SELECT 
-                claim_key_id,
-                claim_id,
-                facility_id as facility_group_id,
-                payer_name as health_authority,
-                facility_name,
-                claim_id as claim_number,
-                encounter_start as encounter_start_date,
-                encounter_start as encounter_end_date,
-                EXTRACT(YEAR FROM encounter_start) as encounter_start_year,
-                EXTRACT(MONTH FROM encounter_start) as encounter_start_month,
-                payer_id as id_payer,
-                'N/A' as patient_id,
-                'N/A' as member_id,
-                'N/A' as emirates_id_number,
-                initial_net as claim_amt,
-                total_payment as remitted_amt,
-                total_denied as denied_amt,
-                pending_amount as pending_amt,
-                aging_days,
-                CASE 
-                    WHEN aging_days <= 30 THEN '0-30'
-                    WHEN aging_days <= 60 THEN '31-60'
-                    WHEN aging_days <= 90 THEN '61-90'
-                    ELSE '90+'
-                END as aging_bucket,
-                current_status,
-                last_status_date,
-                resubmission_count,
-                last_resubmission_date,
-                provider_name,
-                payer_name
-            FROM claims.mv_balance_amount_summary
-            WHERE 1=1
+            SELECT * FROM claims.get_balance_amount_to_be_received(
+                p_use_mv := ?,
+                p_tab_name := 'overall',
+                p_user_id := ?,
+                p_claim_key_ids := ?,
+                p_facility_codes := ?,
+                p_payer_codes := ?,
+                p_receiver_ids := ?,
+                p_from_date := ?,
+                p_to_date := ?,
+                p_year := ?,
+                p_month := ?,
+                p_based_on_initial_net := ?,
+                p_order_by := ?,
+                p_order_direction := ?,
+                p_limit := ?,
+                p_offset := ?,
+                p_facility_ref_ids := ?,
+                p_payer_ref_ids := ?
+            )
         """;
 
         int limit = page != null && size != null && page >= 0 && size != null && size > 0 ? size : 1000;
@@ -91,6 +84,8 @@ public class BalanceAmountReportService {
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             int i = 1;
+            // OPTION 3: Set useMv parameter first
+            stmt.setBoolean(i++, useMv);
             stmt.setString(i++, userId);
             setBigintArray(conn, stmt, i++, claimKeyIds);
             setTextArray(conn, stmt, i++, facilityCodes);
@@ -101,10 +96,10 @@ public class BalanceAmountReportService {
             stmt.setObject(i++, year);
             stmt.setObject(i++, month);
             stmt.setObject(i++, basedOnInitialNet);
-            stmt.setInt(i++, limit);
-            stmt.setInt(i++, offset);
             stmt.setString(i++, safeOrderBy);
             stmt.setString(i++, safeDirection);
+            stmt.setInt(i++, limit);
+            stmt.setInt(i++, offset);
             setBigintArray(conn, stmt, i++, facilityRefIds);
             setBigintArray(conn, stmt, i++, payerRefIds);
 
@@ -144,7 +139,7 @@ public class BalanceAmountReportService {
                 }
             }
 
-            log.info("Retrieved {} balance-to-be-received rows", results.size());
+            log.info("Retrieved {} balance-to-be-received rows using Option 3 (useMv: {})", results.size(), useMv);
         } catch (SQLException e) {
             log.error("Error retrieving balance amount (Tab A)", e);
             throw new RuntimeException("Failed to retrieve balance amount (Tab A)", e);

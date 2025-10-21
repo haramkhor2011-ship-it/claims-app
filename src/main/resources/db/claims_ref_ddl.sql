@@ -19,7 +19,8 @@ create table if not exists claims_ref.facility (
   city           text,
   country        text,
   status         text default 'ACTIVE',
-  updated_at     timestamptz default now()
+  created_at	 timestampz deafault now(),
+  updated_at     timestamptz
 );
 comment on table  claims_ref.facility is 'Master list of provider facilities (Encounter.FacilityID)';
 comment on column claims_ref.facility.facility_code is 'External FacilityID (DHA/eClaim)';
@@ -32,7 +33,8 @@ create table if not exists claims_ref.payer (
   payer_code  text not null unique,     -- e.g., INS025
   name        text,
   status      text default 'ACTIVE',
-  updated_at  timestamptz default now()
+  created_at	 timestampz deafault now(),
+  updated_at  timestamptz
 );
 comment on table  claims_ref.payer is 'Master list of Payers (Claim.PayerID)';
 comment on column claims_ref.payer.payer_code is 'External PayerID';
@@ -45,7 +47,8 @@ create table if not exists claims_ref.provider (
   provider_code text not null unique,
   name          text,
   status        text default 'ACTIVE',
-  updated_at    timestamptz default now()
+  created_at	 timestampz deafault now(),
+  updated_at    timestamptz
 );
 comment on table claims_ref.provider is 'Master list of provider organizations (Claim.ProviderID)';
 
@@ -58,7 +61,8 @@ create table if not exists claims_ref.clinician (
   name            text,
   specialty       text,
   status          text default 'ACTIVE',
-  updated_at      timestamptz default now()
+  created_at	 timestampz deafault now(),
+  updated_at      timestamptz
 );
 comment on table claims_ref.clinician is 'Master list of clinicians (Activity.Clinician)';
 
@@ -71,7 +75,8 @@ create table if not exists claims_ref.activity_code (
   code_system  text not null default 'LOCAL',   -- CPT/HCPCS/LOCAL/etc.
   description  text,
   status       text default 'ACTIVE',
-  updated_at   timestamptz default now(),
+  created_at	 timestampz deafault now(),
+  updated_at   timestamptz,
   constraint uq_activity_code unique (code, code_system)
 );
 comment on table claims_ref.activity_code is 'Service/procedure codes used in Activity.Code';
@@ -85,7 +90,8 @@ create table if not exists claims_ref.diagnosis_code (
   code_system  text not null default 'ICD-10',
   description  text,
   status       text default 'ACTIVE',
-  updated_at   timestamptz default now(),
+  created_at	 timestampz deafault now(),
+  updated_at   timestamptz,
   constraint uq_diagnosis_code unique (code, code_system)
 );
 comment on table claims_ref.diagnosis_code is 'Diagnosis codes (Diagnosis.Code)';
@@ -98,7 +104,8 @@ create table if not exists claims_ref.denial_code (
   code        text not null unique,
   description text,
   payer_code  text,  -- optional scope
-  updated_at  timestamptz default now()
+  created_at	 timestampz deafault now(),
+  updated_at  timestamptz
 );
 comment on table claims_ref.denial_code is 'Adjudication denial codes; optionally scoped by payer_code';
 
@@ -150,33 +157,33 @@ create table if not exists claims_ref.activity_type (
   description text
 );
 
-insert into claims_ref.activity_type(type_code, description) values
-  ('3','Diagnostic/Lab'),('4','Radiology'),('5','Pharmacy'),('6','Consumables'),
-  ('8','Consultation'),('9','Inpatient'),('10','Other')
-on conflict (type_code) do update set description = excluded.description;
+--insert into claims_ref.activity_type(type_code, description) values
+--  ('3','Diagnostic/Lab'),('4','Radiology'),('5','Pharmacy'),('6','Consumables'),
+  --('8','Consultation'),('9','Inpatient'),('10','Other')
+--on conflict (type_code) do update set description = excluded.description;
 
 create table if not exists claims_ref.encounter_type (
   type_code   text primary key,
   description text
 );
 
-insert into claims_ref.encounter_type(type_code, description) values
-  ('1','OPD'),('2','ER'),('3','IPD'),('4','Day Case'),('5','Home Care'),
-  ('6','Telemedicine'),('7','OT'),('8','Physio'),('9','Dental'),('10','Wellness'),
-  ('12','Maternity'),('13','Mental Health'),('15','Rehab'),('41','Ambulance'),('42','Nursing')
-on conflict (type_code) do update set description = excluded.description;
+i--nsert into claims_ref.encounter_type(type_code, description) values
+  --('1','OPD'),('2','ER'),('3','IPD'),('4','Day Case'),('5','Home Care'),
+  --('6','Telemedicine'),('7','OT'),('8','Physio'),('9','Dental'),('10','Wellness'),
+  --('12','Maternity'),('13','Mental Health'),('15','Rehab'),('41','Ambulance'),('42','Nursing')
+--on conflict (type_code) do update set description = excluded.description;
 
 create table if not exists claims_ref.resubmission_type (
   type_code   text primary key,
   description text
 );
 
-insert into claims_ref.resubmission_type(type_code, description) values
-  ('correction','Correction'),
-  ('internal complaint','Internal complaint'),
-  ('legacy','Legacy'),
-  ('reconciliation','Reconciliation')
-on conflict (type_code) do update set description = excluded.description;
+--insert into claims_ref.resubmission_type(type_code, description) values
+--  ('correction','Correction'),
+--  ('internal complaint','Internal complaint'),
+--  ('legacy','Legacy'),
+--  ('reconciliation','Reconciliation')
+--on conflict (type_code) do update set description = excluded.description;
 
 -- =====================================================================
 -- AUDIT: newly discovered codes during ingest

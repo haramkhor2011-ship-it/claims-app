@@ -1,5 +1,6 @@
 package com.acme.claims.service;
 
+import com.acme.claims.soap.db.ToggleRepo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,6 +29,7 @@ import java.util.*;
 public class RemittanceAdvicePayerwiseReportService {
 
     private final DataSource dataSource;
+    private final ToggleRepo toggleRepo;
 
     /**
      * Get Header Tab data for Remittance Advice Payerwise report
@@ -377,28 +379,36 @@ public class RemittanceAdvicePayerwiseReportService {
             String facilityCode,
             String payerCode,
             String receiverCode,
-            String paymentReference) {
+            String paymentReference    ) {
+        // OPTION 3: Check if MVs are enabled via toggle
+        boolean useMv = toggleRepo.isEnabled("is_mv_enabled") || toggleRepo.isEnabled("is_sub_second_mode_enabled");
+        
+        log.info("Remittance Advice Report - useMv: {}", useMv);
 
         String sql = """
             SELECT * FROM claims.get_remittance_advice_report_params(
-                ?::timestamptz,
-                ?::timestamptz,
-                ?::text,
-                ?::text,
-                ?::text,
-                ?::text
+                p_use_mv := ?,
+                p_tab_name := 'header',
+                p_from_date := ?::timestamptz,
+                p_to_date := ?::timestamptz,
+                p_facility_code := ?::text,
+                p_payer_code := ?::text,
+                p_receiver_code := ?::text,
+                p_payment_reference := ?::text
             )
             """;
 
         try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
-            stmt.setObject(1, fromDate);
-            stmt.setObject(2, toDate);
-            stmt.setString(3, facilityCode);
-            stmt.setString(4, payerCode);
-            stmt.setString(5, receiverCode);
-            stmt.setString(6, paymentReference);
+            // OPTION 3: Set useMv and tabName parameters first
+            stmt.setBoolean(1, useMv);
+            stmt.setObject(2, fromDate);
+            stmt.setObject(3, toDate);
+            stmt.setString(4, facilityCode);
+            stmt.setString(5, payerCode);
+            stmt.setString(6, receiverCode);
+            stmt.setString(7, paymentReference);
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {

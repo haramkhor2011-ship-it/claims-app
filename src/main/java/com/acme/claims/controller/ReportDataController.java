@@ -1,38 +1,41 @@
 package com.acme.claims.controller;
 
+import com.acme.claims.audit.AuditLogService;
+import com.acme.claims.controller.dto.*;
 import com.acme.claims.security.ReportType;
-import com.acme.claims.controller.dto.ReportQueryRequest;
+import com.acme.claims.security.context.ServiceUserContext;
 import com.acme.claims.security.context.UserContext;
+import com.acme.claims.security.entity.ReportsMetadata;
 import com.acme.claims.security.service.DataFilteringService;
 import com.acme.claims.security.service.ReportAccessService;
 import com.acme.claims.security.service.UserContextService;
-import com.acme.claims.service.ClaimDetailsWithActivityReportService;
-import com.acme.claims.service.ClaimSummaryMonthwiseReportService;
-import com.acme.claims.service.DoctorDenialReportService;
-import com.acme.claims.service.RemittanceAdvicePayerwiseReportService;
-import com.acme.claims.service.RejectedClaimsReportService;
-import com.acme.claims.service.RemittancesResubmissionReportService;
-import com.acme.claims.service.BalanceAmountReportService;
+import com.acme.claims.service.*;
+import com.acme.claims.validation.ClaimValidationUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import io.swagger.v3.oas.annotations.parameters.RequestBody;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.UUID;
 
 /**
  * REST Controller for serving report data to users.
@@ -53,6 +56,8 @@ public class ReportDataController {
     private final UserContextService userContextService;
     private final DataFilteringService dataFilteringService;
     private final ReportAccessService reportAccessService;
+    private final AuditLogService auditLogService;
+    private final ClaimValidationUtil claimValidationUtil;
     private final RemittanceAdvicePayerwiseReportService remittanceAdvicePayerwiseReportService;
     private final ClaimSummaryMonthwiseReportService claimSummaryMonthwiseReportService;
     private final ClaimDetailsWithActivityReportService claimDetailsWithActivityReportService;
@@ -86,6 +91,16 @@ public class ReportDataController {
             responseCode = "401",
             description = "Unauthorized - Invalid or missing authentication token",
             content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Forbidden - Insufficient permissions",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
+        ),
+        @ApiResponse(
+            responseCode = "500",
+            description = "Internal server error",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         )
     })
     @GetMapping("/available")
@@ -96,14 +111,14 @@ public class ReportDataController {
         try {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
             
-            Set<ReportType> accessibleReports = reportAccessService.getUserReportAccess(userContext.getUserId());
+            Set<ReportsMetadata> accessibleReports = reportAccessService.getUserReportAccess(userContext.getUserId());
             
             List<Map<String, Object>> reportList = accessibleReports.stream()
-                    .map(reportType -> {
+                    .map(reportMetadata -> {
                         Map<String, Object> report = new HashMap<>();
-                        report.put("type", reportType.name());
-                        report.put("displayName", reportType.getDisplayName());
-                        report.put("description", reportType.getDescription());
+                        report.put("type", reportMetadata.getReportCode());
+                        report.put("displayName", reportMetadata.getReportName());
+                        report.put("description", reportMetadata.getDescription());
                         return report;
                     })
                     .toList();
@@ -130,127 +145,60 @@ public class ReportDataController {
 
     /**
      * Get Remittances & Resubmission report data
+     *
+     * @param request The report query request with filters
+     * @param authentication Current user authentication context
+     * @return Remittances & Resubmission report data
      */
     @Operation(
         summary = "Get Remittances & Resubmission report",
         description = "Retrieves Remittances & Resubmission report data for activity or claim level",
-        deprecated = true
-    )
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Report data retrieved successfully"),
-        @ApiResponse(responseCode = "400", description = "Bad request - Invalid parameters"),
-        @ApiResponse(responseCode = "403", description = "Forbidden - User does not have access to this report"),
-        @ApiResponse(responseCode = "401", description = "Unauthorized - Invalid or missing authentication token")
-    })
-    @Deprecated
-    @GetMapping("/remittances-resubmission")
-    @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
-    public ResponseEntity<Map<String, Object>> getRemittancesResubmission(
-            @RequestParam(defaultValue = "activity") String level, // activity | claim
-            @RequestParam(required = false) String facilityId,
-            @RequestParam(required = false) List<String> facilityIds,
-            @RequestParam(required = false) List<String> payerIds,
-            @RequestParam(required = false) List<String> receiverIds,
-            @RequestParam(required = false) String fromDate,
-            @RequestParam(required = false) String toDate,
-            @RequestParam(required = false) String encounterType,
-            @RequestParam(required = false) List<String> clinicianIds,
-            @RequestParam(required = false) String claimNumber,
-            @RequestParam(required = false) String cptCode,
-            @RequestParam(required = false) String denialFilter,
-            @RequestParam(required = false) String orderBy,
-            @RequestParam(required = false) Integer page,
-            @RequestParam(required = false) Integer size) {
-
-        try {
-            UserContext userContext = userContextService.getCurrentUserContextWithRequest();
-
-            if (!reportAccessService.hasReportAccess(userContext.getUserId(), ReportType.REMITTANCES_RESUBMISSION)) {
-                return ResponseEntity.status(403)
-                        .body(Map.of("error", "Access denied: You do not have permission to view this report"));
-            }
-
-            if (!Arrays.asList("activity", "claim").contains(level)) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "Invalid level. Must be one of: activity, claim"));
-            }
-
-            LocalDateTime fromDateTime = null;
-            LocalDateTime toDateTime = null;
-            if (fromDate != null && !fromDate.isEmpty()) {
-                try {
-                    fromDateTime = LocalDateTime.parse(fromDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid fromDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-            if (toDate != null && !toDate.isEmpty()) {
-                try {
-                    toDateTime = LocalDateTime.parse(toDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid toDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("reportType", ReportType.REMITTANCES_RESUBMISSION.name());
-            response.put("displayName", ReportType.REMITTANCES_RESUBMISSION.getDisplayName());
-            response.put("level", level);
-            response.put("user", userContext.getUsername());
-            response.put("userId", userContext.getUserId());
-            response.put("timestamp", java.time.LocalDateTime.now());
-
-            List<Map<String, Object>> data;
-            if ("activity".equals(level)) {
-                data = remittancesResubmissionReportService.getActivityLevelData(
-                        facilityId, facilityIds, payerIds, receiverIds,
-                        fromDateTime, toDateTime, encounterType, clinicianIds,
-                        claimNumber, cptCode, denialFilter, orderBy,
-                        page, size, null, null, null);
-            } else {
-                data = remittancesResubmissionReportService.getClaimLevelData(
-                        facilityId, facilityIds, payerIds, receiverIds,
-                        fromDateTime, toDateTime, encounterType, clinicianIds,
-                        claimNumber, denialFilter, orderBy,
-                        page, size, null, null, null);
-            }
-
-            response.put("data", data);
-            response.put("totalRecords", data.size());
-            response.put("filterOptions", remittancesResubmissionReportService.getFilterOptions());
-
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            log.error("Error retrieving Remittances & Resubmission report for user: {}", userContextService.getCurrentUsername(), e);
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to retrieve Remittances & Resubmission report: " + e.getMessage()));
-        }
-    }
-    
-    /**
-     * Get balance amount report data
-     * 
-     * @param authentication Current user authentication context
-     * @return Balance amount report data
-     */
-    @Operation(
-        summary = "Get balance amount report",
-        description = "Retrieves balance amount report data (Tab A) with filters",
-        requestBody = @RequestBody(required = false, description = "Use POST /api/reports/data/query for unified body-style calls"),
-        deprecated = true
+        requestBody = @RequestBody(
+            description = "Report query request with filters and pagination",
+            required = true,
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReportQueryRequest.class),
+                examples = @ExampleObject(
+                    name = "Remittances Resubmission Request",
+                    summary = "Example request for remittances resubmission report",
+                    value = """
+                    {
+                      "reportType": "REMITTANCES_RESUBMISSION",
+                      "level": "activity",
+                      "facilityCodes": ["FAC001"],
+                      "payerCodes": ["DHA"],
+                      "receiverCodes": ["PROV001"],
+                      "fromDate": "2025-01-01T00:00:00",
+                      "toDate": "2025-12-31T23:59:59",
+                      "encounterType": "OUTPATIENT",
+                      "clinicianCodes": ["DR001"],
+                      "claimId": "CLM123456",
+                      "cptCode": "99213",
+                      "denialCodes": ["DEN001"],
+                      "sortBy": "submission_date",
+                      "sortDirection": "DESC",
+                      "page": 0,
+                      "size": 50
+                    }
+                    """
+                )
+            )
+        )
     )
     @ApiResponses(value = {
         @ApiResponse(
             responseCode = "200",
-            description = "Balance amount report data retrieved successfully",
+            description = "Remittances & Resubmission report data retrieved successfully",
             content = @Content(
                 mediaType = MediaType.APPLICATION_JSON_VALUE,
-                examples = @ExampleObject(
-                    value = "{\"reportType\": \"BALANCE_AMOUNT_REPORT\", \"data\": [], \"facilities\": [], \"user\": \"admin\"}"
-                )
+                schema = @Schema(implementation = ReportResponse.class)
             )
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Bad request - Invalid parameters",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "403",
@@ -263,74 +211,260 @@ public class ReportDataController {
             content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         )
     })
-    @Deprecated
-    @GetMapping("/balance-amount")
+    @PostMapping("/remittances-resubmission")
     @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
-    public ResponseEntity<Map<String, Object>> getBalanceAmountReport(
-            @RequestParam(required = false) List<Long> claimKeyIds,
-            @RequestParam(required = false) List<String> facilityCodes,
-            @RequestParam(required = false) List<String> payerCodes,
-            @RequestParam(required = false) List<String> receiverIds,
-            @RequestParam(required = false) String dateFrom,
-            @RequestParam(required = false) String dateTo,
-            @RequestParam(required = false) Integer year,
-            @RequestParam(required = false) Integer month,
-            @RequestParam(required = false) Boolean basedOnInitialNet,
-            @RequestParam(required = false) String orderBy,
-            @RequestParam(required = false) String orderDirection,
-            @RequestParam(required = false) Integer page,
-            @RequestParam(required = false) Integer size) {
+    public ResponseEntity<ReportResponse> getRemittancesResubmission(
+            @Parameter(description = "Remittances Resubmission report request with filters and pagination", required = true)
+            @Valid @RequestBody RemittancesResubmissionRequest request,
+            @Parameter(hidden = true) Authentication authentication) {
 
         try {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
 
+            // Validate report type
+            if (request.getReportType() == null || request.getReportType() != ReportType.REMITTANCES_RESUBMISSION) {
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Error")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Report type must be REMITTANCES_RESUBMISSION"))
+                        .build());
+            }
+
+            // Check report access
+            if (!reportAccessService.hasReportAccess(userContext.getUserId(), ReportType.REMITTANCES_RESUBMISSION)) {
+                log.warn("User {} (ID: {}) attempted to access Remittances Resubmission report without permission",
+                        userContext.getUsername(), userContext.getUserId());
+                return ResponseEntity.status(403)
+                        .body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Access Denied")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Access denied: You do not have permission to view this report"))
+                                .build());
+            }
+
+            // Validate level parameter
+            String level = request.getLevel() != null ? request.getLevel() : "activity";
+            if (!Arrays.asList("activity", "claim").contains(level)) {
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Invalid Level")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Invalid level. Must be one of: activity, claim"))
+                        .build());
+            }
+
+            // Get report data based on level
+            List<Map<String, Object>> data;
+            if ("activity".equals(level)) {
+                data = remittancesResubmissionReportService.getActivityLevelData(
+                        request.getFacilityId(), request.getFacilityIds(), request.getPayerIds(), 
+                        request.getReceiverIds(), request.getFromDate(), request.getToDate(), 
+                        request.getEncounterType(), request.getClinicianIds(), request.getClaimNumber(), 
+                        request.getCptCode(), request.getDenialFilter(), request.getOrderBy(),
+                        request.getPage(), request.getSize(), request.getFacilityRefIds(), 
+                        request.getPayerRefIds(), request.getClinicianRefIds());
+            } else {
+                data = remittancesResubmissionReportService.getClaimLevelData(
+                        request.getFacilityId(), request.getFacilityIds(), request.getPayerIds(), 
+                        request.getReceiverIds(), request.getFromDate(), request.getToDate(), 
+                        request.getEncounterType(), request.getClinicianIds(), request.getClaimNumber(), 
+                        request.getDenialFilter(), request.getOrderBy(),
+                        request.getPage(), request.getSize(), request.getFacilityRefIds(), 
+                        request.getPayerRefIds(), request.getClinicianRefIds());
+            }
+
+            // Build response using ReportResponse
+            return ResponseEntity.ok(ReportResponse.builder()
+                    .reportType(ReportType.REMITTANCES_RESUBMISSION.name())
+                    .displayName(ReportType.REMITTANCES_RESUBMISSION.getDisplayName())
+                    .data(data)
+                    .totalRecords(data.size())
+                    .user(userContext.getUsername())
+                    .userId(userContext.getUserId())
+                    .timestamp(LocalDateTime.now())
+                    .parameters(new HashMap<String, Object>() {{
+                        put("level", level);
+                        put("filterOptions", remittancesResubmissionReportService.getFilterOptions());
+                        put("facilityId", request.getFacilityId() != null ? request.getFacilityId() : "");
+                        put("facilityIds", request.getFacilityIds() != null ? request.getFacilityIds() : List.of());
+                        put("payerIds", request.getPayerIds() != null ? request.getPayerIds() : List.of());
+                        put("receiverIds", request.getReceiverIds() != null ? request.getReceiverIds() : List.of());
+                        put("encounterType", request.getEncounterType() != null ? request.getEncounterType() : "");
+                        put("clinicianIds", request.getClinicianIds() != null ? request.getClinicianIds() : List.of());
+                        put("claimNumber", request.getClaimNumber() != null ? request.getClaimNumber() : "");
+                        put("cptCode", request.getCptCode() != null ? request.getCptCode() : "");
+                        put("denialFilter", request.getDenialFilter() != null ? request.getDenialFilter() : "");
+                        put("fromDate", request.getFromDate() != null ? request.getFromDate().toString() : "");
+                        put("toDate", request.getToDate() != null ? request.getToDate().toString() : "");
+                    }})
+                    .metadata(Map.of(
+                        "executionTimeMs", System.currentTimeMillis(),
+                        "reportType", ReportType.REMITTANCES_RESUBMISSION.name(),
+                        "level", level,
+                        "user", userContext.getUsername(),
+                        "userId", userContext.getUserId()
+                    ))
+                    .build());
+
+        } catch (Exception e) {
+            log.error("Error retrieving Remittances & Resubmission report for user: {}",
+                    userContextService.getCurrentUsername(), e);
+            return ResponseEntity.internalServerError().body(ReportResponse.builder()
+                    .reportType("ERROR")
+                    .displayName("Internal Server Error")
+                    .data(List.of())
+                    .metadata(Map.of("error", "Failed to retrieve Remittances & Resubmission report: " + e.getMessage()))
+                    .build());
+        }
+    }
+    
+    /**
+     * Get balance amount report data
+     * 
+     * @param request The report query request with filters
+     * @param authentication Current user authentication context
+     * @return Balance amount report data
+     */
+    @Operation(
+        summary = "Get balance amount report",
+        description = "Retrieves balance amount report data (Tab A) with comprehensive filtering options",
+        requestBody = @RequestBody(
+            description = "Report query request with filters and pagination",
+            required = true,
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReportQueryRequest.class),
+                examples = @ExampleObject(
+                    name = "Balance Amount Report Request",
+                    summary = "Example request for balance amount report",
+                    value = """
+                    {
+                      "reportType": "BALANCE_AMOUNT_REPORT",
+                      "facilityCodes": ["FAC001", "FAC002"],
+                      "payerCodes": ["DHA"],
+                      "fromDate": "2025-01-01T00:00:00",
+                      "toDate": "2025-12-31T23:59:59",
+                      "year": 2025,
+                      "month": 6,
+                      "basedOnInitialNet": true,
+                      "sortBy": "aging_days",
+                      "sortDirection": "DESC",
+                      "page": 0,
+                      "size": 50
+                    }
+                    """
+                )
+            )
+        )
+    )
+    @ApiResponses(value = {
+        @ApiResponse(
+            responseCode = "200",
+            description = "Balance amount report data retrieved successfully",
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                schema = @Schema(implementation = ReportResponse.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Bad request - Invalid parameters",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Forbidden - User does not have access to this report",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
+        ),
+        @ApiResponse(
+            responseCode = "401",
+            description = "Unauthorized - Invalid or missing authentication token",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
+        )
+    })
+    @PostMapping("/balance-amount")
+    @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
+    public ResponseEntity<ReportResponse> getBalanceAmountReport(
+            @Parameter(description = "Report query request with filters and pagination", required = true)
+            @Valid @RequestBody ReportQueryRequest request,
+            @Parameter(hidden = true) Authentication authentication) {
+
+        try {
+            UserContext userContext = userContextService.getCurrentUserContextWithRequest();
+
+            // Validate report type
+            if (request.getReportType() == null || request.getReportType() != ReportType.BALANCE_AMOUNT_REPORT) {
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Error")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Report type must be BALANCE_AMOUNT_REPORT"))
+                        .build());
+            }
+
             if (!reportAccessService.hasReportAccess(userContext.getUserId(), ReportType.BALANCE_AMOUNT_REPORT)) {
                 return ResponseEntity.status(403)
-                        .body(Map.of("error", "Access denied: You do not have permission to view this report"));
+                        .body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Access Denied")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Access denied: You do not have permission to view this report"))
+                                .build());
             }
 
-            LocalDateTime fromDt = null;
-            LocalDateTime toDt = null;
-            if (dateFrom != null && !dateFrom.isEmpty()) {
-                try {
-                    fromDt = LocalDateTime.parse(dateFrom);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid dateFrom format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-            if (dateTo != null && !dateTo.isEmpty()) {
-                try {
-                    toDt = LocalDateTime.parse(dateTo);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid dateTo format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-
+            // Get report data using the service
             List<Map<String, Object>> data = balanceAmountReportService.getTabA_BalanceToBeReceived(
                     String.valueOf(userContext.getUserId()),
-                    claimKeyIds, facilityCodes, payerCodes, receiverIds,
-                    fromDt, toDt, year, month,
-                    basedOnInitialNet, orderBy, orderDirection, page, size,
-                    null, null);
+                    request.getClaimKeyIds(), 
+                    (List<String>) request.getFacilityCodes(), 
+                    (List<String>) request.getPayerCodes(), 
+                    request.getReceiverIds(),
+                    request.getFromDate(), 
+                    request.getToDate(), 
+                    request.getYear(), 
+                    request.getMonth(),
+                    request.getBasedOnInitialNet(), 
+                    request.getSortBy(), 
+                    request.getSortDirection(), 
+                    request.getPage(), 
+                    request.getSize(),
+                    request.getFacilityRefIds(), 
+                    request.getPayerRefIds());
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("reportType", ReportType.BALANCE_AMOUNT_REPORT.name());
-            response.put("displayName", ReportType.BALANCE_AMOUNT_REPORT.getDisplayName());
-            response.put("data", data);
-            response.put("totalRecords", data.size());
-            response.put("filterOptions", balanceAmountReportService.getFilterOptions());
-            response.put("user", userContext.getUsername());
-            response.put("userId", userContext.getUserId());
-            response.put("timestamp", java.time.LocalDateTime.now());
-
-            return ResponseEntity.ok(response);
+            // Build response using ReportResponse
+            return ResponseEntity.ok(ReportResponse.builder()
+                    .reportType(ReportType.BALANCE_AMOUNT_REPORT.name())
+                    .displayName(ReportType.BALANCE_AMOUNT_REPORT.getDisplayName())
+                    .data(data)
+                    .totalRecords(data.size())
+                    .user(userContext.getUsername())
+                    .userId(userContext.getUserId())
+                    .timestamp(LocalDateTime.now())
+                    .parameters(Map.of(
+                        "filterOptions", balanceAmountReportService.getFilterOptions(),
+                        "facilityCodes", request.getFacilityCodes() != null ? (List<String>) request.getFacilityCodes() : List.of(),
+                        "payerCodes", request.getPayerCodes() != null ? (List<String>) request.getPayerCodes() : List.of(),
+                        "fromDate", request.getFromDate() != null ? request.getFromDate().toString() : "",
+                        "toDate", request.getToDate() != null ? request.getToDate().toString() : ""
+                    ))
+                    .metadata(Map.of(
+                        "executionTimeMs", System.currentTimeMillis(),
+                        "reportType", ReportType.BALANCE_AMOUNT_REPORT.name(),
+                        "user", userContext.getUsername(),
+                        "userId", userContext.getUserId()
+                    ))
+                    .build());
 
         } catch (Exception e) {
             log.error("Error retrieving balance amount report for user: {}", userContextService.getCurrentUsername(), e);
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to retrieve balance amount report: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(ReportResponse.builder()
+                    .reportType("ERROR")
+                    .displayName("Internal Server Error")
+                    .data(List.of())
+                    .metadata(Map.of("error", "Failed to retrieve balance amount report: " + e.getMessage()))
+                    .build());
         }
     }
     
@@ -492,43 +626,108 @@ public class ReportDataController {
     /**
      * Unified report endpoint - accepts request body with reportType and parameters
      */
+    @PostMapping(value = "/query", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
-        summary = "Query report (unified endpoint)",
-        description = "Single endpoint to retrieve any report using ReportType and parameters in the request body"
+        summary = "Query Report Data",
+        description = "Unified endpoint for querying all report types with comprehensive filtering, pagination, and access control",
+        requestBody = @RequestBody(
+            description = "Report query request with filters and pagination options",
+            required = true,
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReportQueryRequest.class),
+                examples = {
+                    @ExampleObject(
+                        name = "Balance Amount Report",
+                        summary = "Example: Balance Amount Report Query",
+                        value = """
+                        {
+                          "reportType": "BALANCE_AMOUNT_REPORT",
+                          "tab": "overall",
+                          "facilityCodes": ["FAC001", "FAC002"],
+                          "fromDate": "2025-01-01T00:00:00",
+                          "toDate": "2025-12-31T23:59:59",
+                          "page": 0,
+                          "size": 50,
+                          "sortBy": "aging_days",
+                          "sortDirection": "DESC"
+                        }
+                        """
+                    ),
+                    @ExampleObject(
+                        name = "Rejected Claims Report",
+                        summary = "Example: Rejected Claims Report Query",
+                        value = """
+                        {
+                          "reportType": "REJECTED_CLAIMS_REPORT",
+                          "tab": "summary",
+                          "facilityCodes": ["FAC001"],
+                          "payerCodes": ["DHA"],
+                          "fromDate": "2025-01-01T00:00:00",
+                          "toDate": "2025-12-31T23:59:59",
+                          "page": 0,
+                          "size": 50
+                        }
+                        """
+                    )
+                }
+            )
+        )
     )
     @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Report data retrieved successfully"),
-        @ApiResponse(responseCode = "400", description = "Bad request - Invalid report type or parameters"),
-        @ApiResponse(responseCode = "403", description = "Forbidden - User does not have access to this report"),
-        @ApiResponse(responseCode = "401", description = "Unauthorized - Invalid or missing authentication token")
+        @ApiResponse(
+            responseCode = "200",
+            description = "Report data retrieved successfully",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReportResponse.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Invalid request parameters",
+            content = @Content(mediaType = "application/json")
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Access denied - insufficient permissions",
+            content = @Content(mediaType = "application/json")
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "No data found for the specified criteria",
+            content = @Content(mediaType = "application/json")
+        ),
+        @ApiResponse(
+            responseCode = "500",
+            description = "Internal server error",
+            content = @Content(mediaType = "application/json")
+        )
     })
-    @PostMapping("/query")
-    @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
-    public ResponseEntity<Map<String, Object>> queryReport(
-            @RequestBody(
-                required = true,
-                description = "Unified report query body with reportType and filters",
-                content = @Content(
-                    mediaType = MediaType.APPLICATION_JSON_VALUE,
-                    schema = @Schema(implementation = ReportQueryRequest.class),
-                    examples = {
-                        @ExampleObject(name = "Claim Summary - Monthwise", value = "{\n  \"reportType\": \"CLAIM_SUMMARY_MONTHWISE\",\n  \"tab\": \"monthwise\",\n  \"facilityCode\": \"FAC001\",\n  \"fromDate\": \"2025-01-01T00:00:00\",\n  \"toDate\": \"2025-01-31T23:59:59\",\n  \"page\": 0,\n  \"size\": 50\n}"),
-                        @ExampleObject(name = "Rejected Claims - ReceiverPayer", value = "{\n  \"reportType\": \"REJECTED_CLAIMS_REPORT\",\n  \"tab\": \"receiverPayer\",\n  \"facilityCodes\": [\"FAC001\"],\n  \"payerCodes\": [\"DHA\"],\n  \"fromDate\": \"2025-01-01T00:00:00\",\n  \"toDate\": \"2025-01-31T23:59:59\"\n}"),
-                        @ExampleObject(name = "Remittances & Resubmission - Activity", value = "{\n  \"reportType\": \"REMITTANCES_RESUBMISSION\",\n  \"level\": \"activity\",\n  \"facilityCodes\": [\"FAC001\"],\n  \"fromDate\": \"2025-01-01T00:00:00\",\n  \"toDate\": \"2025-01-31T23:59:59\"\n}"),
-                        @ExampleObject(name = "Balance Amount - Tab A", value = "{\n  \"reportType\": \"BALANCE_AMOUNT_REPORT\",\n  \"facilityCodes\": [\"FAC001\"],\n  \"fromDate\": \"2024-01-01T00:00:00\",\n  \"toDate\": \"2024-12-31T23:59:59\",\n  \"orderBy\": \"aging_days\",\n  \"sortDirection\": \"DESC\"\n}")
-                    }
-                )
-            ) ReportQueryRequest request) {
+    @PreAuthorize("hasRole('STAFF') or hasRole('FACILITY_ADMIN') or hasRole('SUPER_ADMIN')")
+    public ResponseEntity<ReportResponse> queryReportData(
+            @Parameter(description = "Report query request with filters and pagination", required = true)
+            @jakarta.validation.Valid @RequestBody ReportQueryRequest request) {
         try {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
 
             if (request.getReportType() == null) {
-                return ResponseEntity.badRequest().body(Map.of("error", "reportType is required"));
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Error")
+                        .data(List.of())
+                        .metadata(Map.of("error", "reportType is required"))
+                        .build());
             }
 
             if (!reportAccessService.hasReportAccess(userContext.getUserId(), request.getReportType())) {
                 return ResponseEntity.status(403)
-                        .body(Map.of("error", "Access denied: You do not have permission to view this report"));
+                        .body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Access Denied")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Access denied: You do not have permission to view this report"))
+                                .build());
             }
 
             Map<String, Object> response = new HashMap<>();
@@ -564,7 +763,12 @@ public class ReportDataController {
                                 request.getPayerCode(), request.getReceiverCode(), request.getPaymentReference(),
                                 request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize());
                     } else {
-                        return ResponseEntity.badRequest().body(Map.of("error", "Invalid tab for REMITTANCE_ADVICE_PAYERWISE"));
+                        return ResponseEntity.badRequest().body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Invalid Tab")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Invalid tab for REMITTANCE_ADVICE_PAYERWISE"))
+                                .build());
                     }
                     break;
                 case CLAIM_SUMMARY_MONTHWISE:
@@ -588,7 +792,12 @@ public class ReportDataController {
                                 request.getPayerCode(), request.getReceiverCode(), request.getSortBy(),
                                 request.getSortDirection(), request.getPage(), request.getSize());
                     } else {
-                        return ResponseEntity.badRequest().body(Map.of("error", "Invalid tab for CLAIM_SUMMARY_MONTHWISE"));
+                        return ResponseEntity.badRequest().body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Invalid Tab")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Invalid tab for CLAIM_SUMMARY_MONTHWISE"))
+                                .build());
                     }
                     break;
                 case CLAIM_DETAILS_WITH_ACTIVITY:
@@ -596,7 +805,7 @@ public class ReportDataController {
                             request.getFacilityCode(), request.getReceiverCode(), request.getPayerCode(), request.getClinicianCode(),
                             request.getClaimId(), request.getPatientId(), request.getCptCode(), request.getClaimStatus(),
                             request.getPaymentStatus(), request.getEncounterType(), request.getResubType(),
-                            (request.getDenialCodes() != null && !request.getDenialCodes().isEmpty()) ? request.getDenialCodes().get(0) : null,
+                            (request.getDenialCodes() != null && !request.getDenialCodes().isEmpty()) ? (String) request.getDenialCodes().get(0) : null,
                             request.getExtra() != null ? (String) request.getExtra().get("memberId") : null,
                             request.getFromDate(), request.getToDate(), request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize());
                     parameters = claimDetailsWithActivityReportService.getClaimDetailsSummary(
@@ -616,82 +825,129 @@ public class ReportDataController {
                     String rtab = request.getTab() == null ? "summary" : request.getTab();
                     if ("summary".equals(rtab)) {
                         data = rejectedClaimsReportService.getSummaryTabData(
-                                String.valueOf(userContext.getUserId()), request.getFacilityCodes(), request.getPayerCodes(), request.getReceiverIds(),
+                                String.valueOf(userContext.getUserId()), (List<String>) request.getFacilityCodes(), (List<String>) request.getPayerCodes(), request.getReceiverIds(),
                                 request.getFromDate(), request.getToDate(), request.getYear(), request.getMonth(),
                                 request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize(),
                                 request.getFacilityRefIds(), request.getPayerRefIds(), request.getClinicianRefIds());
                     } else if ("receiverPayer".equals(rtab)) {
                         data = rejectedClaimsReportService.getReceiverPayerTabData(
-                                String.valueOf(userContext.getUserId()), request.getFacilityCodes(), request.getPayerCodes(), request.getReceiverIds(),
-                                request.getFromDate(), request.getToDate(), request.getYear(), request.getDenialCodes(),
+                                String.valueOf(userContext.getUserId()), (List<String>) request.getFacilityCodes(), (List<String>) request.getPayerCodes(), request.getReceiverIds(),
+                                request.getFromDate(), request.getToDate(), request.getYear(), (List<String>) request.getDenialCodes(),
                                 request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize(),
                                 request.getFacilityRefIds(), request.getPayerRefIds(), request.getClinicianRefIds());
                     } else if ("claimWise".equals(rtab)) {
                         data = rejectedClaimsReportService.getClaimWiseTabData(
-                                String.valueOf(userContext.getUserId()), request.getFacilityCodes(), request.getPayerCodes(), request.getReceiverIds(),
-                                request.getFromDate(), request.getToDate(), request.getYear(), request.getDenialCodes(),
+                                String.valueOf(userContext.getUserId()), (List<String>) request.getFacilityCodes(), (List<String>) request.getPayerCodes(), request.getReceiverIds(),
+                                request.getFromDate(), request.getToDate(), request.getYear(), (List<String>) request.getDenialCodes(),
                                 request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize(),
                                 request.getFacilityRefIds(), request.getPayerRefIds(), request.getClinicianRefIds());
                     } else {
-                        return ResponseEntity.badRequest().body(Map.of("error", "Invalid tab for REJECTED_CLAIMS_REPORT"));
+                        return ResponseEntity.badRequest().body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Invalid Tab")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Invalid tab for REJECTED_CLAIMS_REPORT"))
+                                .build());
                     }
                     break;
                 case REMITTANCES_RESUBMISSION:
                     String level = request.getLevel() == null ? "activity" : request.getLevel();
                     if ("activity".equals(level)) {
                         data = remittancesResubmissionReportService.getActivityLevelData(
-                                request.getFacilityCode(), request.getFacilityCodes(), request.getPayerCodes(), request.getReceiverIds(),
+                                request.getFacilityCode(), (List<String>) request.getFacilityCodes(), (List<String>) request.getPayerCodes(), request.getReceiverIds(),
                                 request.getFromDate(), request.getToDate(), request.getEncounterType(), request.getClinicianIds(),
                                 request.getClaimId(), request.getCptCode(), request.getDenialFilter(), request.getSortBy(),
                                 request.getPage(), request.getSize(), request.getFacilityRefIds(), request.getPayerRefIds(), request.getClinicianRefIds());
                     } else if ("claim".equals(level)) {
                         data = remittancesResubmissionReportService.getClaimLevelData(
-                                request.getFacilityCode(), request.getFacilityCodes(), request.getPayerCodes(), request.getReceiverIds(),
+                                request.getFacilityCode(), (List<String>) request.getFacilityCodes(), (List<String>) request.getPayerCodes(), request.getReceiverIds(),
                                 request.getFromDate(), request.getToDate(), request.getEncounterType(), request.getClinicianIds(),
                                 request.getClaimId(), request.getDenialFilter(), request.getSortBy(),
                                 request.getPage(), request.getSize(), request.getFacilityRefIds(), request.getPayerRefIds(), request.getClinicianRefIds());
                     } else {
-                        return ResponseEntity.badRequest().body(Map.of("error", "Invalid level for REMITTANCES_RESUBMISSION"));
+                        return ResponseEntity.badRequest().body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Invalid Level")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Invalid level for REMITTANCES_RESUBMISSION"))
+                                .build());
                     }
                     break;
                 case BALANCE_AMOUNT_REPORT:
                     data = balanceAmountReportService.getTabA_BalanceToBeReceived(
-                            String.valueOf(userContext.getUserId()), request.getClaimKeyIds(), request.getFacilityCodes(),
-                            request.getPayerCodes(), request.getReceiverIds(), request.getFromDate(), request.getToDate(), request.getYear(), request.getMonth(),
+                            String.valueOf(userContext.getUserId()), request.getClaimKeyIds(), (List<String>) request.getFacilityCodes(),
+                            (List<String>) request.getPayerCodes(), request.getReceiverIds(), request.getFromDate(), request.getToDate(), request.getYear(), request.getMonth(),
                             request.getBasedOnInitialNet(), request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize(),
                             request.getFacilityRefIds(), request.getPayerRefIds());
                     break;
                 default:
-                    return ResponseEntity.badRequest().body(Map.of("error", "Unsupported reportType"));
+                    return ResponseEntity.badRequest().body(ReportResponse.builder()
+                            .reportType("ERROR")
+                            .displayName("Unsupported Report Type")
+                            .data(List.of())
+                            .metadata(Map.of("error", "Unsupported reportType"))
+                            .build());
             }
 
-            response.put("data", data);
-            response.put("parameters", parameters);
-            response.put("totalRecords", data.size());
-            return ResponseEntity.ok(response);
+            return ResponseEntity.ok(ReportResponse.builder()
+                    .reportType(request.getReportType().name())
+                    .displayName(request.getReportType().getDisplayName())
+                    .data(data)
+                    .parameters(parameters)
+                    .totalRecords(data.size())
+                    .user(userContext.getUsername())
+                    .userId(userContext.getUserId())
+                    .timestamp(LocalDateTime.now())
+                    .metadata(response)
+                    .build());
         } catch (Exception e) {
             log.error("Error querying report for user: {}", userContextService.getCurrentUsername(), e);
-            return ResponseEntity.internalServerError().body(Map.of("error", "Failed to query report: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(ReportResponse.builder()
+                    .reportType("ERROR")
+                    .displayName("Internal Server Error")
+                    .data(List.of())
+                    .metadata(Map.of("error", "Failed to query report: " + e.getMessage()))
+                    .build());
         }
     }
 
     /**
      * Get Remittance Advice Payerwise report data
      *
-     * @param fromDate Start date for filtering (optional)
-     * @param toDate End date for filtering (optional)
-     * @param facilityCode Facility code for filtering (optional)
-     * @param payerCode Payer code for filtering (optional)
-     * @param receiverCode Receiver code for filtering (optional)
-     * @param paymentReference Payment reference for filtering (optional)
-     * @param tab Tab to retrieve (header, claimWise, activityWise)
+     * @param request The report query request with filters
      * @param authentication Current user authentication context
      * @return Remittance Advice Payerwise report data
      */
     @Operation(
         summary = "Get Remittance Advice Payerwise report",
         description = "Retrieves Remittance Advice Payerwise report data with comprehensive filtering options",
-        deprecated = true
+        requestBody = @RequestBody(
+            description = "Report query request with filters and pagination",
+            required = true,
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReportQueryRequest.class),
+                examples = @ExampleObject(
+                    name = "Remittance Advice Payerwise Request",
+                    summary = "Example request for remittance advice payerwise report",
+                    value = """
+                    {
+                      "reportType": "REMITTANCE_ADVICE_PAYERWISE",
+                      "tab": "header",
+                      "facilityCode": "FAC001",
+                      "payerCode": "DHA",
+                      "receiverCode": "PROV001",
+                      "fromDate": "2025-01-01T00:00:00",
+                      "toDate": "2025-12-31T23:59:59",
+                      "sortBy": "payment_date",
+                      "sortDirection": "DESC",
+                      "page": 0,
+                      "size": 50
+                    }
+                    """
+                )
+            )
+        )
     )
     @ApiResponses(value = {
         @ApiResponse(
@@ -699,168 +955,136 @@ public class ReportDataController {
             description = "Remittance Advice Payerwise report data retrieved successfully",
             content = @Content(
                 mediaType = MediaType.APPLICATION_JSON_VALUE,
-                examples = @ExampleObject(
-                    value = "{\"reportType\": \"REMITTANCE_ADVICE_PAYERWISE\", \"tab\": \"header\", \"data\": [], \"parameters\": {}, \"user\": \"admin\"}"
-                )
+                schema = @Schema(implementation = ReportResponse.class)
             )
         ),
         @ApiResponse(
             responseCode = "400",
-            description = "Bad request - Invalid parameters"
+            description = "Bad request - Invalid parameters",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "403",
-            description = "Forbidden - User does not have access to this report"
+            description = "Forbidden - User does not have access to this report",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "401",
-            description = "Unauthorized - Invalid or missing authentication token"
+            description = "Unauthorized - Invalid or missing authentication token",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         )
     })
-    @Deprecated
-    @GetMapping("/remittance-advice-payerwise")
+    @PostMapping("/remittance-advice-payerwise")
     @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
-    public ResponseEntity<Map<String, Object>> getRemittanceAdvicePayerwiseReport(
-            @Parameter(description = "Start date (YYYY-MM-DDTHH:mm:ss)")
-            @RequestParam(required = false) String fromDate,
-            @Parameter(description = "End date (YYYY-MM-DDTHH:mm:ss)")
-            @RequestParam(required = false) String toDate,
-            @Parameter(description = "Facility code filter")
-            @RequestParam(required = false) String facilityCode,
-            @Parameter(description = "Payer code filter")
-            @RequestParam(required = false) String payerCode,
-            @Parameter(description = "Receiver code filter")
-            @RequestParam(required = false) String receiverCode,
-            @Parameter(description = "Payment reference filter")
-            @RequestParam(required = false) String paymentReference,
-            @Parameter(description = "Tab to retrieve (header, claimWise, activityWise)", example = "header")
-            @RequestParam(defaultValue = "header") String tab,
-            @Parameter(description = "Sort by column")
-            @RequestParam(required = false) String sortBy,
-            @Parameter(description = "Sort direction (ASC or DESC)")
-            @RequestParam(required = false) String sortDirection,
-            @Parameter(description = "Page number (0-based)")
-            @RequestParam(required = false) Integer page,
-            @Parameter(description = "Page size")
-            @RequestParam(required = false) Integer size,
+    public ResponseEntity<ReportResponse> getRemittanceAdvicePayerwiseReport(
+            @Parameter(description = "Report query request with filters and pagination", required = true)
+            @Valid @RequestBody ReportQueryRequest request,
             @Parameter(hidden = true) Authentication authentication) {
 
         try {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
+
+            // Validate report type
+            if (request.getReportType() == null || request.getReportType() != ReportType.REMITTANCE_ADVICE_PAYERWISE) {
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Error")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Report type must be REMITTANCE_ADVICE_PAYERWISE"))
+                        .build());
+            }
 
             // Check report access
             if (!reportAccessService.hasReportAccess(userContext.getUserId(), ReportType.REMITTANCE_ADVICE_PAYERWISE)) {
                 log.warn("User {} (ID: {}) attempted to access Remittance Advice Payerwise report without permission",
                         userContext.getUsername(), userContext.getUserId());
                 return ResponseEntity.status(403)
-                        .body(Map.of("error", "Access denied: You do not have permission to view this report"));
-            }
-
-            // Parse dates
-            LocalDateTime fromDateTime = null;
-            LocalDateTime toDateTime = null;
-
-            if (fromDate != null && !fromDate.isEmpty()) {
-                try {
-                    fromDateTime = LocalDateTime.parse(fromDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid fromDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-
-            if (toDate != null && !toDate.isEmpty()) {
-                try {
-                    toDateTime = LocalDateTime.parse(toDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid toDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
+                        .body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Access Denied")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Access denied: You do not have permission to view this report"))
+                                .build());
             }
 
             // Validate tab parameter
+            String tab = request.getTab() != null ? request.getTab() : "header";
             if (!Arrays.asList("header", "claimWise", "activityWise").contains(tab)) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "Invalid tab parameter. Must be one of: header, claimWise, activityWise"));
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Invalid Tab")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Invalid tab parameter. Must be one of: header, claimWise, activityWise"))
+                        .build());
             }
-
-            // Get user's accessible facilities for additional filtering
-            Set<String> accessibleFacilities = dataFilteringService.getUserAccessibleFacilities();
-
-            // Apply facility filter if user doesn't have access to all facilities
-            if (accessibleFacilities != null && !accessibleFacilities.isEmpty() && facilityCode == null) {
-                // If no specific facility is requested, limit to accessible facilities
-                // This would require modifying the service to accept facility restrictions
-                log.debug("User {} has limited facility access: {}", userContext.getUsername(), accessibleFacilities);
-            }
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("reportType", ReportType.REMITTANCE_ADVICE_PAYERWISE.name());
-            response.put("displayName", ReportType.REMITTANCE_ADVICE_PAYERWISE.getDisplayName());
-            response.put("tab", tab);
-            response.put("user", userContext.getUsername());
-            response.put("userId", userContext.getUserId());
-            response.put("timestamp", java.time.LocalDateTime.now());
 
             // Get report parameters (summary data)
             Map<String, Object> parameters = remittanceAdvicePayerwiseReportService.getReportParameters(
-                    fromDateTime, toDateTime, facilityCode, payerCode, receiverCode, paymentReference);
-            response.put("parameters", parameters);
+                    request.getFromDate(), request.getToDate(), request.getFacilityCode(), 
+                    request.getPayerCode(), request.getReceiverCode(), request.getPaymentReference());
 
             // Get tab-specific data
             List<Map<String, Object>> data;
             switch (tab) {
                 case "header":
                     data = remittanceAdvicePayerwiseReportService.getHeaderTabData(
-                            fromDateTime, toDateTime, facilityCode, payerCode, receiverCode,
-                            sortBy, sortDirection, page, size);
+                            request.getFromDate(), request.getToDate(), request.getFacilityCode(), 
+                            request.getPayerCode(), request.getReceiverCode(),
+                            request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize());
                     break;
                 case "claimWise":
                     data = remittanceAdvicePayerwiseReportService.getClaimWiseTabData(
-                            fromDateTime, toDateTime, facilityCode, payerCode, receiverCode, paymentReference,
-                            sortBy, sortDirection, page, size);
+                            request.getFromDate(), request.getToDate(), request.getFacilityCode(), 
+                            request.getPayerCode(), request.getReceiverCode(), request.getPaymentReference(),
+                            request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize());
                     break;
                 case "activityWise":
                     data = remittanceAdvicePayerwiseReportService.getActivityWiseTabData(
-                            fromDateTime, toDateTime, facilityCode, payerCode, receiverCode, paymentReference,
-                            sortBy, sortDirection, page, size);
+                            request.getFromDate(), request.getToDate(), request.getFacilityCode(), 
+                            request.getPayerCode(), request.getReceiverCode(), request.getPaymentReference(),
+                            request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize());
                     break;
                 default:
                     data = new ArrayList<>();
             }
 
-            response.put("data", data);
-            response.put("totalRecords", data.size());
-
-            // Add pagination info
-            Map<String, Object> pagination = new HashMap<>();
-            if (page != null && size != null) {
-                pagination.put("page", page);
-                pagination.put("size", size);
-                pagination.put("hasNext", data.size() == size); // Simple check - could be improved
-                pagination.put("hasPrevious", page > 0);
-            }
-            response.put("pagination", pagination);
-
-            // Add sorting info
-            Map<String, Object> sorting = new HashMap<>();
-            sorting.put("sortBy", sortBy);
-            sorting.put("sortDirection", sortDirection);
-            response.put("sorting", sorting);
-
-            // Add filter options for UI
-            response.put("filterOptions", remittanceAdvicePayerwiseReportService.getFilterOptions());
-
-            log.info("Remittance Advice Payerwise report ({}) accessed by user: {} (ID: {}) - {} records returned",
-                    tab, userContext.getUsername(), userContext.getUserId(), data.size());
-
-            return ResponseEntity.ok(response);
+            // Build response using ReportResponse
+            return ResponseEntity.ok(ReportResponse.builder()
+                    .reportType(ReportType.REMITTANCE_ADVICE_PAYERWISE.name())
+                    .displayName(ReportType.REMITTANCE_ADVICE_PAYERWISE.getDisplayName())
+                    .tab(tab)
+                    .data(data)
+                    .totalRecords(data.size())
+                    .user(userContext.getUsername())
+                    .userId(userContext.getUserId())
+                    .timestamp(LocalDateTime.now())
+                    .parameters(Map.of(
+                        "summary", parameters,
+                        "filterOptions", remittanceAdvicePayerwiseReportService.getFilterOptions(),
+                        "facilityCode", request.getFacilityCode() != null ? request.getFacilityCode() : "",
+                        "payerCode", request.getPayerCode() != null ? request.getPayerCode() : "",
+                        "receiverCode", request.getReceiverCode() != null ? request.getReceiverCode() : "",
+                        "fromDate", request.getFromDate() != null ? request.getFromDate().toString() : "",
+                        "toDate", request.getToDate() != null ? request.getToDate().toString() : ""
+                    ))
+                    .metadata(Map.of(
+                        "executionTimeMs", System.currentTimeMillis(),
+                        "reportType", ReportType.REMITTANCE_ADVICE_PAYERWISE.name(),
+                        "tab", tab,
+                        "user", userContext.getUsername(),
+                        "userId", userContext.getUserId()
+                    ))
+                    .build());
 
         } catch (Exception e) {
             log.error("Error retrieving Remittance Advice Payerwise report for user: {}",
                     userContextService.getCurrentUsername(), e);
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to retrieve Remittance Advice Payerwise report: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(ReportResponse.builder()
+                    .reportType("ERROR")
+                    .displayName("Internal Server Error")
+                    .data(List.of())
+                    .metadata(Map.of("error", "Failed to retrieve Remittance Advice Payerwise report: " + e.getMessage()))
+                    .build());
         }
     }
 
@@ -911,24 +1135,41 @@ public class ReportDataController {
     /**
      * Get Claim Summary Monthwise report data
      *
-     * @param fromDate Start date for filtering (optional)
-     * @param toDate End date for filtering (optional)
-     * @param facilityCode Facility code for filtering (optional)
-     * @param payerCode Payer code for filtering (optional)
-     * @param receiverCode Receiver code for filtering (optional)
-     * @param encounterType Encounter type for filtering (optional)
-     * @param tab Tab to retrieve (monthwise, payerwise, encounterwise)
-     * @param sortBy Sort by column
-     * @param sortDirection Sort direction (ASC or DESC)
-     * @param page Page number (0-based)
-     * @param size Page size
+     * @param request The report query request with filters
      * @param authentication Current user authentication context
      * @return Claim Summary Monthwise report data
      */
     @Operation(
         summary = "Get Claim Summary Monthwise report",
         description = "Retrieves Claim Summary Monthwise report data with comprehensive filtering and tab options",
-        deprecated = true
+        requestBody = @RequestBody(
+            description = "Report query request with filters and pagination",
+            required = true,
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReportQueryRequest.class),
+                examples = @ExampleObject(
+                    name = "Claim Summary Monthwise Request",
+                    summary = "Example request for claim summary monthwise report",
+                    value = """
+                    {
+                      "reportType": "CLAIM_SUMMARY_MONTHWISE",
+                      "tab": "monthwise",
+                      "facilityCode": "FAC001",
+                      "payerCode": "DHA",
+                      "receiverCode": "PROV001",
+                      "encounterType": "OUTPATIENT",
+                      "fromDate": "2025-01-01T00:00:00",
+                      "toDate": "2025-12-31T23:59:59",
+                      "sortBy": "month",
+                      "sortDirection": "ASC",
+                      "page": 0,
+                      "size": 50
+                    }
+                    """
+                )
+            )
+        )
     )
     @ApiResponses(value = {
         @ApiResponse(
@@ -936,168 +1177,137 @@ public class ReportDataController {
             description = "Claim Summary Monthwise report data retrieved successfully",
             content = @Content(
                 mediaType = MediaType.APPLICATION_JSON_VALUE,
-                examples = @ExampleObject(
-                    value = "{\"reportType\": \"CLAIM_SUMMARY_MONTHWISE\", \"tab\": \"monthwise\", \"data\": [], \"parameters\": {}, \"user\": \"admin\"}"
-                )
+                schema = @Schema(implementation = ReportResponse.class)
             )
         ),
         @ApiResponse(
             responseCode = "400",
-            description = "Bad request - Invalid parameters"
+            description = "Bad request - Invalid parameters",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "403",
-            description = "Forbidden - User does not have access to this report"
+            description = "Forbidden - User does not have access to this report",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "401",
-            description = "Unauthorized - Invalid or missing authentication token"
+            description = "Unauthorized - Invalid or missing authentication token",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         )
     })
-    @Deprecated
-    @GetMapping("/claim-summary-monthwise")
+    @PostMapping("/claim-summary-monthwise")
     @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
-    public ResponseEntity<Map<String, Object>> getClaimSummaryMonthwiseReport(
-            @Parameter(description = "Start date (YYYY-MM-DDTHH:mm:ss)")
-            @RequestParam(required = false) String fromDate,
-            @Parameter(description = "End date (YYYY-MM-DDTHH:mm:ss)")
-            @RequestParam(required = false) String toDate,
-            @Parameter(description = "Facility code filter")
-            @RequestParam(required = false) String facilityCode,
-            @Parameter(description = "Payer code filter")
-            @RequestParam(required = false) String payerCode,
-            @Parameter(description = "Receiver code filter")
-            @RequestParam(required = false) String receiverCode,
-            @Parameter(description = "Encounter type filter")
-            @RequestParam(required = false) String encounterType,
-            @Parameter(description = "Tab to retrieve (monthwise, payerwise, encounterwise)", example = "monthwise")
-            @RequestParam(defaultValue = "monthwise") String tab,
-            @Parameter(description = "Sort by column")
-            @RequestParam(required = false) String sortBy,
-            @Parameter(description = "Sort direction (ASC or DESC)")
-            @RequestParam(required = false) String sortDirection,
-            @Parameter(description = "Page number (0-based)")
-            @RequestParam(required = false) Integer page,
-            @Parameter(description = "Page size")
-            @RequestParam(required = false) Integer size,
+    public ResponseEntity<ReportResponse> getClaimSummaryMonthwiseReport(
+            @Parameter(description = "Report query request with filters and pagination", required = true)
+            @Valid @RequestBody ReportQueryRequest request,
             @Parameter(hidden = true) Authentication authentication) {
 
         try {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
+
+            // Validate report type
+            if (request.getReportType() == null || request.getReportType() != ReportType.CLAIM_SUMMARY_MONTHWISE) {
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Error")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Report type must be CLAIM_SUMMARY_MONTHWISE"))
+                        .build());
+            }
 
             // Check report access
             if (!reportAccessService.hasReportAccess(userContext.getUserId(), ReportType.CLAIM_SUMMARY_MONTHWISE)) {
                 log.warn("User {} (ID: {}) attempted to access Claim Summary Monthwise report without permission",
                         userContext.getUsername(), userContext.getUserId());
                 return ResponseEntity.status(403)
-                        .body(Map.of("error", "Access denied: You do not have permission to view this report"));
-            }
-
-            // Parse dates
-            LocalDateTime fromDateTime = null;
-            LocalDateTime toDateTime = null;
-
-            if (fromDate != null && !fromDate.isEmpty()) {
-                try {
-                    fromDateTime = LocalDateTime.parse(fromDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid fromDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-
-            if (toDate != null && !toDate.isEmpty()) {
-                try {
-                    toDateTime = LocalDateTime.parse(toDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid toDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
+                        .body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Access Denied")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Access denied: You do not have permission to view this report"))
+                                .build());
             }
 
             // Validate tab parameter
+            String tab = request.getTab() != null ? request.getTab() : "monthwise";
             if (!Arrays.asList("monthwise", "payerwise", "encounterwise").contains(tab)) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "Invalid tab parameter. Must be one of: monthwise, payerwise, encounterwise"));
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Invalid Tab")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Invalid tab parameter. Must be one of: monthwise, payerwise, encounterwise"))
+                        .build());
             }
-
-            // Get user's accessible facilities for additional filtering
-            Set<String> accessibleFacilities = dataFilteringService.getUserAccessibleFacilities();
-
-            // Apply facility filter if user doesn't have access to all facilities
-            if (accessibleFacilities != null && !accessibleFacilities.isEmpty() && facilityCode == null) {
-                // If no specific facility is requested, limit to accessible facilities
-                // This would require modifying the service to accept facility restrictions
-                log.debug("User {} has limited facility access: {}", userContext.getUsername(), accessibleFacilities);
-            }
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("reportType", ReportType.CLAIM_SUMMARY_MONTHWISE.name());
-            response.put("displayName", ReportType.CLAIM_SUMMARY_MONTHWISE.getDisplayName());
-            response.put("tab", tab);
-            response.put("user", userContext.getUsername());
-            response.put("userId", userContext.getUserId());
-            response.put("timestamp", java.time.LocalDateTime.now());
 
             // Get report parameters (summary data)
             Map<String, Object> parameters = claimSummaryMonthwiseReportService.getReportParameters(
-                    fromDateTime, toDateTime, facilityCode, payerCode, receiverCode, encounterType);
-            response.put("parameters", parameters);
+                    request.getFromDate(), request.getToDate(), request.getFacilityCode(), 
+                    request.getPayerCode(), request.getReceiverCode(), request.getEncounterType());
 
             // Get tab-specific data
             List<Map<String, Object>> data;
             switch (tab) {
                 case "monthwise":
                     data = claimSummaryMonthwiseReportService.getMonthwiseTabData(
-                            fromDateTime, toDateTime, facilityCode, payerCode, receiverCode,
-                            sortBy, sortDirection, page, size);
+                            request.getFromDate(), request.getToDate(), request.getFacilityCode(), 
+                            request.getPayerCode(), request.getReceiverCode(),
+                            request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize());
                     break;
                 case "payerwise":
                     data = claimSummaryMonthwiseReportService.getPayerwiseTabData(
-                            fromDateTime, toDateTime, facilityCode, payerCode, receiverCode,
-                            sortBy, sortDirection, page, size);
+                            request.getFromDate(), request.getToDate(), request.getFacilityCode(), 
+                            request.getPayerCode(), request.getReceiverCode(),
+                            request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize());
                     break;
                 case "encounterwise":
                     data = claimSummaryMonthwiseReportService.getEncounterwiseTabData(
-                            fromDateTime, toDateTime, facilityCode, payerCode, receiverCode,
-                            sortBy, sortDirection, page, size);
+                            request.getFromDate(), request.getToDate(), request.getFacilityCode(), 
+                            request.getPayerCode(), request.getReceiverCode(),
+                            request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize());
                     break;
                 default:
                     data = new ArrayList<>();
             }
 
-            response.put("data", data);
-            response.put("totalRecords", data.size());
-
-            // Add pagination info
-            Map<String, Object> pagination = new HashMap<>();
-            if (page != null && size != null) {
-                pagination.put("page", page);
-                pagination.put("size", size);
-                pagination.put("hasNext", data.size() == size); // Simple check - could be improved
-                pagination.put("hasPrevious", page > 0);
-            }
-            response.put("pagination", pagination);
-
-            // Add sorting info
-            Map<String, Object> sorting = new HashMap<>();
-            sorting.put("sortBy", sortBy);
-            sorting.put("sortDirection", sortDirection);
-            response.put("sorting", sorting);
-
-            // Add filter options for UI
-            response.put("filterOptions", claimSummaryMonthwiseReportService.getFilterOptions());
-
-            log.info("Claim Summary Monthwise report ({}) accessed by user: {} (ID: {}) - {} records returned",
-                    tab, userContext.getUsername(), userContext.getUserId(), data.size());
-
-            return ResponseEntity.ok(response);
+            // Build response using ReportResponse
+            return ResponseEntity.ok(ReportResponse.builder()
+                    .reportType(ReportType.CLAIM_SUMMARY_MONTHWISE.name())
+                    .displayName(ReportType.CLAIM_SUMMARY_MONTHWISE.getDisplayName())
+                    .tab(tab)
+                    .data(data)
+                    .totalRecords(data.size())
+                    .user(userContext.getUsername())
+                    .userId(userContext.getUserId())
+                    .timestamp(LocalDateTime.now())
+                    .parameters(Map.of(
+                        "summary", parameters,
+                        "filterOptions", claimSummaryMonthwiseReportService.getFilterOptions(),
+                        "facilityCode", request.getFacilityCode() != null ? request.getFacilityCode() : "",
+                        "payerCode", request.getPayerCode() != null ? request.getPayerCode() : "",
+                        "receiverCode", request.getReceiverCode() != null ? request.getReceiverCode() : "",
+                        "encounterType", request.getEncounterType() != null ? request.getEncounterType() : "",
+                        "fromDate", request.getFromDate() != null ? request.getFromDate().toString() : "",
+                        "toDate", request.getToDate() != null ? request.getToDate().toString() : ""
+                    ))
+                    .metadata(Map.of(
+                        "executionTimeMs", System.currentTimeMillis(),
+                        "reportType", ReportType.CLAIM_SUMMARY_MONTHWISE.name(),
+                        "tab", tab,
+                        "user", userContext.getUsername(),
+                        "userId", userContext.getUserId()
+                    ))
+                    .build());
 
         } catch (Exception e) {
             log.error("Error retrieving Claim Summary Monthwise report for user: {}",
                     userContextService.getCurrentUsername(), e);
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to retrieve Claim Summary Monthwise report: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(ReportResponse.builder()
+                    .reportType("ERROR")
+                    .displayName("Internal Server Error")
+                    .data(List.of())
+                    .metadata(Map.of("error", "Failed to retrieve Claim Summary Monthwise report: " + e.getMessage()))
+                    .build());
         }
     }
 
@@ -1208,8 +1418,8 @@ public class ReportDataController {
      */
     @Operation(
         summary = "Get comprehensive claim details by ID",
-        description = "Retrieves all information related to a specific claim including basic info, encounter, diagnosis, activities, remittance, timeline, attachments, and transaction types",
-        deprecated = true
+        description = "Retrieves all information related to a specific claim including basic info, encounter, diagnosis, activities, remittance, timeline, attachments, and transaction types in a structured DTO format optimized for UI rendering",
+        deprecated = false
     )
     @ApiResponses(value = {
         @ApiResponse(
@@ -1217,34 +1427,58 @@ public class ReportDataController {
             description = "Claim details retrieved successfully",
             content = @Content(
                 mediaType = MediaType.APPLICATION_JSON_VALUE,
+                schema = @Schema(implementation = ClaimDetailsResponse.class),
                 examples = @ExampleObject(
-                    value = "{\"claimInfo\": {\"claimId\": \"CLM001\", \"payerId\": \"DHA\", \"providerId\": \"PROV001\", \"netAmount\": 1500.00}, \"encounterInfo\": {\"facilityId\": \"FAC001\", \"encounterType\": \"OUTPATIENT\"}, \"diagnosisInfo\": [{\"diagnosisCode\": \"Z00.00\", \"diagnosisType\": \"Principal\"}], \"activitiesInfo\": [{\"activityCode\": \"99213\", \"netAmount\": 150.00}], \"remittanceInfo\": {\"paymentReference\": \"REM001\", \"settlementDate\": \"2024-01-15T10:30:00Z\"}, \"claimTimeline\": [{\"eventTime\": \"2024-01-10T09:00:00Z\", \"eventType\": \"Submission\"}], \"attachments\": [{\"fileName\": \"claim.pdf\", \"createdAt\": \"2024-01-10T09:00:00Z\"}], \"transactionTypes\": [{\"transactionType\": \"Initial Submission\", \"eventTime\": \"2024-01-10T09:00:00Z\"}]}"
+                    value = "{\"claimId\": \"CLM001\", \"claimInfo\": {\"claimId\": \"CLM001\", \"payerId\": \"DHA\", \"providerId\": \"PROV001\", \"netAmount\": 1500.00, \"submissionDate\": \"2024-01-10T09:00:00Z\"}, \"encounterInfo\": {\"facilityId\": \"FAC001\", \"encounterType\": \"OUTPATIENT\", \"startDate\": \"2024-01-10T08:00:00Z\"}, \"diagnosisInfo\": [{\"diagnosisCode\": \"Z00.00\", \"diagnosisType\": \"Principal\", \"diagnosisDescription\": \"Encounter for general adult medical examination\"}], \"activitiesInfo\": [{\"activityCode\": \"99213\", \"netAmount\": 150.00, \"quantity\": 1.0, \"clinicianName\": \"Dr. Smith\"}], \"remittanceInfo\": {\"paymentReference\": \"REM001\", \"settlementDate\": \"2024-01-15T10:30:00Z\", \"denialCode\": null}, \"claimTimeline\": [{\"eventTime\": \"2024-01-10T09:00:00Z\", \"eventType\": \"Submission\", \"currentStatus\": 1}], \"attachments\": [{\"fileName\": \"claim.pdf\", \"createdAt\": \"2024-01-10T09:00:00Z\", \"mimeType\": \"application/pdf\"}], \"transactionTypes\": [{\"transactionType\": \"Initial Submission\", \"eventTime\": \"2024-01-10T09:00:00Z\", \"transactionDescription\": \"First time claim submission\"}], \"metadata\": {\"user\": \"john.doe\", \"userId\": 123, \"timestamp\": \"2025-10-20T10:30:45\", \"executionTimeMs\": 234}}"
                 )
             )
         ),
         @ApiResponse(
             responseCode = "404",
-            description = "Claim not found"
+            description = "Claim not found",
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                schema = @Schema(implementation = ErrorResponse.class)
+            )
         ),
         @ApiResponse(
             responseCode = "403",
-            description = "Forbidden - User does not have access to this claim"
+            description = "Forbidden - User does not have access to this claim",
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                schema = @Schema(implementation = ErrorResponse.class)
+            )
         ),
         @ApiResponse(
             responseCode = "401",
-            description = "Unauthorized - Invalid or missing authentication token"
+            description = "Unauthorized",
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                schema = @Schema(implementation = ErrorResponse.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Bad request - Invalid claim ID",
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                schema = @Schema(implementation = ErrorResponse.class)
+            )
         )
     })
-    @Deprecated
     @GetMapping("/claim/{claimId}")
     @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
-    public ResponseEntity<Map<String, Object>> getClaimDetails(
+    public ResponseEntity<ClaimDetailsResponse> getClaimDetails(
             @Parameter(description = "Claim ID to retrieve details for", required = true, example = "CLM001")
             @PathVariable String claimId,
             @Parameter(hidden = true) Authentication authentication) {
 
         try {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
+
+            // Input validation
+            claimValidationUtil.validateClaimIdComprehensive(claimId);
+            String sanitizedClaimId = claimValidationUtil.sanitizeClaimId(claimId);
 
             // Check if user has access to this claim (facility-based filtering)
             Set<String> accessibleFacilities = dataFilteringService.getUserAccessibleFacilities();
@@ -1255,65 +1489,85 @@ public class ReportDataController {
                         userContext.getUsername(), claimId, accessibleFacilities);
             }
 
-            // Get comprehensive claim details
-            Map<String, Object> claimDetails = claimSummaryMonthwiseReportService.getClaimDetailsById(claimId);
+            // Get comprehensive claim details using the new service method
+            ClaimDetailsResponse claimDetails = claimSummaryMonthwiseReportService.getClaimDetailsById(sanitizedClaimId);
 
-            // Check if claim exists
-            if (claimDetails.get("claimInfo") == null || ((Map<?, ?>) claimDetails.get("claimInfo")).isEmpty()) {
-                log.warn("Claim not found: {} requested by user: {}", claimId, userContext.getUsername());
-                return ResponseEntity.notFound().build();
+            // Update metadata with user information
+            ClaimDetailsResponse.ClaimDetailsMetadata metadata = claimDetails.getMetadata();
+            if (metadata != null) {
+                metadata.setUser(userContext.getUsername());
+                metadata.setUserId(userContext.getUserId());
+                metadata.setCorrelationId(UUID.randomUUID().toString());
             }
 
-            // Add metadata
-            Map<String, Object> response = new HashMap<>();
-            response.put("claimDetails", claimDetails);
-            response.put("claimId", claimId);
-            response.put("user", userContext.getUsername());
-            response.put("userId", userContext.getUserId());
-            response.put("timestamp", java.time.LocalDateTime.now());
+            log.info("Claim details retrieved for claim ID: {} by user: {} (ID: {}) in {}ms",
+                    sanitizedClaimId, userContext.getUsername(), userContext.getUserId(),
+                    metadata != null ? metadata.getExecutionTimeMs() : "unknown");
 
-            log.info("Claim details retrieved for claim ID: {} by user: {} (ID: {})",
-                    claimId, userContext.getUsername(), userContext.getUserId());
+            return ResponseEntity.ok(claimDetails);
 
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
+        } catch (IllegalArgumentException e) {
+            log.warn("Invalid request for claim details: {} by user: {} - {}", 
+                    claimId, userContextService.getCurrentUsername(), e.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (RuntimeException e) {
+            if (e.getMessage().contains("not found")) {
+                log.warn("Claim not found: {} requested by user: {}", claimId, userContextService.getCurrentUsername());
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Claim not found: " + claimId);
+            }
             log.error("Error retrieving claim details for claim ID: {} by user: {}",
                     claimId, userContextService.getCurrentUsername(), e);
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to retrieve claim details: " + e.getMessage()));
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Failed to retrieve claim details: " + e.getMessage());
+        } catch (Exception e) {
+            log.error("Unexpected error retrieving claim details for claim ID: {} by user: {}",
+                    claimId, userContextService.getCurrentUsername(), e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "An unexpected error occurred while retrieving claim details");
         }
     }
 
     /**
      * Get Claim Details with Activity report data
      *
-     * @param facilityCode Facility code filter
-     * @param receiverId Receiver ID filter
-     * @param payerCode Payer code filter
-     * @param clinician Clinician filter
-     * @param claimId Claim ID filter
-     * @param patientId Patient ID filter
-     * @param cptCode CPT code filter
-     * @param claimStatus Claim status filter
-     * @param paymentStatus Payment status filter
-     * @param encounterType Encounter type filter
-     * @param resubType Resubmission type filter
-     * @param denialCode Denial code filter
-     * @param memberId Member ID filter
-     * @param fromDate Start date filter
-     * @param toDate End date filter
-     * @param sortBy Sort by column
-     * @param sortDirection Sort direction
-     * @param page Page number
-     * @param size Page size
+     * @param request The report query request with filters
      * @param authentication Current user authentication context
      * @return Claim Details with Activity report data
      */
     @Operation(
         summary = "Get Claim Details with Activity report",
         description = "Retrieves comprehensive claim details with activity information including submission tracking, financials, denial info, remittance tracking, patient/payer info, encounter/activity details, and calculated metrics",
-        deprecated = true
+        requestBody = @RequestBody(
+            description = "Report query request with filters and pagination",
+            required = true,
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReportQueryRequest.class),
+                examples = @ExampleObject(
+                    name = "Claim Details with Activity Request",
+                    summary = "Example request for claim details with activity report",
+                    value = """
+                    {
+                      "reportType": "CLAIM_DETAILS_WITH_ACTIVITY",
+                      "facilityCode": "FAC001",
+                      "receiverCode": "PROV001",
+                      "payerCode": "DHA",
+                      "clinicianCode": "DR001",
+                      "claimId": "CLM123456",
+                      "patientId": "PAT789",
+                      "cptCode": "99213",
+                      "encounterType": "OUTPATIENT",
+                      "fromDate": "2025-01-01T00:00:00",
+                      "toDate": "2025-12-31T23:59:59",
+                      "sortBy": "submission_date",
+                      "sortDirection": "DESC",
+                      "page": 0,
+                      "size": 50
+                    }
+                    """
+                )
+            )
+        )
     )
     @ApiResponses(value = {
         @ApiResponse(
@@ -1321,334 +1575,325 @@ public class ReportDataController {
             description = "Claim Details with Activity report data retrieved successfully",
             content = @Content(
                 mediaType = MediaType.APPLICATION_JSON_VALUE,
-                examples = @ExampleObject(
-                    value = "{\"reportType\": \"CLAIM_DETAILS_WITH_ACTIVITY\", \"data\": [], \"summary\": {}, \"filters\": {}, \"user\": \"admin\"}"
-                )
+                schema = @Schema(implementation = ReportResponse.class)
             )
         ),
         @ApiResponse(
             responseCode = "400",
-            description = "Bad request - Invalid parameters"
+            description = "Bad request - Invalid parameters",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "403",
-            description = "Forbidden - User does not have access to this report"
+            description = "Forbidden - User does not have access to this report",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "401",
-            description = "Unauthorized - Invalid or missing authentication token"
+            description = "Unauthorized - Invalid or missing authentication token",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         )
     })
-    @Deprecated
-    @GetMapping("/claim-details-with-activity")
+    @PostMapping("/claim-details-with-activity")
     @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
-    public ResponseEntity<Map<String, Object>> getClaimDetailsWithActivityReport(
-            @Parameter(description = "Facility code filter")
-            @RequestParam(required = false) String facilityCode,
-            @Parameter(description = "Receiver ID filter")
-            @RequestParam(required = false) String receiverId,
-            @Parameter(description = "Payer code filter")
-            @RequestParam(required = false) String payerCode,
-            @Parameter(description = "Clinician filter")
-            @RequestParam(required = false) String clinician,
-            @Parameter(description = "Claim ID filter")
-            @RequestParam(required = false) String claimId,
-            @Parameter(description = "Patient ID filter")
-            @RequestParam(required = false) String patientId,
-            @Parameter(description = "CPT code filter")
-            @RequestParam(required = false) String cptCode,
-            @Parameter(description = "Claim status filter")
-            @RequestParam(required = false) String claimStatus,
-            @Parameter(description = "Payment status filter")
-            @RequestParam(required = false) String paymentStatus,
-            @Parameter(description = "Encounter type filter")
-            @RequestParam(required = false) String encounterType,
-            @Parameter(description = "Resubmission type filter")
-            @RequestParam(required = false) String resubType,
-            @Parameter(description = "Denial code filter")
-            @RequestParam(required = false) String denialCode,
-            @Parameter(description = "Member ID filter")
-            @RequestParam(required = false) String memberId,
-            @Parameter(description = "Start date (YYYY-MM-DDTHH:mm:ss)")
-            @RequestParam(required = false) String fromDate,
-            @Parameter(description = "End date (YYYY-MM-DDTHH:mm:ss)")
-            @RequestParam(required = false) String toDate,
-            @Parameter(description = "Sort by column")
-            @RequestParam(required = false) String sortBy,
-            @Parameter(description = "Sort direction (ASC or DESC)")
-            @RequestParam(required = false) String sortDirection,
-            @Parameter(description = "Page number (0-based)")
-            @RequestParam(required = false) Integer page,
-            @Parameter(description = "Page size")
-            @RequestParam(required = false) Integer size,
+    public ResponseEntity<ReportResponse> getClaimDetailsWithActivityReport(
+            @Parameter(description = "Claim Details with Activity report request with filters and pagination", required = true)
+            @Valid @RequestBody ClaimDetailsWithActivityRequest request,
             @Parameter(hidden = true) Authentication authentication) {
 
         try {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
+
+            // Validate report type
+            if (request.getReportType() == null || request.getReportType() != ReportType.CLAIM_DETAILS_WITH_ACTIVITY) {
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Error")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Report type must be CLAIM_DETAILS_WITH_ACTIVITY"))
+                        .build());
+            }
 
             // Check report access
             if (!reportAccessService.hasReportAccess(userContext.getUserId(), ReportType.CLAIM_DETAILS_WITH_ACTIVITY)) {
                 log.warn("User {} (ID: {}) attempted to access Claim Details with Activity report without permission",
                         userContext.getUsername(), userContext.getUserId());
                 return ResponseEntity.status(403)
-                        .body(Map.of("error", "Access denied: You do not have permission to view this report"));
+                        .body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Access Denied")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Access denied: You do not have permission to view this report"))
+                                .build());
             }
-
-            // Parse dates
-            LocalDateTime fromDateTime = null;
-            LocalDateTime toDateTime = null;
-
-            if (fromDate != null && !fromDate.isEmpty()) {
-                try {
-                    fromDateTime = LocalDateTime.parse(fromDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid fromDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-
-            if (toDate != null && !toDate.isEmpty()) {
-                try {
-                    toDateTime = LocalDateTime.parse(toDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid toDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-
-            // Get user's accessible facilities for additional filtering
-            Set<String> accessibleFacilities = dataFilteringService.getUserAccessibleFacilities();
-
-            // Apply facility filter if user doesn't have access to all facilities
-            if (accessibleFacilities != null && !accessibleFacilities.isEmpty() && facilityCode == null) {
-                // If no specific facility is requested, limit to accessible facilities
-                // This would require modifying the service to accept facility restrictions
-                log.debug("User {} has limited facility access: {}", userContext.getUsername(), accessibleFacilities);
-            }
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("reportType", ReportType.CLAIM_DETAILS_WITH_ACTIVITY.name());
-            response.put("displayName", ReportType.CLAIM_DETAILS_WITH_ACTIVITY.getDisplayName());
-            response.put("user", userContext.getUsername());
-            response.put("userId", userContext.getUserId());
-            response.put("timestamp", java.time.LocalDateTime.now());
 
             // Get report data
             List<Map<String, Object>> data = claimDetailsWithActivityReportService.getClaimDetailsWithActivity(
-                    facilityCode, receiverId, payerCode, clinician, claimId, patientId,
-                    cptCode, claimStatus, paymentStatus, encounterType, resubType,
-                    denialCode, memberId, fromDateTime, toDateTime, sortBy, sortDirection, page, size);
-
-            response.put("data", data);
-            response.put("totalRecords", data.size());
+                    request.getFacilityCode(), request.getReceiverId(), request.getPayerCode(), 
+                    request.getClinician(), request.getClaimId(), request.getPatientId(), 
+                    request.getCptCode(), request.getClaimStatus(), request.getPaymentStatus(), 
+                    request.getEncounterType(), request.getResubType(),
+                    request.getDenialCode(), request.getMemberId(),
+                    request.getFromDate(), request.getToDate(), request.getSortBy(), 
+                    request.getSortDirection(), request.getPage(), request.getSize());
 
             // Get summary metrics for dashboard
-            Map<String, Object> summary = claimDetailsWithActivityReportService.getClaimDetailsSummary(
-                    facilityCode, receiverId, payerCode, fromDateTime, toDateTime);
-            response.put("summary", summary);
+            final Map<String, Object> summary = claimDetailsWithActivityReportService.getClaimDetailsSummary(
+                    request.getFacilityCode(), request.getReceiverId(), request.getPayerCode(), 
+                    request.getFromDate(), request.getToDate());
 
-            // Add pagination info
-            Map<String, Object> pagination = new HashMap<>();
-            if (page != null && size != null) {
-                pagination.put("page", page);
-                pagination.put("size", size);
-                pagination.put("hasNext", data.size() == size); // Simple check - could be improved
-                pagination.put("hasPrevious", page > 0);
-            }
-            response.put("pagination", pagination);
-
-            // Add sorting info
-            Map<String, Object> sorting = new HashMap<>();
-            sorting.put("sortBy", sortBy);
-            sorting.put("sortDirection", sortDirection);
-            response.put("sorting", sorting);
-
-            // Add filter options for UI
-            response.put("filterOptions", claimDetailsWithActivityReportService.getFilterOptions());
-
-            // Add applied filters for reference
-            Map<String, Object> appliedFilters = new HashMap<>();
-            appliedFilters.put("facilityCode", facilityCode);
-            appliedFilters.put("receiverId", receiverId);
-            appliedFilters.put("payerCode", payerCode);
-            appliedFilters.put("clinician", clinician);
-            appliedFilters.put("claimId", claimId);
-            appliedFilters.put("patientId", patientId);
-            appliedFilters.put("cptCode", cptCode);
-            appliedFilters.put("claimStatus", claimStatus);
-            appliedFilters.put("paymentStatus", paymentStatus);
-            appliedFilters.put("encounterType", encounterType);
-            appliedFilters.put("resubType", resubType);
-            appliedFilters.put("denialCode", denialCode);
-            appliedFilters.put("memberId", memberId);
-            appliedFilters.put("fromDate", fromDate);
-            appliedFilters.put("toDate", toDate);
-            response.put("appliedFilters", appliedFilters);
-
-            log.info("Claim Details with Activity report accessed by user: {} (ID: {}) - {} records returned",
-                    userContext.getUsername(), userContext.getUserId(), data.size());
-
-            return ResponseEntity.ok(response);
+            // Build response using ReportResponse
+            return ResponseEntity.ok(ReportResponse.builder()
+                    .reportType(ReportType.CLAIM_DETAILS_WITH_ACTIVITY.name())
+                    .displayName(ReportType.CLAIM_DETAILS_WITH_ACTIVITY.getDisplayName())
+                    .data(data)
+                    .totalRecords(data.size())
+                    .user(userContext.getUsername())
+                    .userId(userContext.getUserId())
+                    .timestamp(LocalDateTime.now())
+                    .parameters(new HashMap<String, Object>() {{
+                        put("summary", summary);
+                        put("filterOptions", claimDetailsWithActivityReportService.getFilterOptions());
+                        put("facilityCode", request.getFacilityCode() != null ? request.getFacilityCode() : "");
+                        put("receiverId", request.getReceiverId() != null ? request.getReceiverId() : "");
+                        put("payerCode", request.getPayerCode() != null ? request.getPayerCode() : "");
+                        put("clinician", request.getClinician() != null ? request.getClinician() : "");
+                        put("claimId", request.getClaimId() != null ? request.getClaimId() : "");
+                        put("patientId", request.getPatientId() != null ? request.getPatientId() : "");
+                        put("cptCode", request.getCptCode() != null ? request.getCptCode() : "");
+                        put("encounterType", request.getEncounterType() != null ? request.getEncounterType() : "");
+                        put("fromDate", request.getFromDate() != null ? request.getFromDate().toString() : "");
+                        put("toDate", request.getToDate() != null ? request.getToDate().toString() : "");
+                    }})
+                    .metadata(Map.of(
+                        "executionTimeMs", System.currentTimeMillis(),
+                        "reportType", ReportType.CLAIM_DETAILS_WITH_ACTIVITY.name(),
+                        "user", userContext.getUsername(),
+                        "userId", userContext.getUserId()
+                    ))
+                    .build());
 
         } catch (Exception e) {
             log.error("Error retrieving Claim Details with Activity report for user: {}",
                     userContextService.getCurrentUsername(), e);
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to retrieve Claim Details with Activity report: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(ReportResponse.builder()
+                    .reportType("ERROR")
+                    .displayName("Internal Server Error")
+                    .data(List.of())
+                    .metadata(Map.of("error", "Failed to retrieve Claim Details with Activity report: " + e.getMessage()))
+                    .build());
         }
     }
 
     /**
      * Get Rejected Claims Report data
      *
-     * @param tab Which tab to fetch: summary, receiverPayer, claimWise
+     * @param request The report query request with filters and tab selection (summary, receiverPayer, claimWise)
+     * @param authentication Current user authentication context
      * @return Rejected Claims Report data
      */
     @Operation(
         summary = "Get Rejected Claims Report",
-        description = "Retrieves Rejected Claims Report data across tabs: summary, receiverPayer, and claimWise"
+        description = "Retrieves Rejected Claims Report data across tabs: summary, receiverPayer, and claimWise",
+        requestBody = @RequestBody(
+            description = "Report query request with filters and tab selection",
+            required = true,
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReportQueryRequest.class),
+                examples = @ExampleObject(
+                    name = "Rejected Claims Report Request",
+                    summary = "Example request for rejected claims report",
+                    value = """
+                    {
+                      "reportType": "REJECTED_CLAIMS_REPORT",
+                      "tab": "summary",
+                      "facilityCodes": ["FAC001"],
+                      "payerCodes": ["DHA"],
+                      "fromDate": "2025-01-01T00:00:00",
+                      "toDate": "2025-12-31T23:59:59",
+                      "year": 2025,
+                      "month": 6,
+                      "denialCodes": ["DEN001"],
+                      "sortBy": "rejection_date",
+                      "sortDirection": "DESC",
+                      "page": 0,
+                      "size": 50
+                    }
+                    """
+                )
+            )
+        )
     )
     @ApiResponses(value = {
         @ApiResponse(
             responseCode = "200",
-            description = "Rejected Claims Report data retrieved successfully"
+            description = "Rejected Claims Report data retrieved successfully",
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                schema = @Schema(implementation = ReportResponse.class)
+            )
         ),
         @ApiResponse(
             responseCode = "400",
-            description = "Bad request - Invalid parameters"
+            description = "Bad request - Invalid parameters or tab selection",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "403",
-            description = "Forbidden - User does not have access to this report"
+            description = "Forbidden - User does not have access to this report",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "401",
-            description = "Unauthorized - Invalid or missing authentication token"
+            description = "Unauthorized - Invalid or missing authentication token",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         )
     })
-    @Deprecated
-    @GetMapping("/rejected-claims")
+    @PostMapping("/rejected-claims")
     @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
-    public ResponseEntity<Map<String, Object>> getRejectedClaimsReport(
-            @Parameter(description = "Tab to retrieve (summary, receiverPayer, claimWise)", example = "summary")
-            @RequestParam(defaultValue = "summary") String tab,
-            @RequestParam(required = false) List<String> facilityCodes,
-            @RequestParam(required = false) List<String> payerCodes,
-            @RequestParam(required = false) List<String> receiverIds,
-            @RequestParam(required = false) String fromDate,
-            @RequestParam(required = false) String toDate,
-            @RequestParam(required = false) Integer year,
-            @RequestParam(required = false) Integer month,
-            @RequestParam(required = false) List<String> denialCodes,
-            @RequestParam(required = false) String sortBy,
-            @RequestParam(required = false) String sortDirection,
-            @RequestParam(required = false) Integer page,
-            @RequestParam(required = false) Integer size) {
+    public ResponseEntity<ReportResponse> getRejectedClaimsReport(
+            @Parameter(description = "Report query request with filters and pagination", required = true)
+            @Valid @RequestBody ReportQueryRequest request,
+            @Parameter(hidden = true) Authentication authentication) {
 
         try {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
 
+            // Validate report type
+            if (request.getReportType() == null || request.getReportType() != ReportType.REJECTED_CLAIMS_REPORT) {
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Error")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Report type must be REJECTED_CLAIMS_REPORT"))
+                        .build());
+            }
+
             if (!reportAccessService.hasReportAccess(userContext.getUserId(), ReportType.REJECTED_CLAIMS_REPORT)) {
                 return ResponseEntity.status(403)
-                        .body(Map.of("error", "Access denied: You do not have permission to view this report"));
+                        .body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Access Denied")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Access denied: You do not have permission to view this report"))
+                                .build());
             }
 
+            String tab = request.getTab() != null ? request.getTab() : "summary";
             if (!Arrays.asList("summary", "receiverPayer", "claimWise").contains(tab)) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "Invalid tab. Must be one of: summary, receiverPayer, claimWise"));
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Invalid Tab")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Invalid tab. Must be one of: summary, receiverPayer, claimWise"))
+                        .build());
             }
-
-            LocalDateTime fromDateTime = null;
-            LocalDateTime toDateTime = null;
-            if (fromDate != null && !fromDate.isEmpty()) {
-                try {
-                    fromDateTime = LocalDateTime.parse(fromDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid fromDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-            if (toDate != null && !toDate.isEmpty()) {
-                try {
-                    toDateTime = LocalDateTime.parse(toDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid toDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("reportType", ReportType.REJECTED_CLAIMS_REPORT.name());
-            response.put("displayName", ReportType.REJECTED_CLAIMS_REPORT.getDisplayName());
-            response.put("tab", tab);
-            response.put("user", userContext.getUsername());
-            response.put("userId", userContext.getUserId());
-            response.put("timestamp", java.time.LocalDateTime.now());
 
             List<Map<String, Object>> data;
             switch (tab) {
                 case "summary":
                     data = rejectedClaimsReportService.getSummaryTabData(
                             String.valueOf(userContext.getUserId()),
-                            facilityCodes, payerCodes, receiverIds,
-                            fromDateTime, toDateTime, year, month,
-                            sortBy, sortDirection, page, size,
-                            null, null, null);
+                            (List<String>) request.getFacilityCodes(), (List<String>) request.getPayerCodes(), request.getReceiverIds(),
+                            request.getFromDate(), request.getToDate(), request.getYear(), request.getMonth(),
+                            request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize(),
+                            request.getFacilityRefIds(), request.getPayerRefIds(), request.getClinicianRefIds());
                     break;
                 case "receiverPayer":
                     data = rejectedClaimsReportService.getReceiverPayerTabData(
                             String.valueOf(userContext.getUserId()),
-                            facilityCodes, payerCodes, receiverIds,
-                            fromDateTime, toDateTime, year, denialCodes,
-                            sortBy, sortDirection, page, size,
-                            null, null, null);
+                            (List<String>) request.getFacilityCodes(), (List<String>) request.getPayerCodes(), request.getReceiverIds(),
+                            request.getFromDate(), request.getToDate(), request.getYear(), (List<String>) request.getDenialCodes(),
+                            request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize(),
+                            request.getFacilityRefIds(), request.getPayerRefIds(), request.getClinicianRefIds());
                     break;
                 case "claimWise":
                     data = rejectedClaimsReportService.getClaimWiseTabData(
                             String.valueOf(userContext.getUserId()),
-                            facilityCodes, payerCodes, receiverIds,
-                            fromDateTime, toDateTime, year, denialCodes,
-                            sortBy, sortDirection, page, size,
-                            null, null, null);
+                            (List<String>) request.getFacilityCodes(), (List<String>) request.getPayerCodes(), request.getReceiverIds(),
+                            request.getFromDate(), request.getToDate(), request.getYear(), (List<String>) request.getDenialCodes(),
+                            request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize(),
+                            request.getFacilityRefIds(), request.getPayerRefIds(), request.getClinicianRefIds());
                     break;
                 default:
                     data = List.of();
             }
 
-            response.put("data", data);
-            response.put("totalRecords", data.size());
-            response.put("filterOptions", rejectedClaimsReportService.getFilterOptions());
-
-            return ResponseEntity.ok(response);
+            return ResponseEntity.ok(ReportResponse.builder()
+                    .reportType(ReportType.REJECTED_CLAIMS_REPORT.name())
+                    .displayName(ReportType.REJECTED_CLAIMS_REPORT.getDisplayName())
+                    .tab(tab)
+                    .data(data)
+                    .totalRecords(data.size())
+                    .user(userContext.getUsername())
+                    .userId(userContext.getUserId())
+                    .timestamp(LocalDateTime.now())
+                    .parameters(Map.of(
+                        "filterOptions", rejectedClaimsReportService.getFilterOptions(),
+                        "facilityCodes", request.getFacilityCodes() != null ? (List<String>) request.getFacilityCodes() : List.of(),
+                        "payerCodes", request.getPayerCodes() != null ? (List<String>) request.getPayerCodes() : List.of(),
+                        "fromDate", request.getFromDate() != null ? request.getFromDate().toString() : "",
+                        "toDate", request.getToDate() != null ? request.getToDate().toString() : ""
+                    ))
+                    .metadata(Map.of(
+                        "executionTimeMs", System.currentTimeMillis(),
+                        "reportType", ReportType.REJECTED_CLAIMS_REPORT.name(),
+                        "tab", tab,
+                        "user", userContext.getUsername(),
+                        "userId", userContext.getUserId()
+                    ))
+                    .build());
 
         } catch (Exception e) {
             log.error("Error retrieving Rejected Claims Report for user: {}", userContextService.getCurrentUsername(), e);
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to retrieve Rejected Claims Report: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(ReportResponse.builder()
+                    .reportType("ERROR")
+                    .displayName("Internal Server Error")
+                    .data(List.of())
+                    .metadata(Map.of("error", "Failed to retrieve Rejected Claims Report: " + e.getMessage()))
+                    .build());
         }
     }
 
     /**
      * Get Doctor Denial Report data
      *
-     * @param facilityCode Facility code filter
-     * @param clinicianCode Clinician code filter (Ordering Clinician)
-     * @param fromDate Start date filter
-     * @param toDate End date filter
-     * @param year Year filter
-     * @param month Month filter
-     * @param tab Tab to retrieve (high_denial, summary, detail)
-     * @param sortBy Sort by column
-     * @param sortDirection Sort direction
-     * @param page Page number
-     * @param size Page size
+     * @param request The report query request with filters
      * @param authentication Current user authentication context
      * @return Doctor Denial Report data
      */
     @Operation(
         summary = "Get Doctor Denial Report",
         description = "Retrieves Doctor Denial Report data across three tabs: high_denial (doctors with high denial rates), summary (doctor-wise aggregated metrics), and detail (patient-level claim information)",
-        deprecated = true
+        requestBody = @RequestBody(
+            description = "Report query request with filters and pagination",
+            required = true,
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReportQueryRequest.class),
+                examples = @ExampleObject(
+                    name = "Doctor Denial Request",
+                    summary = "Example request for doctor denial report",
+                    value = """
+                    {
+                      "reportType": "DOCTOR_DENIAL_REPORT",
+                      "facilityCode": "FAC001",
+                      "clinicianCode": "DR001",
+                      "fromDate": "2025-01-01T00:00:00",
+                      "toDate": "2025-12-31T23:59:59",
+                      "year": 2025,
+                      "month": 1,
+                      "tab": "high_denial",
+                      "sortBy": "denial_count",
+                      "sortDirection": "DESC",
+                      "page": 0,
+                      "size": 50
+                    }
+                    """
+                )
+            )
+        )
     )
     @ApiResponses(value = {
         @ApiResponse(
@@ -1656,170 +1901,133 @@ public class ReportDataController {
             description = "Doctor Denial Report data retrieved successfully",
             content = @Content(
                 mediaType = MediaType.APPLICATION_JSON_VALUE,
-                examples = @ExampleObject(
-                    value = "{\"reportType\": \"DOCTOR_DENIAL_REPORT\", \"tab\": \"high_denial\", \"data\": [], \"summary\": {}, \"filters\": {}, \"user\": \"admin\"}"
-                )
+                schema = @Schema(implementation = ReportResponse.class)
             )
         ),
         @ApiResponse(
             responseCode = "400",
-            description = "Bad request - Invalid parameters"
+            description = "Bad request - Invalid parameters",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "403",
-            description = "Forbidden - User does not have access to this report"
+            description = "Forbidden - User does not have access to this report",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         ),
         @ApiResponse(
             responseCode = "401",
-            description = "Unauthorized - Invalid or missing authentication token"
+            description = "Unauthorized - Invalid or missing authentication token",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)
         )
     })
-    @Deprecated
-    @GetMapping("/doctor-denial")
+    @PostMapping("/doctor-denial")
     @PreAuthorize("hasRole('SUPER_ADMIN') or hasRole('FACILITY_ADMIN') or hasRole('STAFF')")
-    public ResponseEntity<Map<String, Object>> getDoctorDenialReport(
-            @Parameter(description = "Facility code filter")
-            @RequestParam(required = false) String facilityCode,
-            @Parameter(description = "Clinician code filter (Ordering Clinician)")
-            @RequestParam(required = false) String clinicianCode,
-            @Parameter(description = "Start date (YYYY-MM-DDTHH:mm:ss)")
-            @RequestParam(required = false) String fromDate,
-            @Parameter(description = "End date (YYYY-MM-DDTHH:mm:ss)")
-            @RequestParam(required = false) String toDate,
-            @Parameter(description = "Year filter")
-            @RequestParam(required = false) Integer year,
-            @Parameter(description = "Month filter (1-12)")
-            @RequestParam(required = false) Integer month,
-            @Parameter(description = "Tab to retrieve (high_denial, summary, detail)", example = "high_denial")
-            @RequestParam(defaultValue = "high_denial") String tab,
-            @Parameter(description = "Sort by column")
-            @RequestParam(required = false) String sortBy,
-            @Parameter(description = "Sort direction (ASC or DESC)")
-            @RequestParam(required = false) String sortDirection,
-            @Parameter(description = "Page number (0-based)")
-            @RequestParam(required = false) Integer page,
-            @Parameter(description = "Page size")
-            @RequestParam(required = false) Integer size,
+    public ResponseEntity<ReportResponse> getDoctorDenialReport(
+            @Parameter(description = "Report query request with filters and pagination", required = true)
+            @Valid @RequestBody ReportQueryRequest request,
             @Parameter(hidden = true) Authentication authentication) {
 
         try {
             UserContext userContext = userContextService.getCurrentUserContextWithRequest();
+
+            // Validate report type
+            if (request.getReportType() == null || request.getReportType() != ReportType.DOCTOR_DENIAL_REPORT) {
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Error")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Report type must be DOCTOR_DENIAL_REPORT"))
+                        .build());
+            }
 
             // Check report access
             if (!reportAccessService.hasReportAccess(userContext.getUserId(), ReportType.DOCTOR_DENIAL_REPORT)) {
                 log.warn("User {} (ID: {}) attempted to access Doctor Denial Report without permission",
                         userContext.getUsername(), userContext.getUserId());
                 return ResponseEntity.status(403)
-                        .body(Map.of("error", "Access denied: You do not have permission to view this report"));
-            }
-
-            // Parse dates
-            LocalDateTime fromDateTime = null;
-            LocalDateTime toDateTime = null;
-
-            if (fromDate != null && !fromDate.isEmpty()) {
-                try {
-                    fromDateTime = LocalDateTime.parse(fromDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid fromDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
-            }
-
-            if (toDate != null && !toDate.isEmpty()) {
-                try {
-                    toDateTime = LocalDateTime.parse(toDate);
-                } catch (Exception e) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("error", "Invalid toDate format. Use ISO format: YYYY-MM-DDTHH:mm:ss"));
-                }
+                        .body(ReportResponse.builder()
+                                .reportType("ERROR")
+                                .displayName("Access Denied")
+                                .data(List.of())
+                                .metadata(Map.of("error", "Access denied: You do not have permission to view this report"))
+                                .build());
             }
 
             // Validate tab parameter
+            String tab = request.getTab() != null ? request.getTab() : "high_denial";
             if (!Arrays.asList("high_denial", "summary", "detail").contains(tab)) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "Invalid tab parameter. Must be one of: high_denial, summary, detail"));
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Invalid Tab")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Invalid tab parameter. Must be one of: high_denial, summary, detail"))
+                        .build());
             }
 
             // Validate month parameter
-            if (month != null && (month < 1 || month > 12)) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "Invalid month parameter. Must be between 1 and 12"));
+            if (request.getMonth() != null && (request.getMonth() < 1 || request.getMonth() > 12)) {
+                return ResponseEntity.badRequest().body(ReportResponse.builder()
+                        .reportType("ERROR")
+                        .displayName("Invalid Month")
+                        .data(List.of())
+                        .metadata(Map.of("error", "Invalid month parameter. Must be between 1 and 12"))
+                        .build());
             }
-
-            // Get user's accessible facilities for additional filtering
-            Set<String> accessibleFacilities = dataFilteringService.getUserAccessibleFacilities();
-
-            // Apply facility filter if user doesn't have access to all facilities
-            if (accessibleFacilities != null && !accessibleFacilities.isEmpty() && facilityCode == null) {
-                // If no specific facility is requested, limit to accessible facilities
-                // This would require modifying the service to accept facility restrictions
-                log.debug("User {} has limited facility access: {}", userContext.getUsername(), accessibleFacilities);
-            }
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("reportType", ReportType.DOCTOR_DENIAL_REPORT.name());
-            response.put("displayName", ReportType.DOCTOR_DENIAL_REPORT.getDisplayName());
-            response.put("tab", tab);
-            response.put("user", userContext.getUsername());
-            response.put("userId", userContext.getUserId());
-            response.put("timestamp", java.time.LocalDateTime.now());
 
             // Get report data
             List<Map<String, Object>> data = doctorDenialReportService.getDoctorDenialReport(
-                    facilityCode, clinicianCode, fromDateTime, toDateTime, year, month,
-                    tab, sortBy, sortDirection, page, size);
-
-            response.put("data", data);
-            response.put("totalRecords", data.size());
+                    request.getFacilityCode(), request.getClinicianCode(), request.getFromDate(), 
+                    request.getToDate(), request.getYear(), request.getMonth(),
+                    tab, request.getSortBy(), request.getSortDirection(), request.getPage(), request.getSize());
 
             // Get summary metrics for dashboard (for high_denial and summary tabs)
+            final Map<String, Object> summary;
             if ("high_denial".equals(tab) || "summary".equals(tab)) {
-                Map<String, Object> summary = doctorDenialReportService.getDoctorDenialSummary(
-                        facilityCode, clinicianCode, fromDateTime, toDateTime, year, month);
-                response.put("summary", summary);
+                summary = doctorDenialReportService.getDoctorDenialSummary(
+                        request.getFacilityCode(), request.getClinicianCode(), 
+                        request.getFromDate(), request.getToDate(), request.getYear(), request.getMonth());
+            } else {
+                summary = null;
             }
 
-            // Add pagination info
-            Map<String, Object> pagination = new HashMap<>();
-            if (page != null && size != null) {
-                pagination.put("page", page);
-                pagination.put("size", size);
-                pagination.put("hasNext", data.size() == size); // Simple check - could be improved
-                pagination.put("hasPrevious", page > 0);
-            }
-            response.put("pagination", pagination);
-
-            // Add sorting info
-            Map<String, Object> sorting = new HashMap<>();
-            sorting.put("sortBy", sortBy);
-            sorting.put("sortDirection", sortDirection);
-            response.put("sorting", sorting);
-
-            // Add filter options for UI
-            response.put("filterOptions", doctorDenialReportService.getFilterOptions());
-
-            // Add applied filters for reference
-            Map<String, Object> appliedFilters = new HashMap<>();
-            appliedFilters.put("facilityCode", facilityCode);
-            appliedFilters.put("clinicianCode", clinicianCode);
-            appliedFilters.put("fromDate", fromDate);
-            appliedFilters.put("toDate", toDate);
-            appliedFilters.put("year", year);
-            appliedFilters.put("month", month);
-            appliedFilters.put("tab", tab);
-            response.put("appliedFilters", appliedFilters);
-
-            log.info("Doctor Denial Report ({}) accessed by user: {} (ID: {}) - {} records returned",
-                    tab, userContext.getUsername(), userContext.getUserId(), data.size());
-
-            return ResponseEntity.ok(response);
+            // Build response using ReportResponse
+            return ResponseEntity.ok(ReportResponse.builder()
+                    .reportType(ReportType.DOCTOR_DENIAL_REPORT.name())
+                    .displayName(ReportType.DOCTOR_DENIAL_REPORT.getDisplayName())
+                    .data(data)
+                    .totalRecords(data.size())
+                    .user(userContext.getUsername())
+                    .userId(userContext.getUserId())
+                    .timestamp(LocalDateTime.now())
+                    .parameters(new HashMap<String, Object>() {{
+                        put("tab", tab);
+                        put("summary", summary != null ? summary : Map.of());
+                        put("filterOptions", doctorDenialReportService.getFilterOptions());
+                        put("facilityCode", request.getFacilityCode() != null ? request.getFacilityCode() : "");
+                        put("clinicianCode", request.getClinicianCode() != null ? request.getClinicianCode() : "");
+                        put("fromDate", request.getFromDate() != null ? request.getFromDate().toString() : "");
+                        put("toDate", request.getToDate() != null ? request.getToDate().toString() : "");
+                        put("year", request.getYear() != null ? request.getYear().toString() : "");
+                        put("month", request.getMonth() != null ? request.getMonth().toString() : "");
+                    }})
+                    .metadata(Map.of(
+                        "executionTimeMs", System.currentTimeMillis(),
+                        "reportType", ReportType.DOCTOR_DENIAL_REPORT.name(),
+                        "tab", tab,
+                        "user", userContext.getUsername(),
+                        "userId", userContext.getUserId()
+                    ))
+                    .build());
 
         } catch (Exception e) {
             log.error("Error retrieving Doctor Denial Report for user: {}",
                     userContextService.getCurrentUsername(), e);
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to retrieve Doctor Denial Report: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(ReportResponse.builder()
+                    .reportType("ERROR")
+                    .displayName("Internal Server Error")
+                    .data(List.of())
+                    .metadata(Map.of("error", "Failed to retrieve Doctor Denial Report: " + e.getMessage()))
+                    .build());
         }
     }
 
@@ -2001,4 +2209,86 @@ public class ReportDataController {
                     .body(Map.of("error", "Failed to retrieve clinician claims: " + e.getMessage()));
         }
     }
+    
+    /**
+     * Execute report query based on report type and user context
+     * 
+     * @param request The filtered report query request
+     * @param userContext The service user context
+     * @return List of report data
+     */
+    private List<Map<String, Object>> executeReportQuery(ReportQueryRequest request, ServiceUserContext userContext) {
+        // This method will route to the appropriate service based on report type
+        // For now, return empty list - this will be implemented when we integrate with services
+        return List.of();
+    }
+    
+    /**
+     * Build standardized report response with pagination and metadata
+     * 
+     * @param data The report data
+     * @param request The original request
+     * @param userContext The user context
+     * @param correlationId The correlation ID
+     * @param startTime The request start time
+     * @return ReportResponse with all metadata
+     */
+    private ReportResponse buildReportResponse(List<Map<String, Object>> data, ReportQueryRequest request, 
+                                             ServiceUserContext userContext, String correlationId, long startTime) {
+        
+        // Build pagination metadata
+        PaginationMetadata pagination = PaginationMetadata.builder()
+                .page(request.getPage() != null ? request.getPage() : 0)
+                .size(request.getSize() != null ? request.getSize() : 50)
+                .totalElements((long) data.size())
+                .totalPages((int) Math.ceil((double) data.size() / (request.getSize() != null ? request.getSize() : 50)))
+                .hasNext(request.getPage() != null && request.getPage() > 0)
+                .hasPrevious(false) // Will be calculated properly in real implementation
+                .build();
+        
+        // Build filter metadata
+        FilterMetadata filters = FilterMetadata.builder()
+                .appliedFilters(Map.of(
+                    "facilityCodes", request.getFacilityCodes() != null ? request.getFacilityCodes() : List.of(),
+                    "payerCodes", request.getPayerCodes() != null ? request.getPayerCodes() : List.of(),
+                    "fromDate", request.getFromDate() != null ? request.getFromDate().toString() : "",
+                    "toDate", request.getToDate() != null ? request.getToDate().toString() : ""
+                ))
+                .availableOptions(Map.of(
+                    "facilityCodes", new ArrayList<>(userContext.getAccessibleFacilities()),
+                    "payerCodes", List.of("DHA", "ADNOC") // This would come from database in real implementation
+                ))
+                .build();
+        
+        // Build response metadata
+        Map<String, Object> metadata = Map.of(
+            "reportType", request.getReportType().name(),
+            "tab", request.getTab() != null ? request.getTab() : "",
+            "level", request.getLevel() != null ? request.getLevel() : "",
+            "generatedAt", LocalDateTime.now().toString(),
+            "executionTimeMs", System.currentTimeMillis() - startTime,
+            "correlationId", correlationId != null ? correlationId : "",
+            "userId", userContext.getUserId(),
+            "username", userContext.getUsername()
+        );
+        
+        return ReportResponse.builder()
+                .reportType(request.getReportType().name())
+                .displayName(request.getReportType().getDisplayName())
+                .tab(request.getTab())
+                .level(request.getLevel())
+                .data(data)
+                .pagination(pagination)
+                .filters(filters)
+                .parameters(Map.of()) // Empty for now, will be populated by individual services
+                .user(userContext.getUsername())
+                .userId(userContext.getUserId())
+                .timestamp(LocalDateTime.now())
+                .correlationId(correlationId)
+                .executionTimeMs(System.currentTimeMillis() - startTime)
+                .totalRecords(data.size())
+                .metadata(metadata)
+                .build();
+    }
 }
+

@@ -1,6 +1,5 @@
 package com.acme.claims.security.entity;
 
-import com.acme.claims.security.ReportType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -29,9 +28,9 @@ public class UserReportPermission {
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
     
-    @Enumerated(EnumType.STRING)
-    @Column(name = "report_type", nullable = false, length = 50)
-    private ReportType reportType;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "report_metadata_id", nullable = false)
+    private ReportsMetadata reportMetadata;
     
     @CreationTimestamp
     @Column(name = "granted_at", nullable = false, updatable = false)
