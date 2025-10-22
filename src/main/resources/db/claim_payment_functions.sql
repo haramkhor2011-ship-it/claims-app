@@ -48,7 +48,7 @@ BEGIN
     COUNT(CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 1 END)     AS partially_paid_activities,
     COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END)           AS rejected_activities,
     COUNT(CASE WHEN cas.activity_status = 'PENDING' THEN 1 END)            AS pending_activities,
-    MAX(cas.remittance_count)                                              AS remittance_count
+    COALESCE(MAX(cas.remittance_count), 0)                                 AS remittance_count
   INTO v_metrics
   FROM claims.claim_activity_summary cas
   WHERE cas.claim_key_id = p_claim_key_id;

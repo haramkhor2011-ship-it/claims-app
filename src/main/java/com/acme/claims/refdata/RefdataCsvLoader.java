@@ -139,16 +139,15 @@ public class RefdataCsvLoader {
     @Transactional
     public int loadDenialCodes() {
         return loadCsv("denial_codes.csv",
-                Set.of("code","description","payer_code"),
+                Set.of("code","description"),
                 recs -> batchUpsert(recs, """
-                        insert into claims_ref.denial_code(code, description, payer_code)
-                        values (?,?,?)
-                        on conflict (code) do update set description=excluded.description, payer_code=excluded.payer_code
+                        insert into claims_ref.denial_code(code, description)
+                        values (?,?)
+                        on conflict (code) do update set description=excluded.description
                         """,
                         (rec) -> new Object[]{
                                 req(rec,"code", 1, 64, true),
-                                opt(rec,"description", 0, 512),
-                                opt(rec,"payer_code", 0, 120)
+                                opt(rec,"description", 0, 512)
                         }));
     }
 

@@ -59,6 +59,7 @@ claims:
   ingestion:
     # SOAP profile in prod – IngestionConfig ensures only a single fetcher/acker is active
     profile: soap
+    mode: soap
     localfs:
       archive-fail-dir: ./data/archive/fail
       archive-ok-dir: ./data/archive/ok
@@ -121,7 +122,7 @@ claims.soap:
     maxAttempts: 3
     backoffMs: 500
   poll:
-    fixedDelayMs: 1800000
+    fixedDelayMs: 18000000
   downloadConcurrency: 16
 
 # DHPO client tuning
@@ -133,3 +134,11 @@ dhpo.client:
   readTimeoutMs: 15000
   downloadTimeoutMs: 120000
   stageToDiskThresholdMb: 25
+
+# Staging configuration - ensure small files stay in memory
+claims.fetch:
+  stageToDisk:
+    force: false          # Don't force all files to disk
+    sizeThresholdBytes: 26214400  # 25 MB → disk
+    latencyThresholdMs: 8000      # >8s download → disk
+    readyDir: "data/ready"

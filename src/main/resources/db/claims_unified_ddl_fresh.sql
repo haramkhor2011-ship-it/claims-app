@@ -744,8 +744,14 @@ CREATE INDEX IF NOT EXISTS idx_claim_event_type ON claims.claim_event(type);
 CREATE INDEX IF NOT EXISTS idx_claim_event_time ON claims.claim_event(event_time);
 CREATE INDEX IF NOT EXISTS idx_claim_event_file ON claims.claim_event(ingestion_file_id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_claim_event_dedup ON claims.claim_event(claim_key_id, type, event_time);
+-- Unique constraints (not just indexes) for Hibernate/JPA compatibility
+ALTER TABLE claims.claim_event ADD CONSTRAINT uq_claim_event_dedup UNIQUE (claim_key_id, type, event_time);
+-- Note: Partial unique constraints (with WHERE clause) must be created as unique indexes
 CREATE UNIQUE INDEX IF NOT EXISTS uq_claim_event_one_submission ON claims.claim_event(claim_key_id) WHERE type = 1;
+
+-- Additional performance indexes found in actual database
+CREATE INDEX IF NOT EXISTS idx_balance_amount_base_enhanced_resubmission ON claims.claim_event(claim_key_id, type, event_time) WHERE type = 2;
+CREATE INDEX IF NOT EXISTS idx_remittances_resubmission_claim_event_type ON claims.claim_event(claim_key_id, type);
 
 -- ----------------------------------------------------------------------------------------------------------
 -- 5.14 CLAIM EVENT ACTIVITY SNAPSHOT

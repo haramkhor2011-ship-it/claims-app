@@ -7,6 +7,7 @@ import com.acme.claims.soap.SoapProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import org.springframework.ws.WebServiceMessage;
 import org.springframework.ws.client.core.WebServiceMessageCallback;
@@ -19,6 +20,7 @@ import java.time.Duration;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@Profile("soap")
 @ConditionalOnProperty(name = "claims.soap.transport", havingValue = "ws", matchIfMissing = true)
 public class WsSoapCaller implements SoapCaller {
 

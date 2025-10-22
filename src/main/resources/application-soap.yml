@@ -11,7 +11,7 @@ claims:
     concurrency:
       parserWorkers: 16
     queue:
-      capacity: 512
+      capacity: 1024
     poll:
       fixedDelayMs: 1000
   soap:

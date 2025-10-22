@@ -17,7 +17,7 @@ import java.util.function.Consumer;
  */
 @Slf4j
 @Component
-@Profile({"ingestion","soap"})
+@Profile("soap")
 @RequiredArgsConstructor
 public class SoapFetcherAdapter implements Fetcher {
 

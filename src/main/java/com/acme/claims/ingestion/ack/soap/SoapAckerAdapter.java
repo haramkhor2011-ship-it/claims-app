@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
-@Profile({"ingestion", "soap"})
+@Profile("soap")
 @RequiredArgsConstructor
 public class SoapAckerAdapter implements Acker {
 

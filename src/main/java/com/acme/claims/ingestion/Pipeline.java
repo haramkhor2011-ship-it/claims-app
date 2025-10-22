@@ -38,23 +38,105 @@ import java.time.OffsetDateTime;
 import java.util.Objects;
 
 /**
- * Ingestion Pipeline — orchestrates parse → validate → persist → project → verify → audit.
- *
- * Runtime behavior:
- * - Called per WorkItem by the orchestrator using an executor; this method is non-transactional and
- *   delegates transactional units to helpers annotated with REQUIRES_NEW to ensure durable side-effects.
- * - Inserts a stub ingestion_file row first (idempotent on file_id) to anchor all downstream records.
- * - Performs header pre-check before any update to avoid nulls overwriting safe placeholders.
- * - Branches on root type (Submission/Remittance) and validates business rules before persistence.
- * - Records metrics for end-to-end duration and leverages a staging policy for cleanup/archival handled once in finally.
- *
- * Concurrency & idempotency:
- * - Safe to retry; DB unique constraints prevent double-inserts; alreadyProjected() short-circuits replays.
- * - No shared mutable state; all dependencies are Spring-managed singletons.
- *
- * Error handling:
- * - Validation/persistence failures are logged into ingestion_error and surfaced by rethrowing RuntimeException.
- * - Cleanup/archival is attempted once in finally based on success flag (no duplicate archive attempts on error paths).
+ * <h1>Purpose</h1>
+ * Core ingestion pipeline that orchestrates the complete flow from XML parsing through database persistence,
+ * verification, and audit. This is the main processing engine for both claim submissions and remittance advice.
+ * 
+ * <h2>Responsibilities</h2>
+ * <ul>
+ *   <li>Parse XML files into DTOs using StAX parsing</li>
+ *   <li>Validate business rules and data integrity</li>
+ *   <li>Persist data to database with proper transaction management</li>
+ *   <li>Project events for claim lifecycle tracking</li>
+ *   <li>Verify data integrity after persistence</li>
+ *   <li>Record audit information and metrics</li>
+ *   <li>Handle file staging and cleanup</li>
+ * </ul>
+ * 
+ * <h2>Dependencies</h2>
+ * <ul>
+ *   <li>{@link StageParser} - XML parsing and DTO conversion</li>
+ *   <li>{@link PersistService} - Database persistence with transaction management</li>
+ *   <li>{@link VerifyService} - Post-persistence data integrity verification</li>
+ *   <li>{@link IngestionAudit} - Audit trail recording</li>
+ *   <li>{@link ErrorLogger} - Error logging and categorization</li>
+ *   <li>{@link DhpoMetrics} - Performance metrics collection</li>
+ *   <li>{@link IngestionProperties} - Configuration and tuning parameters</li>
+ * </ul>
+ * 
+ * <h2>Used By</h2>
+ * <ul>
+ *   <li>{@link Orchestrator} - Main coordination engine that calls this pipeline</li>
+ *   <li>{@link AdminController} - Manual processing operations</li>
+ *   <li>{@link MonitoringService} - Health checks and metrics</li>
+ * </ul>
+ * 
+ * <h2>Key Decisions</h2>
+ * <ul>
+ *   <li>Uses REQUIRES_NEW transactions to ensure critical operations always commit</li>
+ *   <li>Implements idempotency through database unique constraints</li>
+ *   <li>Performs header pre-check before any update to avoid nulls overwriting placeholders</li>
+ *   <li>Uses stub insertion pattern to provide real FK IDs for downstream operations</li>
+ *   <li>Implements comprehensive error handling with detailed logging</li>
+ * </ul>
+ * 
+ * <h2>Configuration</h2>
+ * <ul>
+ *   <li>{@code claims.ingestion.batchSize} - Controls batch processing size</li>
+ *   <li>{@code claims.ingestion.timeout} - Processing timeout duration</li>
+ *   <li>{@code claims.ingestion.staging.enabled} - Enables file staging</li>
+ * </ul>
+ * 
+ * <h2>Thread Safety</h2>
+ * This class is thread-safe. All dependencies are Spring-managed singletons,
+ * and there is no shared mutable state. Concurrent access is protected by
+ * database unique constraints and transaction boundaries.
+ * 
+ * <h2>Performance Characteristics</h2>
+ * <ul>
+ *   <li>Processes files in configurable batches for optimal throughput</li>
+ *   <li>Uses streaming XML parsing to minimize memory usage</li>
+ *   <li>Implements transaction boundaries to prevent long-running transactions</li>
+ *   <li>Records comprehensive metrics for performance monitoring</li>
+ * </ul>
+ * 
+ * <h2>Error Handling</h2>
+ * <ul>
+ *   <li>Parse errors - Logged to ingestion_error table, processing continues</li>
+ *   <li>Validation errors - File rejected, error logged</li>
+ *   <li>Database errors - Transaction rollback, error logged</li>
+ *   <li>System errors - Comprehensive error logging and recovery</li>
+ * </ul>
+ * 
+ * <h2>Example Usage</h2>
+ * <pre>{@code
+ * // Process a single work item
+ * WorkItem item = new WorkItem("file123", "submission.xml", "SOAP", xmlBytes, null);
+ * Result result = pipeline.process(item);
+ * 
+ * // Check processing results
+ * if (result.parsedClaims() > 0) {
+ *     log.info("Processed {} claims", result.parsedClaims());
+ * }
+ * }</pre>
+ * 
+ * <h2>Common Issues</h2>
+ * <ul>
+ *   <li>OutOfMemoryError - Increase JVM heap size or reduce batch size</li>
+ *   <li>Transaction timeout - Increase transaction timeout or reduce batch size</li>
+ *   <li>Duplicate key violations - Check for duplicate file processing</li>
+ *   <li>Validation failures - Check XML format and business rules</li>
+ * </ul>
+ * 
+ * @see Orchestrator
+ * @see StageParser
+ * @see PersistService
+ * @see VerifyService
+ * @see IngestionAudit
+ * @see ErrorLogger
+ * @see DhpoMetrics
+ * @since 1.0
+ * @author Claims Team
  */
 @Slf4j
 @Service
@@ -139,7 +221,7 @@ public class Pipeline {
             log.info("PIPELINE_PARSE_COMPLETE fileId={} fileName={} ingestionFileId={} rootType={} claims={} activities={}", 
                 wi.fileId(), wi.fileName(), filePk, out.getRootType(), 
                 out.getSubmission() != null ? out.getSubmission().claims().size() : 0,
-                out.getRemittance() != null ? out.getRemittance().claims().size() : 0);
+                out.getSubmission() != null ? countActs(out.getSubmission()) : (out.getRemittance() != null ? countActs(out.getRemittance()) : 0));
 
             // 4) Branch by actual root (authoritative)
             switch (out.getRootType()) {
@@ -159,7 +241,6 @@ public class Pipeline {
                                 wi.fileId(), wi.fileName(), filePk);
                         errors.fileError(filePk, "VALIDATE", "MISSING_HEADER_FIELDS",
                                 "Header required fields missing; file rejected.", false);
-                        maybeArchive(wi, false);
                         throw new RuntimeException("Header validation failed (submission) for fileId=" + wi.fileId());
                     }
                     log.info("PIPELINE_VALIDATION_SUCCESS fileId={} fileName={} ingestionFileId={} senderId={} receiverId={} recordCount={}", 
@@ -223,7 +304,6 @@ public class Pipeline {
                             || dto.header().recordCount() != (dto.claims() == null ? 0 : dto.claims().size())) {
                         errors.fileError(filePk, "VALIDATE", "MISSING_HEADER_FIELDS",
                                 "Header required fields missing or RecordCount mismatch; file rejected.", false);
-                        maybeArchive(wi, false);
                         throw new RuntimeException("Header validation failed (remittance) for fileId=" + wi.fileId());
                     }
 
@@ -279,7 +359,7 @@ public class Pipeline {
             String mode   = (wi.sourcePath() != null) ? "disk" : "mem";
             String source = (wi.source() != null) ? wi.source() : "unknown";
             dhpoMetrics.recordIngestion(wi.source(), mode, success, durMs);
-            maybeArchive(wi, success);                               // single cleanup attempt
+            // NOTE: File archiving moved to Orchestrator after verification
         }
     }
 
@@ -322,22 +402,6 @@ public class Pipeline {
         return Objects.requireNonNullElse(n, 0) > 0;
     }
 
-    private void maybeArchive(WorkItem wi, boolean ok) {
-        if (wi.sourcePath() == null) return;
-        try {
-            if(ok) {
-                // SUCCESS: delete the staged source
-                Files.deleteIfExists(wi.sourcePath());
-                log.debug("Deleted staged file on success: {}", wi.sourcePath());
-            } else {
-                Path target = Path.of(ok ? props.getLocalfs().getArchiveOkDir() : props.getLocalfs().getArchiveFailDir());
-                Files.createDirectories(target);
-                Files.move(wi.sourcePath(), target.resolve(wi.fileId()), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            }
-        } catch (Exception ignore) {
-            log.debug("Cleanup,Archive skipped for {}: {}",wi.sourcePath(), ignore.getMessage());
-        }
-    }
 
     // ---------- Counters ----------
 

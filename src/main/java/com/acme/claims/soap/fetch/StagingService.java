@@ -3,6 +3,7 @@ package com.acme.claims.soap.fetch;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.*;
@@ -12,6 +13,7 @@ import java.util.HexFormat;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@Profile("soap")
 public class StagingService {
 
     public enum Mode { MEM, DISK }

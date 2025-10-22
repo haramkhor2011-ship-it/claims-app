@@ -9,12 +9,14 @@ import org.apache.hc.core5.http.ClassicHttpResponse;
 import org.apache.hc.core5.http.io.entity.StringEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
+import org.springframework.context.annotation.Profile;
 
 import java.nio.charset.StandardCharsets;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@Profile("soap")
 public class DhpoSoapClient {
 
     private final CloseableHttpClient http;

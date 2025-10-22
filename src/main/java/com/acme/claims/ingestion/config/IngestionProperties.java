@@ -12,7 +12,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "claims.ingestion")
 public class IngestionProperties {
 
-    // Mode/profile hint (informational) // inline doc
+    // Mode/profile hint (informational) - should match active profile
     private String mode = "localfs";
 
     // Single switch: if true → stage/archive files on disk; false → purely in memory // inline doc

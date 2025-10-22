@@ -19,7 +19,7 @@ create table if not exists claims_ref.facility (
   city           text,
   country        text,
   status         text default 'ACTIVE',
-  created_at	 timestampz deafault now(),
+  created_at	 timestamptz default now(),
   updated_at     timestamptz
 );
 comment on table  claims_ref.facility is 'Master list of provider facilities (Encounter.FacilityID)';
@@ -33,8 +33,9 @@ create table if not exists claims_ref.payer (
   payer_code  text not null unique,     -- e.g., INS025
   name        text,
   status      text default 'ACTIVE',
-  created_at	 timestampz deafault now(),
-  updated_at  timestamptz
+  classification   text,
+  created_at	 timestamptz default now(),
+  updated_at  timestamptz default now()
 );
 comment on table  claims_ref.payer is 'Master list of Payers (Claim.PayerID)';
 comment on column claims_ref.payer.payer_code is 'External PayerID';
@@ -47,7 +48,7 @@ create table if not exists claims_ref.provider (
   provider_code text not null unique,
   name          text,
   status        text default 'ACTIVE',
-  created_at	 timestampz deafault now(),
+  created_at	 timestamptz default now(),
   updated_at    timestamptz
 );
 comment on table claims_ref.provider is 'Master list of provider organizations (Claim.ProviderID)';
@@ -61,7 +62,7 @@ create table if not exists claims_ref.clinician (
   name            text,
   specialty       text,
   status          text default 'ACTIVE',
-  created_at	 timestampz deafault now(),
+  created_at	 timestamptz default now(),
   updated_at      timestamptz
 );
 comment on table claims_ref.clinician is 'Master list of clinicians (Activity.Clinician)';
@@ -71,13 +72,14 @@ comment on table claims_ref.clinician is 'Master list of clinicians (Activity.Cl
 -- -------------------------
 create table if not exists claims_ref.activity_code (
   id           bigserial primary key,
+  type          text,
   code         text not null,
   code_system  text not null default 'LOCAL',   -- CPT/HCPCS/LOCAL/etc.
   description  text,
   status       text default 'ACTIVE',
-  created_at	 timestampz deafault now(),
-  updated_at   timestamptz,
-  constraint uq_activity_code unique (code, code_system)
+  created_at	 timestamptz default now(),
+  updated_at   timestamptz default now() default now(),
+  constraint uq_activity_code unique (code, type)
 );
 comment on table claims_ref.activity_code is 'Service/procedure codes used in Activity.Code';
 
@@ -90,8 +92,8 @@ create table if not exists claims_ref.diagnosis_code (
   code_system  text not null default 'ICD-10',
   description  text,
   status       text default 'ACTIVE',
-  created_at	 timestampz deafault now(),
-  updated_at   timestamptz,
+  created_at	 timestamptz default now(),
+  updated_at   timestamptz default now(),
   constraint uq_diagnosis_code unique (code, code_system)
 );
 comment on table claims_ref.diagnosis_code is 'Diagnosis codes (Diagnosis.Code)';
@@ -104,7 +106,7 @@ create table if not exists claims_ref.denial_code (
   code        text not null unique,
   description text,
   payer_code  text,  -- optional scope
-  created_at	 timestampz deafault now(),
+  created_at	 timestamptz default now(),
   updated_at  timestamptz
 );
 comment on table claims_ref.denial_code is 'Adjudication denial codes; optionally scoped by payer_code';
@@ -146,7 +148,7 @@ create table if not exists claims_ref.contract_package (
   package_name text primary key,
   description  text,
   status       text default 'ACTIVE',
-  updated_at   timestamptz default now()
+  updated_at   timestamptz default now() default now()
 );
 
 -- -------------------------

@@ -20,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.context.annotation.Profile;
 
 import java.util.Map;
 import java.util.Set;
@@ -30,11 +31,15 @@ import java.util.Set;
  * This controller provides endpoints for managing DHPO facility configurations,
  * including creating, updating, retrieving, and activating facilities.
  * Access is restricted to users with appropriate administrative roles.
+ * 
+ * Note: This controller is only available when SOAP profile is active,
+ * as it requires encryption services for DHPO credentials.
  */
 @Slf4j
 @RestController
 @RequestMapping("/admin/facilities")
 @RequiredArgsConstructor
+@Profile("soap")
 @Tag(name = "Facility Administration", description = "API for managing DHPO facility configurations")
 @SecurityRequirement(name = "Bearer Authentication")
 public class FacilityAdminController {

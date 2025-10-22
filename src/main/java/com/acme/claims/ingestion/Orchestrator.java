@@ -1,53 +1,104 @@
 /**
- * # Orchestrator - Ingestion Pipeline Coordination Engine
- *
- * <p><b>Core Responsibility:</b> Coordinates the entire claims ingestion pipeline from file fetching
- * through processing to acknowledgment, ensuring efficient, reliable, and observable data flow.</p>
- *
- * <h2>🏗️ Architecture Overview</h2>
- * <p>The Orchestrator implements a sophisticated event-driven architecture:</p>
+ * <h1>Purpose</h1>
+ * Main coordination engine for the claims ingestion pipeline. Orchestrates the entire flow from file fetching
+ * through processing to acknowledgment, ensuring efficient, reliable, and observable data flow.
+ * 
+ * <h2>Responsibilities</h2>
  * <ul>
- *   <li><b>Producer-Consumer Pattern:</b> Fetchers produce WorkItems, Orchestrator consumes and processes</li>
- *   <li><b>Pull-Based Processing:</b> Scheduled polling of work queue rather than push-based</li>
- *   <li><b>Backpressure Management:</b> Automatic flow control based on system capacity</li>
- *   <li><b>Failure Resilience:</b> Isolated processing with comprehensive error recovery</li>
+ *   <li>Coordinate file fetching from various sources (local filesystem, SOAP)</li>
+ *   <li>Manage work queue and backpressure to prevent system overload</li>
+ *   <li>Process work items through the complete ingestion pipeline</li>
+ *   <li>Handle error recovery and retry logic</li>
+ *   <li>Monitor system health and performance metrics</li>
+ *   <li>Provide observability through comprehensive logging and metrics</li>
  * </ul>
- *
- * <h2>⚙️ Runtime Behavior</h2>
- * <h3>Lifecycle Management</h3>
+ * 
+ * <h2>Dependencies</h2>
  * <ul>
- *   <li><b>Startup:</b> {@code onReady()} initializes fetcher and begins queue monitoring</li>
- *   <li><b>Processing:</b> {@code drain()} periodically processes work items in bursts</li>
- *   <li><b>Per-Item:</b> {@code processOne()} handles complete pipeline execution</li>
- *   <li><b>Shutdown:</b> Graceful termination with proper resource cleanup</li>
+ *   <li>{@link Fetcher} - File fetching implementations (LocalFsFetcher, SoapFetcherAdapter)</li>
+ *   <li>{@link Pipeline} - Core processing engine for work items</li>
+ *   <li>{@link VerifyService} - Post-persistence validation</li>
+ *   <li>{@link Acker} - Acknowledgment implementations (NoopAcker, SoapAckerAdapter)</li>
+ *   <li>{@link IngestionProperties} - Configuration and tuning parameters</li>
+ *   <li>{@link IngestionAudit} - Audit trail recording</li>
  * </ul>
- *
- * <h3>Processing Pipeline</h3>
- * <p>Each WorkItem follows this orchestrated flow:</p>
- * <ol>
- *   <li><b>Validation:</b> File integrity and format verification</li>
- *   <li><b>Parsing:</b> XML → DTO transformation with error collection</li>
- *   <li><b>Persistence:</b> Database storage with transaction isolation</li>
- *   <li><b>Verification:</b> Post-persistence validation and integrity checks</li>
- *   <li><b>Acknowledgment:</b> External system notification (optional)</li>
- * </ol>
- *
- * <h2>🔄 Backpressure & Flow Control</h2>
- * <p>Implements intelligent flow control to prevent system overload:</p>
+ * 
+ * <h2>Used By</h2>
  * <ul>
- *   <li><b>Queue Monitoring:</b> Tracks queue utilization and adjusts processing rate</li>
- *   <li><b>Fetcher Control:</b> Pauses/resumes fetchers based on queue capacity</li>
- *   <li><b>Executor Management:</b> Handles thread pool saturation gracefully</li>
- *   <li><b>Burst Processing:</b> Processes items in configurable batches</li>
+ *   <li>{@link ClaimsBackendApplication} - Application startup and coordination</li>
+ *   <li>{@link AdminController} - Manual processing operations</li>
+ *   <li>{@link MonitoringService} - Health checks and metrics</li>
  * </ul>
- *
- * <h2>🛡️ Reliability Features</h2>
- * <h3>Error Handling</h3>
+ * 
+ * <h2>Key Decisions</h2>
  * <ul>
- *   <li><b>Transaction Isolation:</b> Individual file failures don't affect others</li>
- *   <li><b>Retry Logic:</b> Re-queues failed items for later processing</li>
- *   <li><b>Graceful Degradation:</b> Continues processing despite individual failures</li>
- *   <li><b>Comprehensive Logging:</b> Detailed error context for debugging</li>
+ *   <li>Uses producer-consumer pattern with pull-based processing</li>
+ *   <li>Implements backpressure management to prevent system overload</li>
+ *   <li>Uses structured concurrency with virtual threads for parallel processing</li>
+ *   <li>Implements comprehensive error recovery with retry logic</li>
+ *   <li>Provides observability through metrics and logging</li>
+ * </ul>
+ * 
+ * <h2>Configuration</h2>
+ * <ul>
+ *   <li>{@code claims.ingestion.burstSize} - Controls burst processing size</li>
+ *   <li>{@code claims.ingestion.queueCapacity} - Maximum queue size</li>
+ *   <li>{@code claims.ingestion.workers} - Number of worker threads</li>
+ *   <li>{@code claims.ingestion.polling.interval} - Polling interval for work items</li>
+ * </ul>
+ * 
+ * <h2>Thread Safety</h2>
+ * This class is thread-safe. All dependencies are Spring-managed singletons,
+ * and there is no shared mutable state. Concurrent access is protected by
+ * proper synchronization and thread-safe data structures.
+ * 
+ * <h2>Performance Characteristics</h2>
+ * <ul>
+ *   <li>Processes work items in configurable bursts for optimal throughput</li>
+ *   <li>Uses virtual threads for efficient parallel processing</li>
+ *   <li>Implements backpressure to prevent system overload</li>
+ *   <li>Records comprehensive metrics for performance monitoring</li>
+ * </ul>
+ * 
+ * <h2>Error Handling</h2>
+ * <ul>
+ *   <li>Individual file failures don't stop processing of other files</li>
+ *   <li>Failed items are logged and can be retried</li>
+ *   <li>System errors are logged with full context</li>
+ *   <li>Graceful degradation continues processing despite failures</li>
+ * </ul>
+ * 
+ * <h2>Example Usage</h2>
+ * <pre>{@code
+ * // Start orchestrator
+ * orchestrator.onReady();
+ * 
+ * // Process work items
+ * orchestrator.drain();
+ * 
+ * // Check processing status
+ * if (orchestrator.isPaused()) {
+ *     log.info("Orchestrator is paused due to backpressure");
+ * }
+ * }</pre>
+ * 
+ * <h2>Common Issues</h2>
+ * <ul>
+ *   <li>Queue overflow - Increase queue capacity or reduce fetcher rate</li>
+ *   <li>Memory issues - Increase JVM heap size or reduce burst size</li>
+ *   <li>Processing delays - Check executor thread pool saturation</li>
+ *   <li>File access issues - Check file permissions and disk space</li>
+ * </ul>
+ * 
+ * @see Pipeline
+ * @see Fetcher
+ * @see VerifyService
+ * @see Acker
+ * @see IngestionProperties
+ * @see IngestionAudit
+ * @since 1.0
+ * @author Claims Team
+ */
  * </ul>
  *
  * <h3>Duplicate Prevention</h3>
@@ -180,13 +231,13 @@ public class Orchestrator {
     private final Set<String> processingFiles = ConcurrentHashMap.newKeySet();
 
 
-    public Orchestrator(@Qualifier("soapFetcherAdapter") Fetcher fetcher,
+    public Orchestrator(Fetcher fetcher,
                         IngestionProperties props,
                         @Qualifier("ingestionQueue") BlockingQueue<WorkItem> queue,
                         @Qualifier("ingestionExecutor") TaskExecutor executor,
                         Pipeline pipeline,
                         VerifyService verifyService, 
-                        @Qualifier("soapAckerAdapter") Acker acker,
+                        Acker acker,
                         IngestionAudit audit,
                         Environment env,
                         JdbcTemplate jdbc) {
@@ -438,7 +489,10 @@ public class Orchestrator {
 
             var result = pipeline.process(wi);
             ingestionFileId = result.ingestionFileId();
-            boolean verified = verifyService.verifyFile(ingestionFileId, fileId);
+            
+            // Enhanced verification: check that ALL parsed claims were persisted
+            boolean verified = verifyService.verifyFile(ingestionFileId, fileId, 
+                result.parsedClaims(), result.parsedActivities());
             success = verified;
 
             // Audit successful file processing
@@ -472,6 +526,9 @@ public class Orchestrator {
             // Always remove from processing set, regardless of success/failure
             processingFiles.remove(fileId);
 
+            // Handle file archiving based on final verification result
+            maybeArchiveFile(wi, success);
+
             if (acker != null) {
                 try {
                     acker.maybeAck(fileId, success);
@@ -495,6 +552,37 @@ public class Orchestrator {
             );
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /**
+     * Handle file archiving based on final verification result.
+     * Files are only archived for disk-based sources (localfs).
+     */
+    private void maybeArchiveFile(WorkItem wi, boolean success) {
+        if (wi.sourcePath() == null) {
+            log.debug("ARCHIVE_SKIP fileId={} fileName={} reason=NO_SOURCE_PATH", wi.fileId(), wi.fileName());
+            return;
+        }
+        
+        try {
+            if (success) {
+                // SUCCESS: delete the staged source
+                boolean deleted = java.nio.file.Files.deleteIfExists(wi.sourcePath());
+                log.info("ARCHIVE_SUCCESS fileId={} fileName={} path={} deleted={}", 
+                    wi.fileId(), wi.fileName(), wi.sourcePath(), deleted);
+            } else {
+                // FAILURE: move to archive fail directory with original filename
+                java.nio.file.Path target = java.nio.file.Path.of(props.getLocalfs().getArchiveFailDir());
+                java.nio.file.Files.createDirectories(target);
+                java.nio.file.Path targetFile = target.resolve(wi.fileName()); // Use fileName, not fileId
+                java.nio.file.Files.move(wi.sourcePath(), targetFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                log.info("ARCHIVE_FAILED fileId={} fileName={} sourcePath={} targetPath={}", 
+                    wi.fileId(), wi.fileName(), wi.sourcePath(), targetFile);
+            }
+        } catch (Exception e) {
+            log.error("ARCHIVE_ERROR fileId={} fileName={} path={} error={}", 
+                wi.fileId(), wi.fileName(), wi.sourcePath(), e.getMessage(), e);
         }
     }
 }

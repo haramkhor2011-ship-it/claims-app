@@ -11,7 +11,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 @Component
-@Profile({"ingestion","soap"})
+@Profile("soap")
 public class DhpoFetchInbox {
 
     private final BlockingQueue<WorkItem> queue = new LinkedBlockingQueue<>(1024);
@@ -25,7 +25,7 @@ public class DhpoFetchInbox {
     public void submit(String fileId, byte[] xmlBytes, Path sourcePath, String source, String fileName) {
         WorkItem workItem = new WorkItem(fileId, xmlBytes, sourcePath, source, fileName);
         queue.offer(workItem);
-        ingestionQueue.offer(workItem); // Also put in shared ingestion queue for orchestrator
+        // NOTE: ingestionQueue is handled by Orchestrator via SoapFetcherAdapter callback
     }
 
     /** Convenience for SOAP (sourcePath=null, source="soap"). */

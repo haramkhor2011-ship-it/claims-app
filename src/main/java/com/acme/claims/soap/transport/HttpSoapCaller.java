@@ -13,6 +13,7 @@ import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.HttpHeaders;
 import org.apache.hc.core5.http.io.entity.StringEntity;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -21,6 +22,7 @@ import java.time.Duration;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@Profile("soap")
 @ConditionalOnProperty(name = "claims.soap.transport", havingValue = "http")
 public class HttpSoapCaller implements SoapCaller {
 

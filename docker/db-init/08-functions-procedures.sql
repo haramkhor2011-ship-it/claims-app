@@ -191,7 +191,7 @@ BEGIN
     COUNT(CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 1 END)     AS partially_paid_activities,
     COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END)           AS rejected_activities,
     COUNT(CASE WHEN cas.activity_status = 'PENDING' THEN 1 END)            AS pending_activities,
-    MAX(cas.remittance_count)                                              AS remittance_count,
+    COALESCE(MAX(cas.remittance_count), 0)                                              AS remittance_count,
     COUNT(DISTINCT CASE WHEN ce.type = 2 THEN ce.id END) as resubmission_count,
     MIN(DATE(c.tx_at)) as first_submission_date,
     MAX(DATE(c.tx_at)) as last_submission_date,

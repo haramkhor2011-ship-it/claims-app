@@ -300,12 +300,20 @@ public class DatabaseMonitoringService {
                 .append("share=").append(metrics.getShareLocks()).append("|");
         
         // Query performance
-        if (metrics.getTotalQueryCalls() > 0) {
+        if (metrics.getTotalQueryCalls() != null && metrics.getTotalQueryCalls() > 0) {
             logMessage.append("QUERY_PERF|")
-                    .append("total_calls=").append(metrics.getTotalQueryCalls()).append("|")
-                    .append("total_time_ms=").append(String.format("%.2f", metrics.getTotalQueryTimeMs())).append("|")
-                    .append("avg_time_ms=").append(String.format("%.2f", metrics.getAvgQueryTimeMs())).append("|")
-                    .append("slow_queries=").append(metrics.getSlowQueries()).append("|");
+                    .append("total_calls=").append(metrics.getTotalQueryCalls()).append("|");
+            
+            // Safely handle potentially null values
+            if (metrics.getTotalQueryTimeMs() != null) {
+                logMessage.append("total_time_ms=").append(String.format("%.2f", metrics.getTotalQueryTimeMs())).append("|");
+            }
+            if (metrics.getAvgQueryTimeMs() != null) {
+                logMessage.append("avg_time_ms=").append(String.format("%.2f", metrics.getAvgQueryTimeMs())).append("|");
+            }
+            if (metrics.getSlowQueries() != null) {
+                logMessage.append("slow_queries=").append(metrics.getSlowQueries()).append("|");
+            }
         }
         
         // Top tables summary

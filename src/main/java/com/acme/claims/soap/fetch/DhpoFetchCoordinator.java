@@ -23,7 +23,9 @@ import com.acme.claims.soap.util.XmlPayloads;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Profile;
+import org.springframework.context.event.EventListener;
 import org.springframework.dao.DataAccessException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -95,6 +97,82 @@ public class DhpoFetchCoordinator {
     @Value("${claims.fetch.stageToDisk.readyDir:data/ready}") String readyDir;
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
+
+    // ===== Startup Backfill (runs once at application startup) =====
+    @EventListener(ApplicationReadyEvent.class)
+    public void runStartupBackfill() {
+        // Only run if startup backfill is enabled via toggle
+        if (!toggles.isEnabled("dhpo.startup.backfill.enabled")) {
+            log.info("Startup backfill disabled via toggle");
+            return;
+        }
+        
+        log.info("Starting 300-day backfill at application startup");
+        try {
+            // Run the same logic as pollSearch but without the scheduler
+            runBackfillOnce();
+        } catch (Exception e) {
+            log.error("Startup backfill failed: {}", e.getMessage(), e);
+        }
+    }
+    
+    private void runBackfillOnce() {
+        if (!searchRunning.compareAndSet(false, true)) {
+            log.debug("Backfill already running; skip");
+            return;
+        }
+        try {
+            List<FacilityDhpoConfig> list;
+            try {
+                list = facilities.findByActiveTrue();
+            } catch (DataAccessException e) {
+                log.error("Failed to fetch active facilities for startup backfill: {}", e.getMessage(), e);
+                return;
+            }
+            
+            log.info("Active facilities for startup backfill: {}", list.size());
+            
+            if (list.isEmpty()) {
+                log.debug("No active facilities found for startup backfill");
+                return;
+            }
+            
+            try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+                for (var f : list) {
+                    scope.fork(() -> {
+                        try {
+                            // 300-day backfill logic
+                            LocalDateTime now = LocalDateTime.now();
+                            LocalDateTime startDate = now.minusDays(300);
+                            for (int i = 0; i < 30; i++) {
+                                LocalDateTime from = startDate.plusDays(10L * i);
+                                LocalDateTime to = from.plusDays(10);
+                                // submissions (direction=1, tx=2) - TransactionStatus=1 (new/undownloaded)
+                                searchWindowRange(f, 1, 2, 1, from, to);
+                                // submissions (direction=1, tx=2) - TransactionStatus=2 (downloaded)
+                                searchWindowRange(f, 1, 2, 2, from, to);
+                                // remittances (direction=2, tx=8) - TransactionStatus=1 (new/undownloaded)
+                                searchWindowRange(f, 2, 8, 1, from, to);
+                                // remittances (direction=2, tx=8) - TransactionStatus=2 (downloaded)
+                                searchWindowRange(f, 2, 8, 2, from, to);
+                            }
+                            return null;
+                        } catch (Exception e) {
+                            log.error("Startup backfill failed for facility {}: {}", f.getFacilityCode(), e.getMessage(), e);
+                            throw e;
+                        }
+                    });
+                }
+                scope.join();
+                scope.throwIfFailed();
+            }
+            log.info("Startup backfill completed successfully");
+        } catch (Exception e) {
+            log.error("Startup backfill failed: {}", e.getMessage(), e);
+        } finally {
+            searchRunning.set(false);
+        }
+    }
 
     // ===== Delta poll (GetNewTransactions) =====
     @Scheduled(fixedDelayString = "${claims.soap.poll.fixedDelayMs:1800000}", initialDelay = 0) // default 30 min
@@ -260,9 +338,10 @@ public class DhpoFetchCoordinator {
                             // This explicitly uses date ranges so dhpoProps.searchDaysBack does NOT apply.
                             // NOTE: Remove this block and restore the original calls below for live.
                             LocalDateTime now = LocalDateTime.now();
+                            LocalDateTime startDate = now.minusDays(300); // Start from 300 days back
                             for (int i = 0; i < 30; i++) {
-                                LocalDateTime to = now.minusDays(10L * i);
-                                LocalDateTime from = to.minusDays(10);
+                                LocalDateTime from = startDate.plusDays(10L * i);
+                                LocalDateTime to = from.plusDays(10);
                                 // submissions (direction=1, tx=2) - TransactionStatus=1 (new/undownloaded)
                                 searchWindowRange(f, 1, 2, 1, from, to);
                                 // submissions (direction=1, tx=2) - TransactionStatus=2 (downloaded)
@@ -423,13 +502,14 @@ public class DhpoFetchCoordinator {
         if (!handleResultCode("SearchTransactions", parsed.code(), parsed.errorMessage(), f.getFacilityCode())) {
             return;
         }
-
+        log.info("Files received after SOAP call ={}", parsed.files().size());
         long candidates = parsed.files().stream().filter(fr -> fr.isDownloaded()==null || Boolean.FALSE.equals(fr.isDownloaded())).count();
-        log.info("Facility {} SearchRange dir={} tx={} from={} to={} candidates={}",
-                f.getFacilityCode(), direction, transactionId, FMT.format(from), FMT.format(to), candidates);
+        log.info("Facility {} SearchRange dir={} tx={} txStatus={} from={} to={} candidates(isDownloaded:False)={}",
+                f.getFacilityCode(), direction, transactionId, transactionStatus, FMT.format(from), FMT.format(to), candidates);
 
         try (var vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
-            for (var file : parsed.files().stream().filter(fr -> fr.isDownloaded() == null || !fr.isDownloaded()).toList()) {
+//            for (var file : parsed.files().stream().filter(fr -> fr.isDownloaded() == null || !fr.isDownloaded()).toList()) {
+            for (var file : parsed.files()) {
                 futures.add(vt.submit(() -> {
                     if (!tryMarkInflight(f.getFacilityCode(), file.fileId())) {
                         log.debug("Skip duplicate inflight {}|{}", f.getFacilityCode(), file.fileId());

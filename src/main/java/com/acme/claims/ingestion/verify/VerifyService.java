@@ -29,6 +29,11 @@ public class VerifyService {
 
     /** Run post-file verification; keep it quick and side-effect free. */
     public boolean verifyFile(long ingestionFileId, String xmlFileId) {
+        return verifyFile(ingestionFileId, xmlFileId, null, null);
+    }
+
+    /** Run comprehensive post-file verification with parsed vs persisted counts. */
+    public boolean verifyFile(long ingestionFileId, String xmlFileId, Integer expectedClaims, Integer expectedActivities) {
         try {
             // 1) Ensure at least one claim_event was projected for this file
             Integer ev = jdbc.queryForObject(
@@ -37,6 +42,36 @@ public class VerifyService {
             if (ev == null || ev <= 0) {
                 log.warn("Verify: no claim_event rows for ingestion_file_id={}, fileId: {}", ingestionFileId, xmlFileId);
                 return false;
+            }
+
+            // 2) If we have expected counts, verify ALL claims were persisted
+            if (expectedClaims != null && expectedClaims > 0) {
+                Integer actualClaims = jdbc.queryForObject(
+                        "select count(distinct claim_key_id) from claims.claim_event where ingestion_file_id = ?",
+                        Integer.class, ingestionFileId);
+                if (actualClaims == null || actualClaims < expectedClaims) {
+                    log.warn("Verify: incomplete claim persistence for ingestion_file_id={}, fileId: {} - expected={}, actual={}", 
+                        ingestionFileId, xmlFileId, expectedClaims, actualClaims);
+                    return false;
+                }
+                log.info("Verify: claim count verified for ingestion_file_id={}, fileId: {} - expected={}, actual={}", 
+                    ingestionFileId, xmlFileId, expectedClaims, actualClaims);
+            }
+
+            // 3) If we have expected activity counts, verify ALL activities were persisted
+            if (expectedActivities != null && expectedActivities > 0) {
+                Integer actualActivities = jdbc.queryForObject(
+                        "select count(*) from claims.activity a " +
+                        "join claims.claim_event ce on ce.claim_key_id = a.claim_id " +
+                        "where ce.ingestion_file_id = ?",
+                        Integer.class, ingestionFileId);
+                if (actualActivities == null || actualActivities < expectedActivities) {
+                    log.warn("Verify: incomplete activity persistence for ingestion_file_id={}, fileId: {} - expected={}, actual={}", 
+                        ingestionFileId, xmlFileId, expectedActivities, actualActivities);
+                    return false;
+                }
+                log.info("Verify: activity count verified for ingestion_file_id={}, fileId: {} - expected={}, actual={}", 
+                    ingestionFileId, xmlFileId, expectedActivities, actualActivities);
             }
 
             // 2a) Orphan activities (activity.claim_id must exist in claim)
