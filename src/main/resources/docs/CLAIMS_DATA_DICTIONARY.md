@@ -146,7 +146,7 @@ Legend: PK=primary key, FK=foreign key, TX=transactional timestamp, SSOT=single 
   - claim_key_id (FK → claim_key.id): Canonical link to Claim.ID.
   - id_payer: Payer code at remittance level.
   - provider_id: Provider code at remittance level.
-  - denial_code: Claim-level denial code (optional).
+  - denial_code: **Claim-level denial code from remittance advice (optional)** - indicates entire claim denial vs activity-level denials.
   - payment_reference: Reference number for payment.
   - date_settlement: Payment settlement date.
   - facility_id: Encounter facility copied on remittance if provided.
@@ -168,6 +168,24 @@ Legend: PK=primary key, FK=foreign key, TX=transactional timestamp, SSOT=single 
   - payment_amount: Paid amount for this activity.
   - denial_code: Activity-level denial code.
   - created_at, updated_at: Audit timestamps.
+
+### Denial Code Distinction
+
+**Claim-Level Denial** (`remittance_claim.denial_code`):
+- **Purpose**: Entire claim is denied/rejected
+- **Scope**: Affects all activities in the claim
+- **Example**: "Invalid member ID", "Provider not credentialed"
+- **XML Source**: `<Claim><DenialCode>` element
+- **Usage**: Claim-level rejection analysis, member/provider issues
+
+**Activity-Level Denial** (`remittance_activity.denial_code`):
+- **Purpose**: Specific activity within claim is denied
+- **Scope**: Affects only that specific activity
+- **Example**: "Procedure not covered", "Prior authorization required"
+- **XML Source**: `<Activity><DenialCode>` element
+- **Usage**: Activity-level rejection analysis, partial payments, clinician performance
+
+**Important**: Existing reports use activity-level denials. Claim-level denials are for new functionality requiring entire claim rejection analysis.
 
 ### Events, snapshots, status
 

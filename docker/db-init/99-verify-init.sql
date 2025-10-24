@@ -1,198 +1,357 @@
 -- ==========================================================================================================
--- DATABASE INITIALIZATION VERIFICATION
+-- DATABASE INITIALIZATION VERIFICATION SCRIPT
 -- ==========================================================================================================
 -- 
--- Purpose: Verify database initialization and mark as complete
--- Version: 1.0
--- Date: 2025-01-15
+-- Purpose: Verify that all database objects have been created successfully
+-- Version: 2.0
+-- Date: 2025-10-24
 -- 
--- This script performs verification checks and marks the database as initialized.
+-- This script verifies:
+-- - All schemas exist
+-- - All tables exist with correct structure
+-- - All views exist
+-- - All materialized views exist
+-- - All functions exist
+-- - All triggers exist
+-- - All indexes exist
+-- - All permissions are granted correctly
 --
 -- ==========================================================================================================
 
 -- ==========================================================================================================
--- SECTION 1: VERIFICATION CHECKS
+-- SECTION 1: SCHEMA VERIFICATION
 -- ==========================================================================================================
 
--- Check schemas exist
 DO $$
-DECLARE
-  schema_count INTEGER;
 BEGIN
-  SELECT COUNT(*) INTO schema_count
-  FROM information_schema.schemata
-  WHERE schema_name IN ('claims', 'claims_ref', 'auth');
-  
-  IF schema_count < 3 THEN
-    RAISE EXCEPTION 'Missing schemas. Expected 3, found %', schema_count;
+  -- Check if schemas exist
+  IF NOT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'claims') THEN
+    RAISE EXCEPTION 'Schema "claims" does not exist';
   END IF;
   
-  RAISE NOTICE 'Schemas verification: PASSED (found % schemas)', schema_count;
-END$$;
-
--- Check core tables exist
-DO $$
-DECLARE
-  table_count INTEGER;
-BEGIN
-  SELECT COUNT(*) INTO table_count
-  FROM information_schema.tables
-  WHERE table_schema = 'claims'
-  AND table_name IN (
-    'ingestion_file', 'claim_key', 'submission', 'claim', 'encounter', 
-    'diagnosis', 'activity', 'observation', 'remittance', 'remittance_claim',
-    'remittance_activity', 'claim_event', 'claim_status_timeline'
-  );
-  
-  IF table_count < 13 THEN
-    RAISE EXCEPTION 'Missing core tables. Expected 13, found %', table_count;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'claims_ref') THEN
+    RAISE EXCEPTION 'Schema "claims_ref" does not exist';
   END IF;
   
-  RAISE NOTICE 'Core tables verification: PASSED (found % tables)', table_count;
-END$$;
-
--- Check reference tables exist
-DO $$
-DECLARE
-  ref_table_count INTEGER;
-BEGIN
-  SELECT COUNT(*) INTO ref_table_count
-  FROM information_schema.tables
-  WHERE table_schema = 'claims_ref'
-  AND table_name IN (
-    'facility', 'payer', 'provider', 'clinician', 'activity_code',
-    'diagnosis_code', 'denial_code', 'contract_package'
-  );
-  
-  IF ref_table_count < 8 THEN
-    RAISE EXCEPTION 'Missing reference tables. Expected 8, found %', ref_table_count;
-  END IF;
-  
-  RAISE NOTICE 'Reference tables verification: PASSED (found % tables)', ref_table_count;
-END$$;
-
--- Check materialized views exist
-DO $$
-DECLARE
-  mv_count INTEGER;
-BEGIN
-  SELECT COUNT(*) INTO mv_count
-  FROM pg_matviews
-  WHERE schemaname = 'claims';
-  
-  IF mv_count < 9 THEN
-    RAISE EXCEPTION 'Missing materialized views. Expected 9, found %', mv_count;
-  END IF;
-  
-  RAISE NOTICE 'Materialized views verification: PASSED (found % MVs)', mv_count;
-END$$;
-
--- Check DHPO configuration tables exist
-DO $$
-DECLARE
-  dhpo_table_count INTEGER;
-BEGIN
-  SELECT COUNT(*) INTO dhpo_table_count
-  FROM information_schema.tables
-  WHERE table_schema = 'claims'
-  AND table_name IN ('facility_dhpo_config', 'integration_toggle');
-  
-  IF dhpo_table_count < 2 THEN
-    RAISE EXCEPTION 'Missing DHPO configuration tables. Expected 2, found %', dhpo_table_count;
-  END IF;
-  
-  RAISE NOTICE 'DHPO configuration tables verification: PASSED (found % tables)', dhpo_table_count;
-END$$;
-
--- Check user management tables exist
-DO $$
-DECLARE
-  user_table_count INTEGER;
-BEGIN
-  SELECT COUNT(*) INTO user_table_count
-  FROM information_schema.tables
-  WHERE table_schema = 'claims'
-  AND table_name IN ('users', 'user_roles', 'user_facilities', 'security_audit_log', 'refresh_tokens');
-  
-  IF user_table_count < 5 THEN
-    RAISE EXCEPTION 'Missing user management tables. Expected 5, found %', user_table_count;
-  END IF;
-  
-  RAISE NOTICE 'User management tables verification: PASSED (found % tables)', user_table_count;
-END$$;
-
--- Check extensions are installed
-DO $$
-DECLARE
-  ext_count INTEGER;
-BEGIN
-  SELECT COUNT(*) INTO ext_count
-  FROM pg_extension
-  WHERE extname IN ('pg_trgm', 'citext', 'pgcrypto');
-  
-  IF ext_count < 3 THEN
-    RAISE EXCEPTION 'Missing extensions. Expected 3, found %', ext_count;
-  END IF;
-  
-  RAISE NOTICE 'Extensions verification: PASSED (found % extensions)', ext_count;
-END$$;
-
--- Check claims_user role exists
-DO $$
-DECLARE
-  role_exists BOOLEAN;
-BEGIN
-  SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'claims_user') INTO role_exists;
-  
-  IF NOT role_exists THEN
-    RAISE EXCEPTION 'claims_user role does not exist';
-  END IF;
-  
-  RAISE NOTICE 'Claims user role verification: PASSED';
-END$$;
+  RAISE NOTICE 'All schemas exist successfully';
+END $$;
 
 -- ==========================================================================================================
--- SECTION 2: MARK DATABASE AS INITIALIZED
--- ==========================================================================================================
-
--- Mark database as initialized
-INSERT INTO claims.integration_toggle(code, enabled, updated_at) 
-VALUES ('db.initialized', true, NOW())
-ON CONFLICT (code) DO UPDATE SET 
-  enabled = true, 
-  updated_at = NOW();
-
--- ==========================================================================================================
--- SECTION 3: FINAL VERIFICATION SUMMARY
+-- SECTION 2: TABLE VERIFICATION
 -- ==========================================================================================================
 
 DO $$
 DECLARE
-  total_tables INTEGER;
-  total_views INTEGER;
-  total_functions INTEGER;
+  v_table_count INTEGER;
+  v_expected_tables TEXT[] := ARRAY[
+    'claim_key', 'claim', 'encounter', 'activity', 'diagnosis', 'observation',
+    'remittance', 'remittance_claim', 'remittance_activity', 'claim_event',
+    'claim_status_timeline', 'claim_payment', 'claim_activity_summary',
+    'claim_financial_timeline', 'payer_performance_summary', 'claim_resubmission',
+    'claim_contract', 'claim_attachment', 'event_observation', 'code_discovery_audit',
+    'facility_dhpo_config', 'integration_toggle', 'verification_rule', 'verification_run',
+    'verification_result', 'ingestion_file_audit', 'ingestion_run',
+    'users', 'user_roles', 'user_facilities', 'reports_metadata', 'user_report_permissions',
+    'security_audit_log', 'refresh_tokens', 'sso_providers', 'user_sso_mappings'
+  ];
+  v_ref_tables TEXT[] := ARRAY[
+    'facility', 'payer', 'provider', 'clinician', 'activity_code', 'diagnosis_code',
+    'denial_code', 'observation_type', 'observation_value_type', 'observation_code',
+    'activity_type', 'encounter_type', 'resubmission_type', 'bootstrap_status'
+  ];
+  v_table_name TEXT;
 BEGIN
-  -- Count total tables
-  SELECT COUNT(*) INTO total_tables
-  FROM information_schema.tables
-  WHERE table_schema IN ('claims', 'claims_ref', 'auth');
+  -- Check claims schema tables
+  FOREACH v_table_name IN ARRAY v_expected_tables
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'claims' AND table_name = v_table_name) THEN
+      RAISE EXCEPTION 'Table "claims.%" does not exist', v_table_name;
+    END IF;
+  END LOOP;
   
-  -- Count total materialized views
-  SELECT COUNT(*) INTO total_views
-  FROM pg_matviews
-  WHERE schemaname = 'claims';
+  -- Check claims_ref schema tables
+  FOREACH v_table_name IN ARRAY v_ref_tables
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'claims_ref' AND table_name = v_table_name) THEN
+      RAISE EXCEPTION 'Table "claims_ref.%" does not exist', v_table_name;
+    END IF;
+  END LOOP;
   
-  -- Count total functions
-  SELECT COUNT(*) INTO total_functions
-  FROM information_schema.routines
-  WHERE routine_schema = 'claims';
+  RAISE NOTICE 'All tables exist successfully';
+END $$;
+
+-- ==========================================================================================================
+-- SECTION 3: VIEW VERIFICATION
+-- ==========================================================================================================
+
+DO $$
+DECLARE
+  v_view_count INTEGER;
+  v_expected_views TEXT[] := ARRAY[
+    'v_claim_summary_monthwise', 'v_claim_summary_payerwise', 'v_claim_summary_encounterwise',
+    'v_balance_amount_to_be_received_base', 'v_balance_amount_to_be_received',
+    'v_initial_not_remitted_balance', 'v_after_resubmission_not_remitted_balance',
+    'v_remittances_resubmission_activity_level', 'v_remittances_resubmission_claim_level',
+    'v_claim_details_with_activity', 'v_rejected_claims_base', 'v_rejected_claims_summary_by_year',
+    'v_rejected_claims_summary', 'v_rejected_claims_receiver_payer', 'v_rejected_claims_claim_wise',
+    'v_doctor_denial_high_denial', 'v_doctor_denial_summary', 'v_doctor_denial_detail',
+    'v_remittance_advice_header', 'v_remittance_advice_claim_wise', 'v_remittance_advice_activity_wise'
+  ];
+  v_view_name TEXT;
+BEGIN
+  FOREACH v_view_name IN ARRAY v_expected_views
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM information_schema.views WHERE table_schema = 'claims' AND table_name = v_view_name) THEN
+      RAISE EXCEPTION 'View "claims.%" does not exist', v_view_name;
+    END IF;
+  END LOOP;
   
-  RAISE NOTICE '========================================';
-  RAISE NOTICE 'DATABASE INITIALIZATION COMPLETE';
-  RAISE NOTICE '========================================';
-  RAISE NOTICE 'Total tables created: %', total_tables;
-  RAISE NOTICE 'Total materialized views created: %', total_views;
-  RAISE NOTICE 'Total functions created: %', total_functions;
-  RAISE NOTICE 'Database marked as initialized: true';
-  RAISE NOTICE '========================================';
-END$$;
+  RAISE NOTICE 'All views exist successfully';
+END $$;
+
+-- ==========================================================================================================
+-- SECTION 4: MATERIALIZED VIEW VERIFICATION
+-- ==========================================================================================================
+
+DO $$
+DECLARE
+  v_mv_count INTEGER;
+  v_expected_mvs TEXT[] := ARRAY[
+    'mv_balance_amount_summary', 'mv_balance_amount_overall', 'mv_balance_amount_initial',
+    'mv_balance_amount_resubmission', 'mv_remittance_advice_summary', 'mv_remittance_advice_header',
+    'mv_remittance_advice_claim_wise', 'mv_remittance_advice_activity_wise', 'mv_doctor_denial_summary',
+    'mv_doctor_denial_high_denial', 'mv_doctor_denial_detail', 'mv_claims_monthly_agg',
+    'mv_claim_details_complete', 'mv_resubmission_cycles', 'mv_remittances_resubmission_activity_level',
+    'mv_rejected_claims_summary', 'mv_rejected_claims_by_year', 'mv_rejected_claims_summary_tab',
+    'mv_rejected_claims_receiver_payer', 'mv_rejected_claims_claim_wise', 'mv_claim_summary_payerwise',
+    'mv_claim_summary_encounterwise', 'mv_claim_summary_monthwise', 'mv_remittances_resubmission_claim_level'
+  ];
+  v_mv_name TEXT;
+BEGIN
+  FOREACH v_mv_name IN ARRAY v_expected_mvs
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_matviews WHERE schemaname = 'claims' AND matviewname = v_mv_name) THEN
+      RAISE EXCEPTION 'Materialized view "claims.%" does not exist', v_mv_name;
+    END IF;
+  END LOOP;
+  
+  RAISE NOTICE 'All materialized views exist successfully';
+END $$;
+
+-- ==========================================================================================================
+-- SECTION 5: FUNCTION VERIFICATION
+-- ==========================================================================================================
+
+DO $$
+DECLARE
+  v_function_count INTEGER;
+  v_expected_functions TEXT[] := ARRAY[
+    'set_updated_at', 'set_submission_tx_at', 'recalculate_claim_payment',
+    'update_claim_payment_on_remittance', 'update_claim_payment_on_remittance_activity',
+    'get_claim_payment_status', 'get_claim_total_paid', 'is_claim_fully_paid',
+    'recalculate_all_claim_payments', 'recalculate_claim_payments_by_date',
+    'validate_claim_payment_integrity', 'recalculate_activity_summary',
+    'update_activity_summary_on_remittance_activity', 'update_financial_timeline_on_event',
+    'update_payer_performance_summary', 'get_balance_amount_summary',
+    'get_claim_summary_monthwise', 'get_rejected_claims_summary'
+  ];
+  v_function_name TEXT;
+BEGIN
+  FOREACH v_function_name IN ARRAY v_expected_functions
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM information_schema.routines WHERE routine_schema = 'claims' AND routine_name = v_function_name) THEN
+      RAISE EXCEPTION 'Function "claims.%" does not exist', v_function_name;
+    END IF;
+  END LOOP;
+  
+  RAISE NOTICE 'All functions exist successfully';
+END $$;
+
+-- ==========================================================================================================
+-- SECTION 6: TRIGGER VERIFICATION
+-- ==========================================================================================================
+
+DO $$
+DECLARE
+  v_trigger_count INTEGER;
+  v_expected_triggers TEXT[] := ARRAY[
+    'trg_remittance_claim_update_claim_payment', 'trg_remittance_activity_update_claim_payment',
+    'trg_remittance_activity_update_activity_summary'
+  ];
+  v_trigger_name TEXT;
+BEGIN
+  FOREACH v_trigger_name IN ARRAY v_expected_triggers
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM information_schema.triggers WHERE trigger_schema = 'claims' AND trigger_name = v_trigger_name) THEN
+      RAISE EXCEPTION 'Trigger "claims.%" does not exist', v_trigger_name;
+    END IF;
+  END LOOP;
+  
+  RAISE NOTICE 'All triggers exist successfully';
+END $$;
+
+-- ==========================================================================================================
+-- SECTION 7: INDEX VERIFICATION
+-- ==========================================================================================================
+
+DO $$
+DECLARE
+  v_index_count INTEGER;
+BEGIN
+  -- Check for key indexes
+  SELECT COUNT(*) INTO v_index_count
+  FROM pg_indexes
+  WHERE schemaname = 'claims'
+    AND indexname IN (
+      'idx_claim_key_claim_id', 'idx_claim_payer_id', 'idx_claim_provider_id',
+      'idx_encounter_claim_id', 'idx_activity_claim_id', 'idx_remittance_claim_claim_key_id',
+      'idx_remittance_activity_remittance_claim_id', 'idx_claim_event_claim_key_id',
+      'idx_claim_payment_claim_key_id', 'idx_claim_activity_summary_claim_key_id'
+    );
+  
+  IF v_index_count < 10 THEN
+    RAISE EXCEPTION 'Expected at least 10 key indexes, found %', v_index_count;
+  END IF;
+  
+  RAISE NOTICE 'Key indexes exist successfully (count: %)', v_index_count;
+END $$;
+
+-- ==========================================================================================================
+-- SECTION 8: PERMISSIONS VERIFICATION
+-- ==========================================================================================================
+
+DO $$
+DECLARE
+  v_role_exists BOOLEAN;
+  v_table_permissions INTEGER;
+  v_function_permissions INTEGER;
+BEGIN
+  -- Check if claims_user role exists
+  SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'claims_user') INTO v_role_exists;
+  
+  IF NOT v_role_exists THEN
+    RAISE EXCEPTION 'Role "claims_user" does not exist';
+  END IF;
+  
+  -- Check table permissions
+  SELECT COUNT(*) INTO v_table_permissions
+  FROM information_schema.table_privileges
+  WHERE grantee = 'claims_user'
+    AND table_schema IN ('claims', 'claims_ref');
+  
+  IF v_table_permissions < 50 THEN
+    RAISE EXCEPTION 'Expected at least 50 table permissions for claims_user, found %', v_table_permissions;
+  END IF;
+  
+  -- Check function permissions
+  SELECT COUNT(*) INTO v_function_permissions
+  FROM information_schema.routine_privileges
+  WHERE grantee = 'claims_user'
+    AND routine_schema = 'claims';
+  
+  IF v_function_permissions < 10 THEN
+    RAISE EXCEPTION 'Expected at least 10 function permissions for claims_user, found %', v_function_permissions;
+  END IF;
+  
+  RAISE NOTICE 'Permissions granted successfully (tables: %, functions: %)', v_table_permissions, v_function_permissions;
+END $$;
+
+-- ==========================================================================================================
+-- SECTION 9: DATA INTEGRITY VERIFICATION
+-- ==========================================================================================================
+
+DO $$
+DECLARE
+  v_admin_user_exists BOOLEAN;
+  v_reports_metadata_count INTEGER;
+  v_bootstrap_status_count INTEGER;
+BEGIN
+  -- Check if admin user exists
+  SELECT EXISTS (SELECT 1 FROM claims.users WHERE username = 'admin') INTO v_admin_user_exists;
+  
+  IF NOT v_admin_user_exists THEN
+    RAISE EXCEPTION 'Admin user does not exist';
+  END IF;
+  
+  -- Check reports metadata
+  SELECT COUNT(*) INTO v_reports_metadata_count
+  FROM claims.reports_metadata
+  WHERE status = 'A';
+  
+  IF v_reports_metadata_count < 5 THEN
+    RAISE EXCEPTION 'Expected at least 5 active reports in metadata, found %', v_reports_metadata_count;
+  END IF;
+  
+  -- Check bootstrap status
+  SELECT COUNT(*) INTO v_bootstrap_status_count
+  FROM claims_ref.bootstrap_status;
+  
+  RAISE NOTICE 'Data integrity verified successfully (admin user: %, reports: %, bootstrap records: %)', 
+    v_admin_user_exists, v_reports_metadata_count, v_bootstrap_status_count;
+END $$;
+
+-- ==========================================================================================================
+-- SECTION 10: SAMPLE QUERY TESTS
+-- ==========================================================================================================
+
+DO $$
+DECLARE
+  v_result_count INTEGER;
+BEGIN
+  -- Test a simple query on claim_key table
+  SELECT COUNT(*) INTO v_result_count
+  FROM claims.claim_key;
+  
+  RAISE NOTICE 'Sample query test passed (claim_key count: %)', v_result_count;
+  
+  -- Test a query on reference data
+  SELECT COUNT(*) INTO v_result_count
+  FROM claims_ref.facility;
+  
+  RAISE NOTICE 'Reference data query test passed (facility count: %)', v_result_count;
+  
+  -- Test a view query
+  SELECT COUNT(*) INTO v_result_count
+  FROM claims.v_claim_summary_monthwise;
+  
+  RAISE NOTICE 'View query test passed (monthwise summary count: %)', v_result_count;
+  
+  -- Test a materialized view query
+  SELECT COUNT(*) INTO v_result_count
+  FROM claims.mv_balance_amount_summary;
+  
+  RAISE NOTICE 'Materialized view query test passed (balance summary count: %)', v_result_count;
+  
+  -- Test a function call
+  SELECT claims.get_claim_payment_status(1) INTO v_result_count;
+  
+  RAISE NOTICE 'Function call test passed (payment status for claim 1: %)', v_result_count;
+END $$;
+
+-- ==========================================================================================================
+-- SECTION 11: FINAL VERIFICATION SUMMARY
+-- ==========================================================================================================
+
+DO $$
+BEGIN
+  RAISE NOTICE '==========================================================================================================';
+  RAISE NOTICE 'DATABASE INITIALIZATION VERIFICATION COMPLETED SUCCESSFULLY';
+  RAISE NOTICE '==========================================================================================================';
+  RAISE NOTICE 'All database objects have been created and verified:';
+  RAISE NOTICE '- Schemas: claims, claims_ref';
+  RAISE NOTICE '- Tables: Core claims tables, reference data tables, user management tables';
+  RAISE NOTICE '- Views: Report views for all major reports';
+  RAISE NOTICE '- Materialized Views: Pre-computed aggregations for sub-second performance';
+  RAISE NOTICE '- Functions: Payment calculation, activity summary, financial timeline, payer performance';
+  RAISE NOTICE '- Triggers: Real-time updates for payment metrics and activity summaries';
+  RAISE NOTICE '- Indexes: Performance indexes for all major tables';
+  RAISE NOTICE '- Permissions: claims_user role with appropriate access';
+  RAISE NOTICE '- Data: Admin user, reports metadata, bootstrap status';
+  RAISE NOTICE '==========================================================================================================';
+  RAISE NOTICE 'Database is ready for production use!';
+  RAISE NOTICE '==========================================================================================================';
+END $$;
+
+-- ==========================================================================================================
+-- END OF VERIFICATION SCRIPT
+-- ==========================================================================================================

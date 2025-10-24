@@ -94,7 +94,7 @@ SELECT
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.activity_id END) AS partially_paid_count,
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS fully_rejected_count,
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS rejection_count,
-    COUNT(DISTINCT CASE WHEN rc.payment_reference IS NOT NULL THEN ck.claim_id END) AS taken_back_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status IN ('TAKEN_BACK', 'PARTIALLY_TAKEN_BACK') THEN cas.activity_id END) AS taken_back_count,
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'PENDING' THEN cas.activity_id END) AS pending_remittance_count,
     COUNT(DISTINCT CASE WHEN c.payer_id = 'Self-Paid' THEN ck.claim_id END) AS self_pay_count,
 
@@ -110,6 +110,7 @@ SELECT
     SUM(COALESCE(cas.denied_amount, 0)) AS fully_rejected_amount,                       -- denied only when latest denial and zero paid
     SUM(COALESCE(cas.denied_amount, 0)) AS rejected_amount,                             -- same as fully_rejected for consistency
     SUM(CASE WHEN cas.activity_status = 'PENDING' THEN cas.submitted_amount ELSE 0 END) AS pending_remittance_amount,
+    SUM(CASE WHEN cas.activity_status IN ('TAKEN_BACK', 'PARTIALLY_TAKEN_BACK') THEN cas.taken_back_amount ELSE 0 END) AS taken_back_amount,
     SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END) AS self_pay_amount,
 
     -- Facility and Health Authority
@@ -237,7 +238,7 @@ SELECT
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.activity_id END) AS partially_paid_count,
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS fully_rejected_count,
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS rejection_count,
-    COUNT(DISTINCT CASE WHEN rc.payment_reference IS NOT NULL THEN ck.claim_id END) AS taken_back_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status IN ('TAKEN_BACK', 'PARTIALLY_TAKEN_BACK') THEN cas.activity_id END) AS taken_back_count,
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'PENDING' THEN cas.activity_id END) AS pending_remittance_count,
     COUNT(DISTINCT CASE WHEN c.payer_id = 'Self-Paid' THEN ck.claim_id END) AS self_pay_count,
 
@@ -253,6 +254,7 @@ SELECT
     SUM(COALESCE(cas.denied_amount, 0)) AS fully_rejected_amount,                       -- denied only when latest denial and zero paid
     SUM(COALESCE(cas.denied_amount, 0)) AS rejected_amount,                             -- same as fully_rejected for consistency
     SUM(CASE WHEN cas.activity_status = 'PENDING' THEN cas.submitted_amount ELSE 0 END) AS pending_remittance_amount,
+    SUM(CASE WHEN cas.activity_status IN ('TAKEN_BACK', 'PARTIALLY_TAKEN_BACK') THEN cas.taken_back_amount ELSE 0 END) AS taken_back_amount,
     SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END) AS self_pay_amount,
 
     -- Facility and Health Authority
@@ -377,7 +379,7 @@ SELECT
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.activity_id END) AS partially_paid_count,
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS fully_rejected_count,
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'REJECTED' THEN cas.activity_id END) AS rejection_count,
-    COUNT(DISTINCT CASE WHEN rc.payment_reference IS NOT NULL THEN ck.claim_id END) AS taken_back_count,
+    COUNT(DISTINCT CASE WHEN cas.activity_status IN ('TAKEN_BACK', 'PARTIALLY_TAKEN_BACK') THEN cas.activity_id END) AS taken_back_count,
     COUNT(DISTINCT CASE WHEN cas.activity_status = 'PENDING' THEN cas.activity_id END) AS pending_remittance_count,
     COUNT(DISTINCT CASE WHEN c.payer_id = 'Self-Paid' THEN ck.claim_id END) AS self_pay_count,
 
@@ -393,6 +395,7 @@ SELECT
     SUM(COALESCE(cas.denied_amount, 0)) AS fully_rejected_amount,                       -- denied only when latest denial and zero paid
     SUM(COALESCE(cas.denied_amount, 0)) AS rejected_amount,                             -- same as fully_rejected for consistency
     SUM(CASE WHEN cas.activity_status = 'PENDING' THEN cas.submitted_amount ELSE 0 END) AS pending_remittance_amount,
+    SUM(CASE WHEN cas.activity_status IN ('TAKEN_BACK', 'PARTIALLY_TAKEN_BACK') THEN cas.taken_back_amount ELSE 0 END) AS taken_back_amount,
     SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN c.net ELSE 0 END) AS self_pay_amount,
 
     -- Facility and Health Authority
@@ -479,6 +482,7 @@ CREATE OR REPLACE FUNCTION claims.get_claim_summary_monthwise_params(
     total_fully_rejected_claims BIGINT,
     total_rejection_count BIGINT,
     total_taken_back_count BIGINT,
+    total_taken_back_amount NUMERIC(14,2),
     total_pending_remittance_count BIGINT,
     total_self_pay_count BIGINT,
     total_claim_amount NUMERIC(14,2),
@@ -517,6 +521,7 @@ BEGIN
                     SUM(mv.fully_rejected_count) as total_fully_rejected_claims,
                     SUM(mv.rejection_count) as total_rejection_count,
                     SUM(mv.taken_back_count) as total_taken_back_count,
+                    SUM(mv.taken_back_amount) as total_taken_back_amount,
                     SUM(mv.pending_remittance_count) as total_pending_remittance_count,
                     SUM(mv.self_pay_count) as total_self_pay_count,
                     SUM(mv.total_net) as total_claim_amount,

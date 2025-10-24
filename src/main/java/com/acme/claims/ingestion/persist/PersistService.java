@@ -1012,11 +1012,11 @@ public class PersistService {
         jdbc.update("""
                             insert into claims.remittance_claim(
                               remittance_id, claim_key_id, id_payer, provider_id, comments, payment_reference, date_settlement, facility_id,
-                              payer_ref_id, provider_ref_id                                               
-                            ) values (?,?,?,?,?,?,?,?,?,?)
+                              payer_ref_id, provider_ref_id, denial_code                                               
+                            ) values (?,?,?,?,?,?,?,?,?,?,?)
                             on conflict (remittance_id, claim_key_id) do nothing
                         """, remittanceId, claimKeyId, c.idPayer(), c.providerId(), c.comments(),
-                c.paymentReference(), c.dateSettlement(), c.facilityId(), payerCodeRefId, providerCodeRefId
+                c.paymentReference(), c.dateSettlement(), c.facilityId(), payerCodeRefId, providerCodeRefId, c.denialCode()
         );
         return jdbc.queryForObject(
                 "select id from claims.remittance_claim where remittance_id=? and claim_key_id=?",

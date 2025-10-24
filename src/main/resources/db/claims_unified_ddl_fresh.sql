@@ -144,19 +144,18 @@ END$$;
 -- ----------------------------------------------------------------------------------------------------------
 -- 4.1 FACILITIES
 -- ----------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS claims_ref.facility (
-  id             BIGSERIAL PRIMARY KEY,
-  facility_code  TEXT NOT NULL UNIQUE,
-  name           TEXT,
-  city           TEXT,
-  country        TEXT,
-  status         TEXT DEFAULT 'ACTIVE',
-  created_at     TIMESTAMPTZ DEFAULT NOW(),
-  updated_at     TIMESTAMPTZ DEFAULT NOW()
+create table if not exists claims_ref.facility (
+  id             bigserial primary key,
+  facility_code  text not null unique,  -- e.g., DHA-F-0045446
+  name           text,
+  city           text,
+  country        text,
+  status         text default 'ACTIVE',
+  created_at	 timestamptz default now(),
+  updated_at     timestamptz
 );
-
-COMMENT ON TABLE claims_ref.facility IS 'Master list of provider facilities (Encounter.FacilityID)';
-COMMENT ON COLUMN claims_ref.facility.facility_code IS 'External FacilityID (DHA/eClaim)';
+comment on table  claims_ref.facility is 'Master list of provider facilities (Encounter.FacilityID)';
+comment on column claims_ref.facility.facility_code is 'External FacilityID (DHA/eClaim)';
 
 CREATE INDEX IF NOT EXISTS idx_facility_code ON claims_ref.facility(facility_code);
 CREATE INDEX IF NOT EXISTS idx_facility_status ON claims_ref.facility(status);
@@ -166,18 +165,17 @@ CREATE INDEX IF NOT EXISTS idx_ref_facility_name_trgm ON claims_ref.facility USI
 -- ----------------------------------------------------------------------------------------------------------
 -- 4.2 PAYERS
 -- ----------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS claims_ref.payer (
-  id          BIGSERIAL PRIMARY KEY,
-  payer_code  TEXT NOT NULL UNIQUE,
-  name        TEXT,
-  status      TEXT DEFAULT 'ACTIVE',
-  classification   TEXT,
-  created_at  TIMESTAMPTZ DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ DEFAULT NOW()
+create table if not exists claims_ref.payer (
+  id          bigserial primary key,
+  payer_code  text not null unique,     -- e.g., INS025
+  name        text,
+  status      text default 'ACTIVE',
+  classification   text,
+  created_at	 timestamptz default now(),
+  updated_at  timestamptz default now()
 );
-
-COMMENT ON TABLE claims_ref.payer IS 'Master list of Payers (Claim.PayerID)';
-COMMENT ON COLUMN claims_ref.payer.payer_code IS 'External PayerID';
+comment on table  claims_ref.payer is 'Master list of Payers (Claim.PayerID)';
+comment on column claims_ref.payer.payer_code is 'External PayerID';
 
 CREATE INDEX IF NOT EXISTS idx_payer_code ON claims_ref.payer(payer_code);
 CREATE INDEX IF NOT EXISTS idx_payer_status ON claims_ref.payer(status);
@@ -187,16 +185,15 @@ CREATE INDEX IF NOT EXISTS idx_ref_payer_name_trgm ON claims_ref.payer USING gin
 -- ----------------------------------------------------------------------------------------------------------
 -- 4.3 PROVIDERS
 -- ----------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS claims_ref.provider (
-  id            BIGSERIAL PRIMARY KEY,
-  provider_code TEXT NOT NULL UNIQUE,
-  name          TEXT,
-  status        TEXT DEFAULT 'ACTIVE',
-  created_at    TIMESTAMPTZ DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ DEFAULT NOW()
+create table if not exists claims_ref.provider (
+  id            bigserial primary key,
+  provider_code text not null unique,
+  name          text,
+  status        text default 'ACTIVE',
+  created_at	 timestamptz default now(),
+  updated_at    timestamptz
 );
-
-COMMENT ON TABLE claims_ref.provider IS 'Master list of provider organizations (Claim.ProviderID)';
+comment on table claims_ref.provider is 'Master list of provider organizations (Claim.ProviderID)';
 
 CREATE INDEX IF NOT EXISTS idx_provider_code ON claims_ref.provider(provider_code);
 CREATE INDEX IF NOT EXISTS idx_provider_status ON claims_ref.provider(status);
@@ -206,17 +203,16 @@ CREATE INDEX IF NOT EXISTS idx_ref_provider_name_trgm ON claims_ref.provider USI
 -- ----------------------------------------------------------------------------------------------------------
 -- 4.4 CLINICIANS
 -- ----------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS claims_ref.clinician (
-  id              BIGSERIAL PRIMARY KEY,
-  clinician_code  TEXT NOT NULL UNIQUE,
-  name            TEXT,
-  specialty       TEXT,
-  status          TEXT DEFAULT 'ACTIVE',
-  created_at      TIMESTAMPTZ DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ DEFAULT NOW()
+create table if not exists claims_ref.clinician (
+  id              bigserial primary key,
+  clinician_code  text not null unique, -- e.g., DHA-P-0228312
+  name            text,
+  specialty       text,
+  status          text default 'ACTIVE',
+  created_at	 timestamptz default now(),
+  updated_at      timestamptz
 );
-
-COMMENT ON TABLE claims_ref.clinician IS 'Master list of clinicians (Activity.Clinician)';
+comment on table claims_ref.clinician is 'Master list of clinicians (Activity.Clinician)';
 
 CREATE INDEX IF NOT EXISTS idx_clinician_code ON claims_ref.clinician(clinician_code);
 CREATE INDEX IF NOT EXISTS idx_clinician_status ON claims_ref.clinician(status);
@@ -226,19 +222,18 @@ CREATE INDEX IF NOT EXISTS idx_ref_clinician_name_trgm ON claims_ref.clinician U
 -- ----------------------------------------------------------------------------------------------------------
 -- 4.5 ACTIVITY CODES
 -- ----------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS claims_ref.activity_code (
-  id           BIGSERIAL PRIMARY KEY,
-  type          TEXT,
-  code         TEXT NOT NULL,
-  code_system  TEXT NOT NULL DEFAULT 'LOCAL',
-  description  TEXT,
-  status       TEXT DEFAULT 'ACTIVE',
-  created_at   TIMESTAMPTZ DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT uq_activity_code UNIQUE (code, type)
+create table if not exists claims_ref.activity_code (
+  id           bigserial primary key,
+  type          text,
+  code         text not null,
+  code_system  text not null default 'LOCAL',   -- CPT/HCPCS/LOCAL/etc.
+  description  text,
+  status       text default 'ACTIVE',
+  created_at	 timestamptz default now(),
+  updated_at   timestamptz,
+  constraint uq_activity_code unique (code, type)
 );
-
-COMMENT ON TABLE claims_ref.activity_code IS 'Service/procedure codes used in Activity.Code';
+comment on table claims_ref.activity_code is 'Service/procedure codes used in Activity.Code';
 
 CREATE INDEX IF NOT EXISTS idx_activity_code_lookup ON claims_ref.activity_code(code, type);
 CREATE INDEX IF NOT EXISTS idx_activity_code_status ON claims_ref.activity_code(status);
@@ -248,20 +243,19 @@ CREATE INDEX IF NOT EXISTS idx_ref_activity_desc_trgm ON claims_ref.activity_cod
 -- ----------------------------------------------------------------------------------------------------------
 -- 4.6 DIAGNOSIS CODES
 -- ----------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS claims_ref.diagnosis_code (
-  id           BIGSERIAL PRIMARY KEY,
-  code         TEXT NOT NULL,
-  code_system  TEXT NOT NULL DEFAULT 'ICD-10',
-  description  TEXT,
-  status       TEXT DEFAULT 'ACTIVE',
-  created_at   TIMESTAMPTZ DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT uq_diagnosis_code UNIQUE (code, code_system)
+create table if not exists claims_ref.diagnosis_code (
+  id           bigserial primary key,
+  code         text not null,
+  code_system  text not null default 'ICD-10',
+  description  text,
+  status       text default 'ACTIVE',
+  created_at	 timestamptz default now(),
+  updated_at   timestamptz,
+  constraint uq_diagnosis_code unique (code, description)
 );
+comment on table claims_ref.diagnosis_code is 'Diagnosis codes (Diagnosis.Code)';
 
-COMMENT ON TABLE claims_ref.diagnosis_code IS 'Diagnosis codes (Diagnosis.Code)';
-
-CREATE INDEX IF NOT EXISTS idx_diagnosis_code_lookup ON claims_ref.diagnosis_code(code, code_system);
+CREATE INDEX IF NOT EXISTS idx_diagnosis_code_lookup ON claims_ref.diagnosis_code(code, description);
 CREATE INDEX IF NOT EXISTS idx_diagnosis_code_status ON claims_ref.diagnosis_code(status);
 CREATE INDEX IF NOT EXISTS idx_ref_diag_code ON claims_ref.diagnosis_code(code);
 CREATE INDEX IF NOT EXISTS idx_ref_diag_desc_trgm ON claims_ref.diagnosis_code USING gin (description gin_trgm_ops);
@@ -269,16 +263,15 @@ CREATE INDEX IF NOT EXISTS idx_ref_diag_desc_trgm ON claims_ref.diagnosis_code U
 -- ----------------------------------------------------------------------------------------------------------
 -- 4.7 DENIAL CODES
 -- ----------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS claims_ref.denial_code (
-  id          BIGSERIAL PRIMARY KEY,
-  code        TEXT NOT NULL UNIQUE,
-  description TEXT,
-  payer_code  TEXT,
-  created_at  TIMESTAMPTZ DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ DEFAULT NOW()
+create table if not exists claims_ref.denial_code (
+  id          bigserial primary key,
+  code        text not null unique,
+  description text,
+  payer_code  text,  -- optional scope
+  created_at	 timestamptz default now(),
+  updated_at  timestamptz
 );
-
-COMMENT ON TABLE claims_ref.denial_code IS 'Adjudication denial codes; optionally scoped by payer_code';
+comment on table claims_ref.denial_code is 'Adjudication denial codes; optionally scoped by payer_code';
 
 CREATE INDEX IF NOT EXISTS idx_denial_code_lookup ON claims_ref.denial_code(code);
 CREATE INDEX IF NOT EXISTS idx_denial_code_payer ON claims_ref.denial_code(payer_code);
@@ -657,6 +650,7 @@ CREATE TABLE IF NOT EXISTS claims.remittance_claim (
   claim_key_id          BIGINT NOT NULL REFERENCES claims.claim_key(id) ON DELETE RESTRICT,
   id_payer              TEXT NOT NULL,
   provider_id           TEXT,
+  denial_code           TEXT,
   comments              TEXT,
   payment_reference     TEXT NOT NULL,
   date_settlement       TIMESTAMPTZ,
@@ -700,7 +694,7 @@ CREATE TABLE IF NOT EXISTS claims.remittance_activity (
   prior_authorization_id TEXT,
   gross                 NUMERIC(14,2),
   patient_share         NUMERIC(14,2),
-  payment_amount        NUMERIC(14,2) NOT NULL CHECK (payment_amount >= 0),
+  payment_amount        NUMERIC(14,2) NOT NULL, -- Allow negative values for taken back scenarios
   denial_code           TEXT,
   denial_code_ref_id    BIGINT,
   activity_code_ref_id  BIGINT,
@@ -815,6 +809,9 @@ CREATE TABLE IF NOT EXISTS claims.claim_payment (
   total_remitted_amount      NUMERIC(15,2) NOT NULL DEFAULT 0,
   total_rejected_amount      NUMERIC(15,2) NOT NULL DEFAULT 0,
   total_denied_amount        NUMERIC(15,2) NOT NULL DEFAULT 0,
+  total_taken_back_amount    NUMERIC(15,2) NOT NULL DEFAULT 0,
+  total_taken_back_count     INTEGER NOT NULL DEFAULT 0,
+  total_net_paid_amount      NUMERIC(15,2) NOT NULL DEFAULT 0,
   
   -- === ACTIVITY COUNTS ===
   total_activities           INTEGER NOT NULL DEFAULT 0,
@@ -822,6 +819,8 @@ CREATE TABLE IF NOT EXISTS claims.claim_payment (
   partially_paid_activities  INTEGER NOT NULL DEFAULT 0,
   rejected_activities        INTEGER NOT NULL DEFAULT 0,
   pending_activities         INTEGER NOT NULL DEFAULT 0,
+  taken_back_activities      INTEGER NOT NULL DEFAULT 0,
+  partially_taken_back_activities INTEGER NOT NULL DEFAULT 0,
   
   -- === LIFECYCLE TRACKING ===
   remittance_count           INTEGER NOT NULL DEFAULT 0,
@@ -857,13 +856,16 @@ CREATE TABLE IF NOT EXISTS claims.claim_payment (
   
   -- === CONSTRAINTS ===
   CONSTRAINT uq_claim_payment_claim_key UNIQUE (claim_key_id),
-  CONSTRAINT ck_claim_payment_status CHECK (payment_status IN ('FULLY_PAID', 'PARTIALLY_PAID', 'REJECTED', 'PENDING')),
+  CONSTRAINT ck_claim_payment_status CHECK (payment_status IN ('FULLY_PAID', 'PARTIALLY_PAID', 'REJECTED', 'PENDING', 'TAKEN_BACK', 'PARTIALLY_TAKEN_BACK')),
   CONSTRAINT ck_claim_payment_amounts CHECK (
     total_paid_amount >= 0 AND 
     total_remitted_amount >= 0 AND 
     total_rejected_amount >= 0 AND
     total_denied_amount >= 0 AND
-    total_submitted_amount >= 0
+    total_submitted_amount >= 0 AND
+    total_taken_back_amount >= 0 AND
+    total_taken_back_count >= 0 AND
+    total_net_paid_amount >= 0
   ),
   CONSTRAINT ck_claim_payment_activities CHECK (
     total_activities >= 0 AND
@@ -871,7 +873,10 @@ CREATE TABLE IF NOT EXISTS claims.claim_payment (
     partially_paid_activities >= 0 AND
     rejected_activities >= 0 AND
     pending_activities >= 0 AND
-    (paid_activities + partially_paid_activities + rejected_activities + pending_activities) = total_activities
+    taken_back_activities >= 0 AND
+    partially_taken_back_activities >= 0 AND
+    (paid_activities + partially_paid_activities + rejected_activities + 
+     pending_activities + taken_back_activities + partially_taken_back_activities) = total_activities
   ),
   CONSTRAINT ck_claim_payment_dates CHECK (
     (first_submission_date IS NULL OR first_submission_date <= CURRENT_DATE + INTERVAL '30 days') AND
@@ -883,14 +888,11 @@ CREATE TABLE IF NOT EXISTS claims.claim_payment (
 
 COMMENT ON TABLE claims.claim_payment IS 'Aggregated financial summary and lifecycle tracking for claims - ONE ROW PER CLAIM';
 COMMENT ON COLUMN claims.claim_payment.claim_key_id IS 'Canonical claim identifier - UNIQUE constraint ensures one row per claim';
-COMMENT ON COLUMN claims.claim_payment.total_submitted_amount IS 'Total amount submitted across all activities';
-COMMENT ON COLUMN claims.claim_payment.total_paid_amount IS 'Total amount paid across all remittances';
-COMMENT ON COLUMN claims.claim_payment.total_remitted_amount IS 'Total amount remitted (may differ from paid)';
-COMMENT ON COLUMN claims.claim_payment.total_rejected_amount IS 'Total amount rejected/denied';
-COMMENT ON COLUMN claims.claim_payment.payment_status IS 'Current payment status: FULLY_PAID, PARTIALLY_PAID, REJECTED, PENDING';
-COMMENT ON COLUMN claims.claim_payment.processing_cycles IS 'Total submission + resubmission cycles';
-COMMENT ON COLUMN claims.claim_payment.payment_references IS 'Array of all payment references from remittances';
-COMMENT ON COLUMN claims.claim_payment.tx_at IS 'Business transaction time from XML header';
+COMMENT ON COLUMN claims.claim_payment.total_taken_back_amount IS 'Total amount taken back (reversed) across all activities';
+COMMENT ON COLUMN claims.claim_payment.total_taken_back_count IS 'Total number of taken back transactions';
+COMMENT ON COLUMN claims.claim_payment.total_net_paid_amount IS 'Net amount paid after accounting for taken back amounts (paid - taken_back)';
+COMMENT ON COLUMN claims.claim_payment.taken_back_activities IS 'Number of activities with TAKEN_BACK status';
+COMMENT ON COLUMN claims.claim_payment.partially_taken_back_activities IS 'Number of activities with PARTIALLY_TAKEN_BACK status';
 
 -- === INDEXES FOR PERFORMANCE ===
 CREATE INDEX IF NOT EXISTS idx_claim_payment_claim_key ON claims.claim_payment(claim_key_id);
@@ -900,6 +902,14 @@ CREATE INDEX IF NOT EXISTS idx_claim_payment_dates ON claims.claim_payment(first
 CREATE INDEX IF NOT EXISTS idx_claim_payment_settlement ON claims.claim_payment(latest_settlement_date);
 CREATE INDEX IF NOT EXISTS idx_claim_payment_amounts ON claims.claim_payment(total_submitted_amount, total_paid_amount);
 CREATE INDEX IF NOT EXISTS idx_claim_payment_cycles ON claims.claim_payment(processing_cycles, resubmission_count);
+
+-- === ENHANCED INDEXES FOR TAKEN BACK SUPPORT ===
+CREATE INDEX IF NOT EXISTS idx_claim_payment_taken_back_amount ON claims.claim_payment(total_taken_back_amount);
+CREATE INDEX IF NOT EXISTS idx_claim_payment_net_paid_amount ON claims.claim_payment(total_net_paid_amount);
+CREATE INDEX IF NOT EXISTS idx_claim_payment_taken_back_status ON claims.claim_payment(payment_status) 
+  WHERE payment_status IN ('TAKEN_BACK', 'PARTIALLY_TAKEN_BACK');
+CREATE INDEX IF NOT EXISTS idx_claim_payment_taken_back_activities ON claims.claim_payment(taken_back_activities, partially_taken_back_activities);
+CREATE INDEX IF NOT EXISTS idx_claim_payment_financial_summary ON claims.claim_payment(total_submitted_amount, total_net_paid_amount, total_taken_back_amount);
 
 -- === TRIGGERS ===
 CREATE TRIGGER trg_claim_payment_updated_at
@@ -921,6 +931,9 @@ CREATE TABLE IF NOT EXISTS claims.claim_activity_summary (
   paid_amount               NUMERIC(15,2) NOT NULL DEFAULT 0,
   rejected_amount           NUMERIC(15,2) NOT NULL DEFAULT 0,
   denied_amount             NUMERIC(15,2) NOT NULL DEFAULT 0,
+  taken_back_amount         NUMERIC(15,2) NOT NULL DEFAULT 0,
+  taken_back_count          INTEGER NOT NULL DEFAULT 0,
+  net_paid_amount          NUMERIC(15,2) NOT NULL DEFAULT 0,
   
   -- === ACTIVITY STATUS ===
   activity_status           VARCHAR(20) NOT NULL DEFAULT 'PENDING',
@@ -943,12 +956,15 @@ CREATE TABLE IF NOT EXISTS claims.claim_activity_summary (
   
   -- === CONSTRAINTS ===
   CONSTRAINT uq_activity_summary UNIQUE (claim_key_id, activity_id),
-  CONSTRAINT ck_activity_status CHECK (activity_status IN ('FULLY_PAID', 'PARTIALLY_PAID', 'REJECTED', 'PENDING')),
+  CONSTRAINT ck_activity_status CHECK (activity_status IN ('FULLY_PAID', 'PARTIALLY_PAID', 'REJECTED', 'PENDING', 'TAKEN_BACK', 'PARTIALLY_TAKEN_BACK')),
   CONSTRAINT ck_activity_amounts CHECK (
     paid_amount >= 0 AND 
     rejected_amount >= 0 AND
     denied_amount >= 0 AND
-    submitted_amount >= 0
+    submitted_amount >= 0 AND
+    taken_back_amount >= 0 AND
+    taken_back_count >= 0 AND
+    net_paid_amount >= 0
   )
 );
 

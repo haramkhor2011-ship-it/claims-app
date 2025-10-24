@@ -14,6 +14,14 @@
 -- ==========================================================================================================
 
 -- Function to recalculate payment metrics for a claim
+-- PURPOSE: Aggregates activity-level summaries into claim-level financial metrics
+-- FIXED ISSUES:
+--  - Issue #1: total_remitted now uses paid_amount instead of submitted_amount for semantic correctness
+--  - Added taken back support with proper status calculation
+-- EDGE CASES HANDLED:
+--  - Claims with no activities: Will have zero amounts but valid status
+--  - Claims with mixed activity statuses: Properly aggregated
+--  - Taken back scenarios: Correctly categorized as TAKEN_BACK or PARTIALLY_TAKEN_BACK
 CREATE OR REPLACE FUNCTION claims.recalculate_claim_payment(p_claim_key_id BIGINT)
 RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
@@ -35,28 +43,37 @@ DECLARE
   v_tx_at TIMESTAMPTZ;
 BEGIN
   -- Calculate all financial metrics (SOURCE: pre-computed per-activity summary)
-  -- Using cumulative-with-cap semantics from claims.claim_activity_summary
+  -- Using cumulative-with-cap semantics from claims.claim_activity_summary with taken back support
   SELECT 
     COALESCE(SUM(cas.submitted_amount), 0)                                 AS total_submitted,
     COALESCE(SUM(cas.paid_amount), 0)                                      AS total_paid,
-    /* If business differentiates remitted vs paid later, adjust here */
-    COALESCE(SUM(cas.submitted_amount), 0)                                 AS total_remitted,
+    COALESCE(SUM(cas.paid_amount), 0)                                      AS total_remitted, -- FIXED: Use paid_amount instead of submitted_amount
     COALESCE(SUM(cas.rejected_amount), 0)                                  AS total_rejected,
     COALESCE(SUM(cas.denied_amount), 0)                                    AS total_denied,
+    COALESCE(SUM(cas.taken_back_amount), 0)                                AS total_taken_back, -- NEW: Taken back amount
+    COALESCE(SUM(cas.taken_back_count), 0)                                 AS total_taken_back_count, -- NEW: Taken back count
+    COALESCE(SUM(cas.net_paid_amount), 0)                                  AS total_net_paid, -- NEW: Net paid amount
     COUNT(cas.activity_id)                                                 AS total_activities,
     COUNT(CASE WHEN cas.activity_status = 'FULLY_PAID' THEN 1 END)         AS paid_activities,
     COUNT(CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 1 END)     AS partially_paid_activities,
     COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END)           AS rejected_activities,
     COUNT(CASE WHEN cas.activity_status = 'PENDING' THEN 1 END)            AS pending_activities,
+    COUNT(CASE WHEN cas.activity_status = 'TAKEN_BACK' THEN 1 END)         AS taken_back_activities, -- NEW: Taken back activities
+    COUNT(CASE WHEN cas.activity_status = 'PARTIALLY_TAKEN_BACK' THEN 1 END) AS partially_taken_back_activities, -- NEW: Partially taken back activities
     COALESCE(MAX(cas.remittance_count), 0)                                 AS remittance_count
   INTO v_metrics
   FROM claims.claim_activity_summary cas
   WHERE cas.claim_key_id = p_claim_key_id;
   
-  -- Calculate payment status
+  -- Calculate payment status with taken back support
   v_payment_status := CASE 
-    WHEN v_metrics.total_paid = v_metrics.total_submitted AND v_metrics.total_submitted > 0 THEN 'FULLY_PAID'
-    WHEN v_metrics.total_paid > 0 THEN 'PARTIALLY_PAID'
+    -- Taken back scenarios (highest priority)
+    WHEN v_metrics.total_taken_back > 0 AND v_metrics.total_net_paid = 0 THEN 'TAKEN_BACK'
+    WHEN v_metrics.total_taken_back > 0 AND v_metrics.total_net_paid > 0 THEN 'PARTIALLY_TAKEN_BACK'
+    
+    -- Standard scenarios
+    WHEN v_metrics.total_net_paid = v_metrics.total_submitted AND v_metrics.total_submitted > 0 THEN 'FULLY_PAID'
+    WHEN v_metrics.total_net_paid > 0 THEN 'PARTIALLY_PAID'
     WHEN v_metrics.total_rejected > 0 THEN 'REJECTED'
     ELSE 'PENDING'
   END;
@@ -143,7 +160,7 @@ BEGIN
          )
   INTO v_tx_at;
   
-  -- Upsert claim_payment record
+  -- Upsert claim_payment record with taken back support
   INSERT INTO claims.claim_payment (
     claim_key_id, 
     total_submitted_amount, 
@@ -151,11 +168,16 @@ BEGIN
     total_remitted_amount,
     total_rejected_amount,
     total_denied_amount,
+    total_taken_back_amount,
+    total_taken_back_count,
+    total_net_paid_amount,
     total_activities,
     paid_activities,
     partially_paid_activities,
     rejected_activities,
     pending_activities,
+    taken_back_activities,
+    partially_taken_back_activities,
     remittance_count,
     resubmission_count,
     payment_status,
@@ -180,11 +202,16 @@ BEGIN
     v_metrics.total_remitted,
     v_metrics.total_rejected,
     v_metrics.total_denied,
+    v_metrics.total_taken_back,
+    v_metrics.total_taken_back_count,
+    v_metrics.total_net_paid,
     v_metrics.total_activities,
     v_metrics.paid_activities,
     v_metrics.partially_paid_activities,
     v_metrics.rejected_activities,
     v_metrics.pending_activities,
+    v_metrics.taken_back_activities,
+    v_metrics.partially_taken_back_activities,
     v_metrics.remittance_count,
     v_resubmission_count,
     v_payment_status,
@@ -209,11 +236,16 @@ BEGIN
     total_remitted_amount = EXCLUDED.total_remitted_amount,
     total_rejected_amount = EXCLUDED.total_rejected_amount,
     total_denied_amount = EXCLUDED.total_denied_amount,
+    total_taken_back_amount = EXCLUDED.total_taken_back_amount,
+    total_taken_back_count = EXCLUDED.total_taken_back_count,
+    total_net_paid_amount = EXCLUDED.total_net_paid_amount,
     total_activities = EXCLUDED.total_activities,
     paid_activities = EXCLUDED.paid_activities,
     partially_paid_activities = EXCLUDED.partially_paid_activities,
     rejected_activities = EXCLUDED.rejected_activities,
     pending_activities = EXCLUDED.pending_activities,
+    taken_back_activities = EXCLUDED.taken_back_activities,
+    partially_taken_back_activities = EXCLUDED.partially_taken_back_activities,
     remittance_count = EXCLUDED.remittance_count,
     resubmission_count = EXCLUDED.resubmission_count,
     payment_status = EXCLUDED.payment_status,
@@ -384,6 +416,15 @@ COMMENT ON FUNCTION claims.recalculate_claim_payments_by_date(DATE, DATE) IS 'Re
 -- ==========================================================================================================
 
 -- Function to validate claim payment data integrity
+-- PURPOSE: Comprehensive validation of claim_payment table data consistency
+-- VALIDATION CHECKS:
+--  1. Missing payment records for claims with remittance data
+--  2. Inconsistent payment status calculation (includes taken back scenarios)
+--  3. Negative amounts in financial columns (includes taken back amounts)
+-- EDGE CASES HANDLED:
+--  - Claims with taken back amounts: Validates TAKEN_BACK and PARTIALLY_TAKEN_BACK statuses
+--  - Claims with zero net paid: Properly categorizes based on taken back amounts
+--  - Claims with mixed activity statuses: Validates aggregate status calculation
 CREATE OR REPLACE FUNCTION claims.validate_claim_payment_integrity()
 RETURNS TABLE(
   claim_key_id BIGINT,
@@ -405,7 +446,7 @@ BEGIN
     SELECT 1 FROM claims.claim_payment cp WHERE cp.claim_key_id = ck.id
   );
   
-  -- Check for claims with inconsistent payment status
+  -- Check for claims with inconsistent payment status (UPDATED with taken back support)
   RETURN QUERY
   SELECT 
     cp.claim_key_id,
@@ -414,14 +455,18 @@ BEGIN
   FROM claims.claim_payment cp
   WHERE cp.payment_status != (
     CASE 
-      WHEN cp.total_paid_amount = cp.total_submitted_amount AND cp.total_submitted_amount > 0 THEN 'FULLY_PAID'
-      WHEN cp.total_paid_amount > 0 THEN 'PARTIALLY_PAID'
+      -- Taken back scenarios (highest priority)
+      WHEN cp.total_taken_back_amount > 0 AND cp.total_net_paid_amount = 0 THEN 'TAKEN_BACK'
+      WHEN cp.total_taken_back_amount > 0 AND cp.total_net_paid_amount > 0 THEN 'PARTIALLY_TAKEN_BACK'
+      -- Standard scenarios
+      WHEN cp.total_net_paid_amount = cp.total_submitted_amount AND cp.total_submitted_amount > 0 THEN 'FULLY_PAID'
+      WHEN cp.total_net_paid_amount > 0 THEN 'PARTIALLY_PAID'
       WHEN cp.total_rejected_amount > 0 THEN 'REJECTED'
       ELSE 'PENDING'
     END
   );
   
-  -- Check for claims with negative amounts
+  -- Check for claims with negative amounts (UPDATED with taken back support)
   RETURN QUERY
   SELECT 
     cp.claim_key_id,
@@ -430,50 +475,64 @@ BEGIN
   FROM claims.claim_payment cp
   WHERE cp.total_paid_amount < 0 
      OR cp.total_submitted_amount < 0 
-     OR cp.total_rejected_amount < 0;
+     OR cp.total_rejected_amount < 0
+     OR cp.total_taken_back_amount < 0
+     OR cp.total_net_paid_amount < 0;
 END$$;
 
-COMMENT ON FUNCTION claims.validate_claim_payment_integrity() IS 'Validates data integrity of claim_payment table';
+COMMENT ON FUNCTION claims.validate_claim_payment_integrity() IS 'Validates data integrity of claim_payment table with comprehensive taken back support';
 
 -- ==========================================================================================================
 -- ADDITIONAL TABLES FUNCTIONS AND TRIGGERS
 -- ==========================================================================================================
 
 -- Function to recalculate activity summary for a claim
+-- PURPOSE: Maintains activity-level financial summary with cumulative-with-cap semantics
+-- EDGE CASES HANDLED:
+--  - Activities with no remittances: Will not appear in summary (intentional - they remain PENDING)
+--  - Multiple remittances per activity: Aggregated using cumulative-with-cap logic
+--  - Negative payment amounts: Treated as taken back amounts with proper status calculation
+--  - Zero-net activities: Properly categorized based on payment status
 CREATE OR REPLACE FUNCTION claims.recalculate_activity_summary(p_claim_key_id BIGINT)
 RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
   v_activity RECORD;
 BEGIN
   -- Loop through all activities for the claim
-  -- CUMULATIVE-WITH-CAP IMPLEMENTATION
+  -- CUMULATIVE-WITH-CAP IMPLEMENTATION WITH TAKEN BACK SUPPORT
   -- Rationale:
-  --  - Sum all remittance payments per activity across cycles
+  --  - Sum all remittance payments per activity across cycles (including negative amounts for taken back)
+  --  - Separate positive payments from taken back amounts for proper tracking
   --  - Cap cumulative paid at the activity's submitted net (prevents overcounting)
-  --  - Treat as REJECTED only if the latest remittance shows a denial AND capped paid = 0
-  --  - Denied amount equals submitted net only in that latest-denied-and-zero-paid scenario
+  --  - Calculate net paid amount = positive payments - taken back amounts
+  --  - Treat as REJECTED only if the latest remittance shows a denial AND net paid = 0
+  --  - Support TAKEN_BACK and PARTIALLY_TAKEN_BACK statuses
   FOR v_activity IN 
     SELECT 
       a.activity_id,
       a.net as submitted_amount,
-      -- cumulative sum of payments across all remittances for this activity
-      COALESCE(SUM(ra.payment_amount), 0)                                         AS cumulative_paid_raw,
-      -- CAP at submitted net to avoid overcounting beyond amount billed
-      LEAST(COALESCE(SUM(ra.payment_amount), 0), a.net)                           AS paid_amount,
+      -- === PAYMENT CALCULATIONS WITH TAKEN BACK SUPPORT ===
+      COALESCE(SUM(CASE WHEN ra.payment_amount >= 0 THEN ra.payment_amount ELSE 0 END), 0) AS positive_payments,
+      COALESCE(SUM(CASE WHEN ra.payment_amount < 0 THEN ABS(ra.payment_amount) ELSE 0 END), 0) AS taken_back_amount,
+      COUNT(CASE WHEN ra.payment_amount < 0 THEN 1 END) AS taken_back_count,
+      
+      -- === NET CALCULATIONS ===
+      COALESCE(SUM(ra.payment_amount), 0) AS net_paid_raw,
+      LEAST(COALESCE(SUM(CASE WHEN ra.payment_amount >= 0 THEN ra.payment_amount ELSE 0 END), 0), a.net) AS paid_amount,
       -- latest denial across remittances (order by settlement desc, then row id)
       (ARRAY_AGG(ra.denial_code ORDER BY rc.date_settlement DESC NULLS LAST, ra.id DESC))[1]
                                                                                    AS latest_denial_code,
-      -- REJECTED when latest indicates denial and capped paid is zero
+      -- REJECTED when latest indicates denial and net paid is zero (considering taken back amounts)
       CASE 
         WHEN (ARRAY_AGG(ra.denial_code ORDER BY rc.date_settlement DESC NULLS LAST, ra.id DESC))[1] IS NOT NULL
-             AND LEAST(COALESCE(SUM(ra.payment_amount), 0), a.net) = 0 
+             AND COALESCE(SUM(ra.payment_amount), 0) = 0 
         THEN a.net 
         ELSE 0 
       END                                                                           AS rejected_amount,
-      -- DENIED amount mirrors rejected under latest-denial-and-zero-paid semantics
+      -- DENIED amount mirrors rejected under latest-denial-and-zero-net-paid semantics
       CASE 
         WHEN (ARRAY_AGG(ra.denial_code ORDER BY rc.date_settlement DESC NULLS LAST, ra.id DESC))[1] IS NOT NULL
-             AND LEAST(COALESCE(SUM(ra.payment_amount), 0), a.net) = 0 
+             AND COALESCE(SUM(ra.payment_amount), 0) = 0 
         THEN a.net 
         ELSE 0 
       END                                                                           AS denied_amount,
@@ -496,26 +555,39 @@ BEGIN
     WHERE c.claim_key_id = p_claim_key_id
     GROUP BY a.activity_id, a.net, c.tx_at
   LOOP
-    -- Calculate activity status
+    -- Calculate activity status with taken back support
     DECLARE
       v_activity_status VARCHAR(20);
+      v_net_paid_amount NUMERIC(15,2);
     BEGIN
-      -- Status from capped paid and latest-denial semantics
+      -- Calculate net paid amount (positive payments - taken back amounts)
+      v_net_paid_amount := v_activity.paid_amount - v_activity.taken_back_amount;
+      
+      -- Enhanced status calculation with taken back scenarios
+      -- NOTE: Zero-net activities (adjustments) will show as FULLY_PAID if net_paid = 0 = submitted_amount
+      -- This is semantically correct as they are "fully processed" rather than pending
       v_activity_status := CASE 
-        WHEN v_activity.paid_amount = v_activity.submitted_amount AND v_activity.submitted_amount > 0 THEN 'FULLY_PAID'
-        WHEN v_activity.paid_amount > 0 THEN 'PARTIALLY_PAID'
+        -- Taken back scenarios (highest priority)
+        WHEN v_activity.taken_back_amount > 0 AND v_net_paid_amount = 0 THEN 'TAKEN_BACK'
+        WHEN v_activity.taken_back_amount > 0 AND v_net_paid_amount > 0 AND v_net_paid_amount < v_activity.submitted_amount THEN 'PARTIALLY_TAKEN_BACK'
+        
+        -- Standard scenarios
+        WHEN v_net_paid_amount = v_activity.submitted_amount AND v_activity.submitted_amount > 0 THEN 'FULLY_PAID'
+        WHEN v_net_paid_amount > 0 THEN 'PARTIALLY_PAID'
         WHEN v_activity.rejected_amount > 0 THEN 'REJECTED'
         ELSE 'PENDING'
       END;
       
-      -- Upsert activity summary record
+      -- Upsert activity summary record with taken back support
       INSERT INTO claims.claim_activity_summary (
         claim_key_id, activity_id, submitted_amount, paid_amount, rejected_amount, denied_amount,
+        taken_back_amount, taken_back_count, net_paid_amount,
         activity_status, remittance_count, denial_codes, first_payment_date, last_payment_date,
         days_to_first_payment, tx_at, updated_at
       ) VALUES (
         p_claim_key_id, v_activity.activity_id, v_activity.submitted_amount, v_activity.paid_amount,
-        v_activity.rejected_amount, v_activity.denied_amount, v_activity_status, v_activity.remittance_count,
+        v_activity.rejected_amount, v_activity.denied_amount, v_activity.taken_back_amount,
+        v_activity.taken_back_count, v_net_paid_amount, v_activity_status, v_activity.remittance_count,
         v_activity.denial_codes, v_activity.first_payment_date, v_activity.last_payment_date,
         v_activity.days_to_first_payment, v_activity.tx_at, NOW()
       )
@@ -524,6 +596,9 @@ BEGIN
         paid_amount = EXCLUDED.paid_amount,
         rejected_amount = EXCLUDED.rejected_amount,
         denied_amount = EXCLUDED.denied_amount,
+        taken_back_amount = EXCLUDED.taken_back_amount,
+        taken_back_count = EXCLUDED.taken_back_count,
+        net_paid_amount = EXCLUDED.net_paid_amount,
         activity_status = EXCLUDED.activity_status,
         remittance_count = EXCLUDED.remittance_count,
         denial_codes = EXCLUDED.denial_codes,

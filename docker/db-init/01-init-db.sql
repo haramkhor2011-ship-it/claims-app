@@ -17,6 +17,7 @@
 CREATE EXTENSION IF NOT EXISTS pg_trgm;     -- Text similarity and trigram indexes
 CREATE EXTENSION IF NOT EXISTS citext;      -- Case-insensitive text type
 CREATE EXTENSION IF NOT EXISTS pgcrypto;    -- Cryptographic functions
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 -- Schema creation
 CREATE SCHEMA IF NOT EXISTS claims;         -- Main claims processing schema
