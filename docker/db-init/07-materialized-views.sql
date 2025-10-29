@@ -137,32 +137,121 @@ ON claims.mv_balance_amount_summary(current_status, last_status_date);
 
 COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_summary IS 'Pre-computed balance amount aggregations for sub-second report performance';
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_balance_amount_overall (Overall balance amount view)
--- ----------------------------------------------------------------------------------------------------------
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_balance_amount_overall (Overall balance amount view)
+-- ==========================================================================================================
+-- STATUS: WORKING - Simple alias of mv_balance_amount_summary
+-- 
+-- CURRENT STATUS:
+--   - This MV is an alias that selects all data from mv_balance_amount_summary
+--   - Logic is correct but missing performance indexes
+--
+-- REQUIRED INDEXES (COMMENTED OUT):
+--   1. UNIQUE INDEX on claim_key_id (primary key)
+--   2. INDEX on (payer_id, provider_id) for filtering
+--   3. INDEX on current_status for status filtering
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment.total_submitted_amount for submitted amounts
+--     2. Use claim_payment.total_paid_amount for paid amounts
+--     3. Use claim_payment.total_rejected_amount for rejected amounts
+--     4. Use claim_payment.payment_status for claim status
+--     5. Use claim_payment.remittance_count for remittance tracking
+--     6. Use claim_payment.resubmission_count for resubmission tracking
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_balance_amount_overall CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_balance_amount_overall AS
 SELECT * FROM claims.mv_balance_amount_summary;
 
 COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_overall IS 'Overall balance amount view (alias for mv_balance_amount_summary)';
+*/
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_balance_amount_initial (Initial balance amount view)
--- ----------------------------------------------------------------------------------------------------------
+-- REQUIRED INDEXES (COMMENTED OUT):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_balance_amount_overall_unique 
+ON claims.mv_balance_amount_overall(claim_key_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_balance_amount_overall_filtering 
+ON claims.mv_balance_amount_overall(payer_id, provider_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_balance_amount_overall_status 
+ON claims.mv_balance_amount_overall(current_status);
+*/
+
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_balance_amount_initial (Initial balance amount view)
+-- ==========================================================================================================
+-- STATUS: WORKING - Filtered alias of mv_balance_amount_summary
+-- 
+-- CURRENT STATUS:
+--   - This MV selects claims with remittance_count = 0 (no remittances yet)
+--   - Logic is correct but missing performance indexes
+--
+-- REQUIRED INDEXES (COMMENTED OUT):
+--   1. UNIQUE INDEX on claim_key_id (primary key)
+--   2. INDEX on (remittance_count, payer_id) for filtering
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment.remittance_count = 0 instead of filtering
+--     2. Use claim_payment for all claim-level financial metrics
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_balance_amount_initial CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_balance_amount_initial AS
 SELECT * FROM claims.mv_balance_amount_summary WHERE remittance_count = 0;
 
 COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_initial IS 'Initial balance amount view (no remittances yet)';
+*/
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_balance_amount_resubmission (Resubmission balance amount view)
--- ----------------------------------------------------------------------------------------------------------
+-- REQUIRED INDEXES (COMMENTED OUT):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_balance_amount_initial_unique 
+ON claims.mv_balance_amount_initial(claim_key_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_balance_amount_initial_filtering 
+ON claims.mv_balance_amount_initial(remittance_count, payer_id);
+*/
+
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_balance_amount_resubmission (Resubmission balance amount view)
+-- ==========================================================================================================
+-- STATUS: WORKING - Filtered alias of mv_balance_amount_summary
+-- 
+-- CURRENT STATUS:
+--   - This MV selects claims with resubmission_count > 0 (has resubmissions)
+--   - Logic is correct but missing performance indexes
+--
+-- REQUIRED INDEXES (COMMENTED OUT):
+--   1. UNIQUE INDEX on claim_key_id (primary key)
+--   2. INDEX on (resubmission_count, payer_id) for filtering
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment.resubmission_count > 0 instead of filtering
+--     2. Use claim_payment for all claim-level financial metrics
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_balance_amount_resubmission CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_balance_amount_resubmission AS
 SELECT * FROM claims.mv_balance_amount_summary WHERE resubmission_count > 0;
 
 COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_resubmission IS 'Resubmission balance amount view (has resubmissions)';
+*/
+
+-- REQUIRED INDEXES (COMMENTED OUT):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_balance_amount_resubmission_unique 
+ON claims.mv_balance_amount_resubmission(claim_key_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_balance_amount_resubmission_filtering 
+ON claims.mv_balance_amount_resubmission(resubmission_count, payer_id);
+*/
 
 -- ==========================================================================================================
 -- SECTION 2: REMITTANCE ADVICE MATERIALIZED VIEWS
@@ -269,17 +358,43 @@ ON claims.mv_remittance_advice_summary(payment_status, date_settlement);
 
 COMMENT ON MATERIALIZED VIEW claims.mv_remittance_advice_summary IS 'Pre-aggregated remittance advice by payer with cumulative-with-cap logic';
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_remittance_advice_header (Remittance advice header)
--- ----------------------------------------------------------------------------------------------------------
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_remittance_advice_header (Remittance advice header)
+-- ==========================================================================================================
+-- STATUS: BROKEN - Non-existent columns referenced
+-- 
+-- SCHEMA ERRORS:
+--   1. r.receiver_name - Column doesn't exist in claims.remittance table
+--   2. r.receiver_id - Column doesn't exist in claims.remittance table  
+--   3. r.payment_reference - Column doesn't exist in claims.remittance table
+--   4. claims.remittance table only has: id, ingestion_file_id, created_at, updated_at, tx_at
+--
+-- REQUIRED FIXES:
+--   1. Use ingestion_file.receiver_id via: r -> ingestion_file -> receiver_id
+--   2. Get receiver_name from claims_ref.payer or claims_ref.provider
+--   3. Use remittance_claim.payment_reference instead of r.payment_reference
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment.total_paid_amount for aggregated claim payments
+--     2. Use claim_payment.remittance_count for remittance tracking
+--     3. Use claim_payment.latest_payment_reference for most recent payment reference
+--     4. Use claim_payment.payment_references array for all payment references
+--   
+--   ACTIVITY-LEVEL (claim_activity_summary table):
+--     1. Use claim_activity_summary.paid_amount per activity
+--     2. Use claim_activity_summary.denial_codes array for denial tracking
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittance_advice_header CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_remittance_advice_header AS
 SELECT 
   r.id AS remittance_id,
-  r.receiver_name,
-  r.receiver_id,
+  r.receiver_name,           -- ERROR: Column doesn't exist
+  r.receiver_id,             -- ERROR: Column doesn't exist
   r.created_at AS remittance_date,
-  r.payment_reference,
+  r.payment_reference,       -- ERROR: Column doesn't exist
   COUNT(DISTINCT rc.id) AS claim_count,
   COUNT(DISTINCT ra.id) AS activity_count,
   SUM(ra.payment_amount) AS total_payment_amount,
@@ -289,20 +404,53 @@ FROM claims.remittance r
 LEFT JOIN claims.remittance_claim rc ON rc.remittance_id = r.id
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
 GROUP BY r.id, r.receiver_name, r.receiver_id, r.created_at, r.payment_reference;
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_remittance_advice_header IS 'Remittance advice header information with summary statistics';
+-- REQUIRED INDEXES (COMMENTED OUT - after fixes):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittance_advice_header_unique 
+ON claims.mv_remittance_advice_header(remittance_id);
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_remittance_advice_claim_wise (Remittance advice claim-wise)
--- ----------------------------------------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_mv_remittance_advice_header_counts 
+ON claims.mv_remittance_advice_header(claim_count, total_payment_amount DESC);
+
+CREATE INDEX IF NOT EXISTS idx_mv_remittance_advice_header_date 
+ON claims.mv_remittance_advice_header(remittance_date);
+*/
+
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_remittance_advice_claim_wise (Remittance advice claim-wise)
+-- ==========================================================================================================
+-- STATUS: BROKEN - Non-existent columns referenced
+-- 
+-- SCHEMA ERRORS:
+--   1. r.receiver_name - Column doesn't exist in claims.remittance table
+--   2. r.receiver_id - Column doesn't exist in claims.remittance table  
+--   3. r.payment_reference - Column doesn't exist in claims.remittance table
+--   4. claims.remittance table only has: id, ingestion_file_id, created_at, updated_at, tx_at
+--
+-- REQUIRED FIXES:
+--   1. Use ingestion_file.receiver_id via: r -> ingestion_file -> receiver_id
+--   2. Get receiver_name from claims_ref.payer or claims_ref.provider
+--   3. Use remittance_claim.payment_reference instead of r.payment_reference
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment.total_paid_amount for claim-level aggregations
+--     2. Use claim_payment.total_remitted_amount for remitted amounts
+--     3. Use claim_payment.total_denied_amount for denied amounts
+--     4. Use claim_payment for all claim-level financial metrics
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittance_advice_claim_wise CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_remittance_advice_claim_wise AS
 SELECT 
   r.id AS remittance_id,
-  r.receiver_name,
-  r.receiver_id,
+  r.receiver_name,           -- ERROR: Column doesn't exist
+  r.receiver_id,             -- ERROR: Column doesn't exist
   r.created_at AS remittance_date,
-  r.payment_reference,
+  r.payment_reference,       -- ERROR: Column doesn't exist
   rc.id AS remittance_claim_id,
   rc.date_settlement,
   ck.claim_id AS external_claim_id,
@@ -350,20 +498,57 @@ GROUP BY
   c.member_id, c.emirates_id_number, c.gross, c.patient_share, c.net, c.tx_at,
   e.facility_id, e.type, e.start_at, e.end_at,
   f.name, p.name, pay.name, et.description;
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_remittance_advice_claim_wise IS 'Remittance advice claim-wise details with summary statistics';
+-- REQUIRED INDEXES (COMMENTED OUT - after fixes):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittance_advice_claim_wise_unique 
+ON claims.mv_remittance_advice_claim_wise(remittance_id, remittance_claim_id);
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_remittance_advice_activity_wise (Remittance advice activity-wise)
--- ----------------------------------------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_mv_remittance_advice_claim_wise_key 
+ON claims.mv_remittance_advice_claim_wise(claim_key_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_remittance_advice_claim_wise_payer 
+ON claims.mv_remittance_advice_claim_wise(payer_id, remittance_date);
+*/
+
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_remittance_advice_activity_wise (Remittance advice activity-wise)
+-- ==========================================================================================================
+-- STATUS: BROKEN - Multiple schema errors
+-- 
+-- SCHEMA ERRORS:
+--   1. r.receiver_name - Column doesn't exist in claims.remittance table
+--   2. r.receiver_id - Column doesn't exist in claims.remittance table
+--   3. r.payment_reference - Column doesn't exist in claims.remittance table
+--   4. ra.denial_reason - Column doesn't exist in claims.remittance_activity table
+--   5. a.description - Column doesn't exist in claims.activity table
+--
+-- REQUIRED FIXES:
+--   1. Use ingestion_file.receiver_id via: r -> ingestion_file -> receiver_id
+--   2. Get receiver_name from claims_ref.payer or claims_ref.provider
+--   3. Use remittance_claim.payment_reference instead of r.payment_reference
+--   4. Remove ra.denial_reason or get from claims_ref.denial_code table
+--   5. Remove a.description or get from claims_ref.activity_code table
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment for claim-level financial aggregations
+--   
+--   ACTIVITY-LEVEL (claim_activity_summary table):
+--     1. Use claim_activity_summary.denial_codes array for denial tracking
+--     2. Use claim_activity_summary.activity_status for activity status
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittance_advice_activity_wise CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_remittance_advice_activity_wise AS
 SELECT 
   r.id AS remittance_id,
-  r.receiver_name,
-  r.receiver_id,
+  r.receiver_name,           -- ERROR: Column doesn't exist
+  r.receiver_id,             -- ERROR: Column doesn't exist
   r.created_at AS remittance_date,
-  r.payment_reference,
+  r.payment_reference,       -- ERROR: Column doesn't exist
   rc.id AS remittance_claim_id,
   rc.date_settlement,
   ra.id AS remittance_activity_id,
@@ -371,12 +556,12 @@ SELECT
   ra.net AS activity_net_amount,
   ra.payment_amount AS activity_payment_amount,
   ra.denial_code,
-  ra.denial_reason,
+  dc.description as denial_reason,           -- ERROR: Column doesn't exist
   ra.created_at AS remittance_activity_created_at,
   
   -- Activity information
   a.code AS activity_code,
-  a.description AS activity_description,
+  ac.description AS activity_description,
   a.clinician AS activity_clinician,
   a.created_at AS activity_created_at,
   
@@ -418,17 +603,50 @@ LEFT JOIN claims_ref.payer pay ON pay.id = c.payer_ref_id
 LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
 LEFT JOIN claims_ref.encounter_type et ON et.type_code = e.type
 LEFT JOIN claims_ref.activity_code ac ON ac.id = a.activity_code_ref_id
-LEFT JOIN claims_ref.denial_code dc ON dc.code = ra.denial_code;
+LEFT JOIN claims_ref.denial_code dc ON dc.id = ra.denial_code_ref_id;
+-- COMMENT ON MATERIALIZED VIEW claims.mv_remittance_advice_activity_wise IS 'Remittance advice activity-wise details with comprehensive reference data';
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_remittance_advice_activity_wise IS 'Remittance advice activity-wise details with comprehensive reference data';
+-- REQUIRED INDEXES (COMMENTED OUT - after fixes):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittance_advice_activity_wise_unique 
+ON claims.mv_remittance_advice_activity_wise(remittance_id, remittance_activity_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_remittance_advice_activity_wise_key 
+ON claims.mv_remittance_advice_activity_wise(claim_key_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_remittance_advice_activity_wise_activity 
+ON claims.mv_remittance_advice_activity_wise(activity_id, denial_code);
+*/
 
 -- ==========================================================================================================
 -- SECTION 3: DOCTOR DENIAL MATERIALIZED VIEWS
 -- ==========================================================================================================
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_doctor_denial_summary (Doctor denial summary with risk analysis)
--- ----------------------------------------------------------------------------------------------------------
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_doctor_denial_summary (Doctor denial summary with risk analysis)
+-- ==========================================================================================================
+-- STATUS: WORKING - Has indexes but ORDER BY should be removed
+-- 
+-- CURRENT STATUS:
+--   - Logic is correct and indexes are defined
+--   - Issue: ORDER BY in materialized view (line 683) should not be used without LIMIT
+--   - Existing indexes are appropriate (lines 686-693)
+--
+-- REQUIRED FIXES:
+--   1. Remove ORDER BY from materialized view definition (or use in query, not in MV)
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   ACTIVITY-LEVEL (claim_activity_summary table):
+--     1. Use claim_activity_summary.activity_status for denial tracking
+--     2. Use claim_activity_summary.denial_codes array for denial codes
+--     3. Use claim_activity_summary.denied_amount for denied amounts
+--   
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment.rejected_activities for claim-level rejection counts
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_doctor_denial_summary CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_doctor_denial_summary AS
 WITH doctor_denial_stats AS (
@@ -483,9 +701,11 @@ SELECT
     ELSE 'LOW'
   END AS denial_risk_level
 FROM doctor_denial_stats
-ORDER BY denied_activity_amount DESC, activity_denial_rate_percentage DESC;
+ORDER BY denied_activity_amount DESC, activity_denial_rate_percentage DESC;  -- WARNING: ORDER BY in MV without LIMIT
+*/
 
--- SUB-SECOND PERFORMANCE INDEXES
+-- EXISTING INDEXES (KEEP THESE - they are correct):
+/*
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_doctor_denial_unique 
 ON claims.mv_doctor_denial_summary(clinician);
 
@@ -494,21 +714,66 @@ ON claims.mv_doctor_denial_summary(denial_risk_level, activity_denial_rate_perce
 
 CREATE INDEX IF NOT EXISTS idx_mv_doctor_denial_amount 
 ON claims.mv_doctor_denial_summary(denied_activity_amount DESC);
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_doctor_denial_summary IS 'Doctor denial summary with risk analysis and comprehensive metrics';
-
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_doctor_denial_high_denial (High denial rate doctors)
--- ----------------------------------------------------------------------------------------------------------
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_doctor_denial_high_denial (High denial rate doctors)
+-- ==========================================================================================================
+-- STATUS: WORKING - Simple filtered alias
+-- 
+-- CURRENT STATUS:
+--   - This MV is an alias that selects high denial doctors from mv_doctor_denial_summary
+--   - Logic is correct but missing performance indexes
+--
+-- REQUIRED INDEXES (COMMENTED OUT):
+--   1. UNIQUE INDEX on clinician
+--   2. INDEX on (denial_risk_level, activity_denial_rate_percentage) for filtering
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_doctor_denial_high_denial CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_doctor_denial_high_denial AS
 SELECT * FROM claims.mv_doctor_denial_summary WHERE denial_risk_level = 'HIGH';
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_doctor_denial_high_denial IS 'High denial rate doctors with risk level classification';
+-- REQUIRED INDEXES (COMMENTED OUT):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_doctor_denial_high_denial_unique 
+ON claims.mv_doctor_denial_high_denial(clinician);
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_doctor_denial_detail (Detailed doctor denial information)
--- ----------------------------------------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_mv_doctor_denial_high_denial_risk 
+ON claims.mv_doctor_denial_high_denial(denial_risk_level, activity_denial_rate_percentage);
+*/
+
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_doctor_denial_detail (Detailed doctor denial information)
+-- ==========================================================================================================
+-- STATUS: BROKEN - Multiple schema errors
+-- 
+-- SCHEMA ERRORS:
+--   1. a.description - Column doesn't exist in claims.activity table
+--   2. ra.denial_reason - Column doesn't exist in claims.remittance_activity table
+--   3. r.receiver_name - Column doesn't exist in claims.remittance table
+--   4. r.receiver_id - Column doesn't exist in claims.remittance table
+--   5. ORDER BY in materialized view without LIMIT (line 771)
+--   6. Wrong JOIN: claims.remittance_activity is joined on TEXT id (activity_id), not on INT id
+--
+-- REQUIRED FIXES:
+--   1. Remove a.description or get from claims_ref.activity_code table
+--   2. Remove ra.denial_reason or get from claims_ref.denial_code table
+--   3. Use ingestion_file.receiver_id via: r -> ingestion_file -> receiver_id
+--   4. Get receiver_name from claims_ref.payer or claims_ref.provider
+--   5. Remove ORDER BY or use LIMIT
+--   6. Fix JOIN: Use correct join on ra.activity_id = a.activity_id (TEXT, not INT)
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   ACTIVITY-LEVEL (claim_activity_summary table):
+--     1. Use claim_activity_summary.denial_codes array for denial tracking
+--     2. Use claim_activity_summary.denied_amount for denied amounts
+--     3. Use claim_activity_summary.activity_status for activity status
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_doctor_denial_detail CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_doctor_denial_detail AS
 SELECT 
@@ -518,7 +783,7 @@ SELECT
   cl.specialty AS clinician_specialty,
   a.id AS activity_id,
   a.code AS activity_code,
-  a.description AS activity_description,
+  ac.description AS activity_description,
   a.net AS activity_net_amount,
   a.created_at AS activity_created_at,
   
@@ -540,12 +805,12 @@ SELECT
   
   -- Denial information
   ra.denial_code,
-  ra.denial_reason,
+  dc.description as denial_reason,                           -- ERROR: Column doesn't exist
   ra.created_at AS denial_date,
   rc.date_settlement,
   rc.payment_reference,
-  r.receiver_name,
-  r.receiver_id,
+  r.receiver_name,                             -- ERROR: Column doesn't exist
+  r.receiver_id,                               -- ERROR: Column doesn't exist
   
   -- Reference data
   f.name AS facility_name,
@@ -565,15 +830,105 @@ LEFT JOIN claims_ref.payer pay ON pay.id = c.payer_ref_id
 LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
 LEFT JOIN claims_ref.encounter_type et ON et.type_code = e.type
 LEFT JOIN claims_ref.activity_code ac ON ac.id = a.activity_code_ref_id
-LEFT JOIN claims_ref.denial_code dc ON dc.code = ra.denial_code
+LEFT JOIN claims_ref.denial_code dc ON dc.id = ra.denial_code_ref_id
 LEFT JOIN claims.remittance_activity ra ON ra.activity_id = a.id
 LEFT JOIN claims.remittance_claim rc ON rc.id = ra.remittance_claim_id
 LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
 WHERE ra.denial_code IS NOT NULL  -- Only denied activities
   AND a.clinician IS NOT NULL     -- Only activities with clinician
-ORDER BY a.clinician, ra.created_at DESC;
+ORDER BY a.clinician, ra.created_at DESC;      -- WARNING: ORDER BY in MV without LIMIT
+-- COMMENT ON MATERIALIZED VIEW claims.mv_doctor_denial_detail IS 'Detailed doctor denial information with activity and claim details';
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_doctor_denial_detail IS 'Detailed doctor denial information with activity and claim details';
+-- ==========================================================================================================
+-- SECTION 3: DOCTOR DENIAL MATERIALIZED VIEW (ACTIVE)
+-- ==========================================================================================================
+
+-- ----------------------------------------------------------------------------------------------------------
+-- MATERIALIZED VIEW: mv_doctor_denial_summary (Doctor denial summary with risk analysis)
+-- ----------------------------------------------------------------------------------------------------------
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_doctor_denial_summary CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_doctor_denial_summary AS
+WITH remittance_aggregated AS (
+  -- CUMULATIVE-WITH-CAP: Pre-aggregate all remittance data per claim_key_id using claim_activity_summary
+  -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
+  -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
+  SELECT 
+    cas.claim_key_id,
+    MAX(cas.remittance_count) as remittance_count,                    -- max across activities
+    SUM(cas.paid_amount) as total_payment_amount,                     -- capped paid across activities
+    SUM(cas.submitted_amount) as total_remitted_amount,               -- submitted as remitted baseline
+    COUNT(CASE WHEN cas.activity_status = 'FULLY_PAID' OR cas.activity_status = 'PARTIALLY_PAID' THEN 1 END) as paid_activity_count,
+    COUNT(CASE WHEN cas.activity_status = 'REJECTED' THEN 1 END) as rejected_activity_count,
+    MIN(rc.date_settlement) as first_remittance_date,
+    MAX(rc.date_settlement) as last_remittance_date,
+    -- Use the most recent remittance for payer/provider info
+    (ARRAY_AGG(rc.id_payer ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_id_payer,
+    (ARRAY_AGG(rc.provider_id ORDER BY rc.date_settlement DESC NULLS LAST))[1] as latest_provider_id
+  FROM claims.claim_activity_summary cas
+  LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = cas.claim_key_id
+  GROUP BY cas.claim_key_id
+),
+clinician_activity_agg AS (
+  SELECT 
+    cl.id as clinician_id,
+    cl.name as clinician_name,
+    cl.specialty,
+    f.facility_code,
+    f.name as facility_name,
+    DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at)) as report_month,
+    -- Pre-computed aggregations (now one row per claim)
+    COUNT(DISTINCT ck.claim_id) as total_claims,
+    COUNT(DISTINCT CASE WHEN ra.claim_key_id IS NOT NULL THEN ck.claim_id END) as remitted_claims,
+    COUNT(DISTINCT CASE WHEN ra.rejected_activity_count > 0 THEN ck.claim_id END) as rejected_claims,
+    SUM(a.net) as total_claim_amount,
+    SUM(COALESCE(ra.total_payment_amount, 0)) as remitted_amount,
+    SUM(CASE WHEN ra.rejected_activity_count > 0 THEN ra.total_remitted_amount ELSE 0 END) as rejected_amount
+  FROM claims.claim_key ck
+  JOIN claims.claim c ON c.claim_key_id = ck.id
+  LEFT JOIN claims.encounter e ON e.claim_id = c.id
+  LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+  LEFT JOIN claims.activity a ON a.claim_id = c.id
+  LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
+  LEFT JOIN remittance_aggregated ra ON ra.claim_key_id = ck.id
+  WHERE cl.id IS NOT NULL AND f.facility_code IS NOT NULL
+  GROUP BY cl.id, cl.name, cl.specialty, f.facility_code, f.name,
+           DATE_TRUNC('month', COALESCE(ra.last_remittance_date, c.tx_at))
+)
+SELECT 
+  clinician_id,
+  clinician_name,
+  specialty,
+  facility_code,
+  facility_name,
+  report_month,
+  total_claims,
+  remitted_claims,
+  rejected_claims,
+  total_claim_amount,
+  remitted_amount,
+  rejected_amount,
+  -- Pre-computed metrics
+  CASE WHEN total_claims > 0 THEN
+    ROUND((rejected_claims * 100.0) / total_claims, 2)
+  ELSE 0 END as rejection_percentage,
+  CASE WHEN total_claim_amount > 0 THEN
+    ROUND((remitted_amount / total_claim_amount) * 100, 2)
+  ELSE 0 END as collection_rate
+FROM clinician_activity_agg;
+
+-- SUB-SECOND PERFORMANCE INDEXES
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_clinician_unique 
+ON claims.mv_doctor_denial_summary(clinician_id, facility_code, report_month);
+
+CREATE INDEX IF NOT EXISTS idx_mv_clinician_covering 
+ON claims.mv_doctor_denial_summary(clinician_id, report_month) 
+INCLUDE (rejection_percentage, collection_rate, total_claims);
+
+CREATE INDEX IF NOT EXISTS idx_mv_clinician_facility 
+ON claims.mv_doctor_denial_summary(facility_code, report_month);
+
+COMMENT ON MATERIALIZED VIEW claims.mv_doctor_denial_summary IS 'Pre-computed clinician denial metrics for sub-second report performance - FIXED: Aggregated remittance data to prevent duplicates';
 
 -- ==========================================================================================================
 -- SECTION 4: CLAIMS MONTHLY AGGREGATION MATERIALIZED VIEWS
@@ -686,7 +1041,7 @@ WITH activity_timeline AS (
     a.id AS activity_id,
     a.claim_id,
     a.code AS activity_code,
-    a.description AS activity_description,
+    ac.description AS activity_description,
     a.net AS activity_net_amount,
     a.created_at AS activity_created_at,
     a.clinician AS activity_clinician,
@@ -694,12 +1049,12 @@ WITH activity_timeline AS (
     -- Remittance data for this activity
     ra.payment_amount AS activity_payment_amount,
     ra.denial_code AS activity_denial_code,
-    ra.denial_reason AS activity_denial_reason,
+    dc.description AS activity_denial_reason,
     ra.created_at AS remittance_activity_created_at,
     rc.date_settlement AS remittance_date,
     rc.payment_reference,
-    r.receiver_name,
-    r.receiver_id,
+    f.name as receiver_name,
+    e_act.facility_id as receiver_id,
     
     -- Resubmission data for this activity
     cr.comment AS resubmission_comment,
@@ -717,10 +1072,15 @@ WITH activity_timeline AS (
     ROW_NUMBER() OVER (PARTITION BY a.id ORDER BY ce.event_time DESC) AS resubmission_sequence
     
   FROM claims.activity a
-  LEFT JOIN claims.remittance_activity ra ON ra.activity_id = a.id
+  LEFT JOIN claims.claim c_act ON c_act.id = a.claim_id
+  LEFT JOIN claims.encounter e_act ON e_act.claim_id = c_act.id
+  LEFT JOIN claims_ref.facility f ON f.id = e_act.facility_ref_id
+  LEFT JOIN claims_ref.activity_code ac ON ac.id = a.activity_code_ref_id
+  LEFT JOIN claims.remittance_activity ra ON ra.activity_id = a.activity_id
+  LEFT JOIN claims_ref.denial_code dc ON dc.id = ra.denial_code_ref_id
   LEFT JOIN claims.remittance_claim rc ON rc.id = ra.remittance_claim_id
   LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
-  LEFT JOIN claims.claim_event ce ON ce.activity_id = a.id AND ce.type = 2  -- RESUBMISSION events
+  LEFT JOIN claims.claim_event ce ON ce.claim_key_id = (SELECT claim_key_id FROM claims.claim WHERE id = a.claim_id) AND ce.type = 2  -- RESUBMISSION events
   LEFT JOIN claims.claim_resubmission cr ON cr.claim_event_id = ce.id
 )
 SELECT 
@@ -788,9 +1148,12 @@ SELECT
 FROM claims.claim_key ck
 JOIN claims.claim c ON c.claim_key_id = ck.id
 LEFT JOIN claims.encounter e ON e.claim_id = c.id
+LEFT JOIN claims.activity a ON a.claim_id = c.id
 LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
 LEFT JOIN claims_ref.provider p ON p.id = c.provider_ref_id
 LEFT JOIN claims_ref.payer pay ON pay.id = c.payer_ref_id
+LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
+LEFT JOIN claims_ref.activity_code ac ON ac.id = a.activity_code_ref_id
 LEFT JOIN claims_ref.encounter_type et ON et.type_code = e.type
 LEFT JOIN activity_timeline at ON at.claim_id = c.id
 WHERE at.remittance_sequence = 1 OR at.remittance_sequence IS NULL  -- Get latest remittance per activity
@@ -820,7 +1183,6 @@ CREATE MATERIALIZED VIEW claims.mv_resubmission_cycles AS
 WITH resubmission_cycles AS (
   SELECT 
     ce.claim_key_id,
-    ce.activity_id,
     ce.event_time AS resubmission_date,
     cr.comment AS resubmission_comment,
     cr.resubmission_type,
@@ -848,7 +1210,6 @@ SELECT
   e.end_at AS encounter_end,
   
   -- Resubmission information
-  rc.activity_id,
   rc.resubmission_date,
   rc.resubmission_comment,
   rc.resubmission_type,
@@ -901,25 +1262,29 @@ WITH activity_remittance_summary AS (
     ra.net AS activity_net,
     ra.payment_amount AS activity_payment,
     ra.denial_code AS activity_denial_code,
-    ra.denial_reason AS activity_denial_reason,
+    dc.description AS activity_denial_reason,
     ra.created_at AS remittance_activity_created_at,
     rc.date_settlement,
     rc.payment_reference,
-    r.receiver_name,
-    r.receiver_id
+    f2.name as receiver_name,
+    e_act2.facility_id as receiver_id
   FROM claims.remittance_activity ra
   JOIN claims.remittance_claim rc ON rc.id = ra.remittance_claim_id
   JOIN claims.remittance r ON r.id = rc.remittance_id
+  LEFT JOIN claims.claim_key ck_act ON ck_act.id = rc.claim_key_id
+  LEFT JOIN claims.claim c_act2 ON c_act2.claim_key_id = ck_act.id
+  LEFT JOIN claims.encounter e_act2 ON e_act2.claim_id = c_act2.id
+  LEFT JOIN claims_ref.facility f2 ON f2.id = e_act2.facility_ref_id
+  LEFT JOIN claims_ref.denial_code dc ON dc.id = ra.denial_code_ref_id
 ),
 activity_resubmission_summary AS (
   -- Pre-aggregate resubmission data at activity level
   SELECT 
-    ce.activity_id,
     ce.claim_key_id,
     ce.event_time AS resubmission_date,
     cr.comment AS resubmission_comment,
     cr.resubmission_type,
-    COUNT(*) OVER (PARTITION BY ce.activity_id ORDER BY ce.event_time) AS resubmission_sequence
+    ROW_NUMBER() OVER (PARTITION BY ce.claim_key_id ORDER BY ce.event_time) AS resubmission_sequence
   FROM claims.claim_event ce
   JOIN claims.claim_resubmission cr ON cr.claim_event_id = ce.id
   WHERE ce.type = 2  -- RESUBMISSION events
@@ -928,7 +1293,7 @@ SELECT
   a.id AS activity_id,
   a.claim_id,
   a.code AS activity_code,
-  a.description AS activity_description,
+  ac.description AS activity_description,
   a.net AS activity_net_amount,
   a.created_at AS activity_created_at,
   
@@ -993,8 +1358,8 @@ LEFT JOIN claims_ref.provider p ON p.id = c.provider_ref_id
 LEFT JOIN claims_ref.payer pay ON pay.id = c.payer_ref_id
 LEFT JOIN claims_ref.clinician cl ON cl.id = a.clinician_ref_id
 LEFT JOIN claims_ref.activity_code ac ON ac.id = a.activity_code_ref_id
-LEFT JOIN activity_remittance_summary ars ON ars.activity_id = a.id
-LEFT JOIN activity_resubmission_summary arss ON arss.activity_id = a.id;
+LEFT JOIN activity_remittance_summary ars ON ars.activity_id = a.activity_id
+LEFT JOIN activity_resubmission_summary arss ON arss.claim_key_id = c.claim_key_id;
 
 -- SUB-SECOND PERFORMANCE INDEXES
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittances_activity_unique 
@@ -1024,16 +1389,21 @@ WITH rejected_activities AS (
     ra.remittance_claim_id,
     ra.net AS activity_net,
     ra.denial_code,
-    ra.denial_reason,
+    dc.description as denial_reason,
     ra.created_at AS rejection_date,
     rc.claim_key_id,
     rc.date_settlement,
     rc.payment_reference,
-    r.receiver_name,
-    r.receiver_id
+    f3.name as receiver_name,
+    e_act3.facility_id as receiver_id
   FROM claims.remittance_activity ra
   JOIN claims.remittance_claim rc ON rc.id = ra.remittance_claim_id
   JOIN claims.remittance r ON r.id = rc.remittance_id
+  LEFT JOIN claims.claim_key ck_act3 ON ck_act3.id = rc.claim_key_id
+  LEFT JOIN claims.claim c_act3 ON c_act3.claim_key_id = ck_act3.id
+  LEFT JOIN claims.encounter e_act3 ON e_act3.claim_id = c_act3.id
+  LEFT JOIN claims_ref.facility f3 ON f3.id = e_act3.facility_ref_id
+  LEFT JOIN claims_ref.denial_code dc ON dc.id = ra.denial_code_ref_id
   WHERE ra.denial_code IS NOT NULL  -- Rejected activities
 ),
 claim_rejection_summary AS (
@@ -1045,7 +1415,7 @@ claim_rejection_summary AS (
     MIN(ra.created_at) AS first_rejection_date,
     MAX(ra.created_at) AS last_rejection_date,
     MAX(ra.denial_code) AS primary_denial_code,
-    MAX(ra.denial_reason) AS primary_denial_reason
+    (SELECT description FROM claims_ref.denial_code WHERE id = MAX(ra.denial_code_ref_id) LIMIT 1) AS primary_denial_reason
   FROM claims.remittance_activity ra
   JOIN claims.remittance_claim rc ON rc.id = ra.remittance_claim_id
   WHERE ra.denial_code IS NOT NULL
@@ -1111,7 +1481,7 @@ SELECT
   pay.name AS payer_name,
   pay.payer_code,
   et.description AS encounter_type_description,
-  dc.description AS denial_code_description
+  ra.denial_reason AS denial_code_description
 
 FROM claims.claim_key ck
 JOIN claims.claim c ON c.claim_key_id = ck.id
@@ -1121,8 +1491,7 @@ LEFT JOIN claims_ref.provider p ON p.id = c.provider_ref_id
 LEFT JOIN claims_ref.payer pay ON pay.id = c.payer_ref_id
 LEFT JOIN claims_ref.encounter_type et ON et.type_code = e.type
 LEFT JOIN claim_rejection_summary crs ON crs.claim_key_id = ck.id
-LEFT JOIN rejected_activities ra ON ra.claim_key_id = ck.id
-LEFT JOIN claims_ref.denial_code dc ON dc.code = ra.denial_code;
+LEFT JOIN rejected_activities ra ON ra.claim_key_id = ck.id;
 
 -- SUB-SECOND PERFORMANCE INDEXES
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_unique 
@@ -1136,9 +1505,30 @@ ON claims.mv_rejected_claims_summary(total_rejected_amount DESC);
 
 COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_summary IS 'Rejected claims summary with activity-level and claim-level rejection data';
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_rejected_claims_by_year (Rejected claims by year)
--- ----------------------------------------------------------------------------------------------------------
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_rejected_claims_by_year (Rejected claims by year)
+-- ==========================================================================================================
+-- STATUS: WORKING - Logic correct but ORDER BY should be removed
+-- 
+-- CURRENT STATUS:
+--   - Logic is correct but ORDER BY in materialized view should be removed
+--   - Missing performance indexes
+--
+-- REQUIRED FIXES:
+--   1. Remove ORDER BY from materialized view definition (line 1436)
+--
+-- REQUIRED INDEXES (COMMENTED OUT):
+--   1. UNIQUE INDEX on year
+--   2. INDEX on (rejection_rate_percentage DESC) for sorting
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment.rejected_activities for claim-level rejection counts
+--     2. Use claim_payment.total_rejected_amount for rejected amounts
+--     3. Use claim_payment.payment_status = 'REJECTED' for rejection status
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_by_year CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_rejected_claims_by_year AS
 SELECT 
@@ -1168,13 +1558,38 @@ LEFT JOIN (
   GROUP BY rc.claim_key_id
 ) crs ON crs.claim_key_id = ck.id
 GROUP BY EXTRACT(YEAR FROM c.tx_at)
-ORDER BY year DESC;
+ORDER BY year DESC;  -- WARNING: ORDER BY in MV without LIMIT
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_by_year IS 'Rejected claims summary grouped by year';
+-- REQUIRED INDEXES (COMMENTED OUT):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_by_year_unique 
+ON claims.mv_rejected_claims_by_year(year);
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_rejected_claims_summary_tab (Rejected claims summary tab)
--- ----------------------------------------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_mv_rejected_claims_by_year_rate 
+ON claims.mv_rejected_claims_by_year(rejection_rate_percentage DESC);
+*/
+
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_rejected_claims_summary_tab (Rejected claims summary tab)
+-- ==========================================================================================================
+-- STATUS: WORKING - Logic correct
+-- 
+-- CURRENT STATUS:
+--   - Logic is correct
+--   - Single-row summary table - minimal indexing needed
+--
+-- REQUIRED INDEXES (COMMENTED OUT):
+--   - Single row table - no indexes needed (or simple INDEX on total_claims)
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment.rejected_activities for claim-level rejection counts
+--     2. Use claim_payment.total_rejected_amount for rejected amounts
+--     3. Use claim_payment for pre-aggregated rejection metrics
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_summary_tab CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_rejected_claims_summary_tab AS
 SELECT 
@@ -1202,17 +1617,47 @@ LEFT JOIN (
   WHERE ra.denial_code IS NOT NULL
   GROUP BY rc.claim_key_id
 ) crs ON crs.claim_key_id = ck.id;
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_summary_tab IS 'Overall rejected claims summary';
+-- REQUIRED INDEXES (COMMENTED OUT):
+/*
+-- Single row table - no indexes needed
+CREATE INDEX IF NOT EXISTS idx_mv_rejected_claims_summary_tab_total 
+ON claims.mv_rejected_claims_summary_tab(total_claims);
+*/
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_rejected_claims_receiver_payer (Rejected claims by receiver and payer)
--- ----------------------------------------------------------------------------------------------------------
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_rejected_claims_receiver_payer (Rejected claims by receiver and payer)
+-- ==========================================================================================================
+-- STATUS: BROKEN - Non-existent columns referenced
+-- 
+-- SCHEMA ERRORS:
+--   1. r.receiver_name - Column doesn't exist in claims.remittance table
+--   2. r.receiver_id - Column doesn't exist in claims.remittance table
+--   3. claims.remittance table only has: id, ingestion_file_id, created_at, updated_at, tx_at
+--   4. ORDER BY in materialized view without LIMIT (line 1550)
+--
+-- REQUIRED FIXES:
+--   1. Use ingestion_file.receiver_id via: r -> ingestion_file -> receiver_id
+--   2. Get receiver_name from claims_ref.payer or claims_ref.provider
+--   3. Remove ORDER BY or use LIMIT
+--
+-- REQUIRED INDEXES (COMMENTED OUT - after fixes):
+--   1. UNIQUE INDEX on (receiver_id, payer_id)
+--   2. INDEX on total_rejected_amount DESC for sorting
+--   3. INDEX on rejection_rate_percentage for filtering
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment for rejection tracking
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_receiver_payer CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_rejected_claims_receiver_payer AS
 SELECT 
-  r.receiver_name,
-  r.receiver_id,
+  r.receiver_name,                             -- ERROR: Column doesn't exist
+  r.receiver_id,                               -- ERROR: Column doesn't exist
   c.payer_id,
   pay.name AS payer_name,
   COUNT(DISTINCT ck.claim_id) AS total_claims,
@@ -1230,13 +1675,53 @@ LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
 LEFT JOIN claims_ref.payer pay ON pay.id = c.payer_ref_id
 GROUP BY r.receiver_name, r.receiver_id, c.payer_id, pay.name
-ORDER BY total_rejected_amount DESC;
+ORDER BY total_rejected_amount DESC;  -- WARNING: ORDER BY in MV without LIMIT
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_receiver_payer IS 'Rejected claims grouped by receiver and payer';
+-- REQUIRED INDEXES (COMMENTED OUT - after fixes):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_receiver_payer_unique 
+ON claims.mv_rejected_claims_receiver_payer(receiver_id, payer_id);
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_rejected_claims_claim_wise (Claim-wise rejected claims details)
--- ----------------------------------------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_mv_rejected_claims_receiver_payer_amount 
+ON claims.mv_rejected_claims_receiver_payer(total_rejected_amount DESC);
+
+CREATE INDEX IF NOT EXISTS idx_mv_rejected_claims_receiver_payer_rate 
+ON claims.mv_rejected_claims_receiver_payer(rejection_rate_percentage);
+*/
+
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_rejected_claims_claim_wise (Claim-wise rejected claims details)
+-- ==========================================================================================================
+-- STATUS: BROKEN - Multiple schema errors
+-- 
+-- SCHEMA ERRORS:
+--   1. ra.denial_reason - Column doesn't exist in claims.remittance_activity table
+--   2. r.receiver_name - Column doesn't exist in claims.remittance table
+--   3. r.receiver_id - Column doesn't exist in claims.remittance table
+--   4. claims.remittance table only has: id, ingestion_file_id, created_at, updated_at, tx_at
+--   5. ORDER BY in materialized view without LIMIT (line 1604)
+--
+-- REQUIRED FIXES:
+--   1. Remove ra.denial_reason or get from claims_ref.denial_code table
+--   2. Use ingestion_file.receiver_id via: r -> ingestion_file -> receiver_id
+--   3. Get receiver_name from claims_ref.payer or claims_ref.provider
+--   4. Remove ORDER BY or use LIMIT
+--
+-- REQUIRED INDEXES (COMMENTED OUT - after fixes):
+--   1. UNIQUE INDEX on (claim_key_id, activity_id)
+--   2. INDEX on (payer_id, rejection_date) for filtering
+--   3. INDEX on denial_code for denial filtering
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   ACTIVITY-LEVEL (claim_activity_summary table):
+--     1. Use claim_activity_summary.denial_codes array for denial tracking
+--   
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Use claim_payment for claim-level rejection status
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_claim_wise CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_rejected_claims_claim_wise AS
 SELECT 
@@ -1258,7 +1743,7 @@ SELECT
   ra.activity_id,
   ra.net AS rejected_activity_amount,
   ra.denial_code,
-  ra.denial_reason,
+  dc.description as denial_reason,
   ra.created_at AS rejection_date,
   rc.date_settlement,
   rc.payment_reference,
@@ -1282,11 +1767,23 @@ LEFT JOIN claims_ref.encounter_type et ON et.type_code = e.type
 LEFT JOIN claims.remittance_claim rc ON rc.claim_key_id = ck.id
 LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
 LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
-LEFT JOIN claims_ref.denial_code dc ON dc.code = ra.denial_code
+LEFT JOIN claims_ref.denial_code dc ON dc.id = ra.denial_code_ref_id
 WHERE ra.denial_code IS NOT NULL  -- Only rejected activities
-ORDER BY ck.claim_id, ra.created_at;
+ORDER BY ck.claim_id, ra.created_at;  -- WARNING: ORDER BY in MV without LIMIT
+-- COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_claim_wise IS 'Claim-wise rejected claims details';
+*/
 
-COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_claim_wise IS 'Claim-wise rejected claims details';
+-- REQUIRED INDEXES (COMMENTED OUT - after fixes):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_claim_wise_unique 
+ON claims.mv_rejected_claims_claim_wise(claim_key_id, activity_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_rejected_claims_claim_wise_payer 
+ON claims.mv_rejected_claims_claim_wise(payer_id, rejection_date);
+
+CREATE INDEX IF NOT EXISTS idx_mv_rejected_claims_claim_wise_denial 
+ON claims.mv_rejected_claims_claim_wise(denial_code);
+*/
 
 -- ==========================================================================================================
 -- SECTION 9: CLAIM SUMMARY MATERIALIZED VIEWS
@@ -1522,14 +2019,45 @@ ORDER BY
 
 COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_encounterwise IS 'Encounterwise claim summary with cumulative-with-cap logic';
 
--- ----------------------------------------------------------------------------------------------------------
--- MATERIALIZED VIEW: mv_claim_summary_monthwise (Claim summary by month)
--- ----------------------------------------------------------------------------------------------------------
+-- ==========================================================================================================
+-- COMMENTED OUT: MATERIALIZED VIEW mv_claim_summary_monthwise (Claim summary by month)
+-- ==========================================================================================================
+-- STATUS: WORKING - Simple alias of mv_claims_monthly_agg
+-- 
+-- CURRENT STATUS:
+--   - This MV is an alias that selects all data from mv_claims_monthly_agg
+--   - Logic is correct but missing performance indexes
+--
+-- REQUIRED INDEXES (COMMENTED OUT):
+--   1. UNIQUE INDEX on (month_bucket, payer_id, provider_id)
+--   2. INDEX on month_bucket for date range queries
+--   3. INDEX on payer_id for payer filtering
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   CLAIM-LEVEL (claim_payment table):
+--     1. Can aggregate from claim_payment for monthly summaries
+--     2. Use claim_payment for all claim-level financial metrics
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_claim_summary_monthwise CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_claim_summary_monthwise AS
 SELECT * FROM claims.mv_claims_monthly_agg;
 
 COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_monthwise IS 'Monthwise claim summary (alias for mv_claims_monthly_agg)';
+*/
+
+-- REQUIRED INDEXES (COMMENTED OUT):
+/*
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_claim_summary_monthwise_unique 
+ON claims.mv_claim_summary_monthwise(month_bucket, payer_id, provider_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_claim_summary_monthwise_month 
+ON claims.mv_claim_summary_monthwise(month_bucket);
+
+CREATE INDEX IF NOT EXISTS idx_mv_claim_summary_monthwise_payer 
+ON claims.mv_claim_summary_monthwise(payer_id);
+*/
 
 -- ==========================================================================================================
 -- SECTION 10: REMITTANCES RESUBMISSION CLAIM LEVEL MATERIALIZED VIEW
@@ -1550,10 +2078,15 @@ WITH claim_remittance_summary AS (
     MIN(rc.date_settlement) AS first_remittance_date,
     MAX(rc.date_settlement) AS last_remittance_date,
     MAX(rc.payment_reference) AS last_payment_reference,
-    MAX(r.receiver_name) AS receiver_name,
-    MAX(r.receiver_id) AS receiver_id
+    (SELECT f.name FROM claims.claim c 
+     JOIN claims.encounter e ON e.claim_id = c.id
+     JOIN claims_ref.facility f ON f.id = e.facility_ref_id 
+     WHERE c.claim_key_id = rc.claim_key_id LIMIT 1) AS receiver_name,
+    (SELECT e.facility_id FROM claims.claim c 
+     JOIN claims.encounter e ON e.claim_id = c.id 
+     WHERE c.claim_key_id = rc.claim_key_id LIMIT 1) AS receiver_id
   FROM claims.remittance_claim rc
-  JOIN claims.remittance r ON r.id = rc.remittance_id
+  LEFT JOIN claims.remittance r ON r.id = rc.remittance_id
   LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
   GROUP BY rc.claim_key_id
 ),
@@ -1645,6 +2178,41 @@ LEFT JOIN claim_resubmission_summary crss ON crss.claim_key_id = ck.id;
 
 COMMENT ON MATERIALIZED VIEW claims.mv_remittances_resubmission_claim_level IS 'Claim-level view of remittance and resubmission data with pre-computed aggregations';
 
+-- ==========================================================================================================
+-- SUMMARY: COMMENTED OUT MATERIALIZED VIEWS
+-- ==========================================================================================================
+-- Total MVs commented: 14
+-- 
+-- WORKING MVs (7) - Logic correct, missing indexes:
+--   1. mv_balance_amount_overall - Alias of mv_balance_amount_summary
+--   2. mv_balance_amount_initial - Filtered view (remittance_count = 0)
+--   3. mv_balance_amount_resubmission - Filtered view (resubmission_count > 0)
+--   4. mv_doctor_denial_summary - Has ORDER BY issue
+--   5. mv_doctor_denial_high_denial - Filtered alias
+--   6. mv_rejected_claims_by_year - Has ORDER BY issue
+--   7. mv_rejected_claims_summary_tab - Single row summary
+--   8. mv_claim_summary_monthwise - Alias of mv_claims_monthly_agg
+--
+-- BROKEN MVs (6) - Schema errors:
+--   1. mv_remittance_advice_header - Non-existent columns: r.receiver_name, r.receiver_id, r.payment_reference
+--   2. mv_remittance_advice_claim_wise - Same as #1
+--   3. mv_remittance_advice_activity_wise - Additional errors: ra.denial_reason, a.description
+--   4. mv_doctor_denial_detail - Multiple errors: ra.denial_reason, a.description, wrong JOIN
+--   5. mv_rejected_claims_receiver_payer - Non-existent columns: r.receiver_name, r.receiver_id
+--   6. mv_rejected_claims_claim_wise - Multiple errors: ra.denial_reason, r.receiver_name, r.receiver_id
+--
+-- REQUIRED FIXES:
+--   1. Remove non-existent column references
+--   2. Use correct table joins (ingestion_file for receiver_id)
+--   3. Remove ORDER BY from materialized view definitions
+--   4. Add missing indexes
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   - Use claim_payment table for claim-level financial aggregations
+--   - Use claim_activity_summary table for activity-level financial metrics
+--   - Leverage pre-computed remittance_count and resubmission_count
+--   - Use denial_codes array from claim_activity_summary
+--
 -- ==========================================================================================================
 -- SECTION 11: PERMISSIONS AND GRANTS
 -- ==========================================================================================================

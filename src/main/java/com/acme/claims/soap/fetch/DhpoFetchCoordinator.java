@@ -107,7 +107,7 @@ public class DhpoFetchCoordinator {
             return;
         }
         
-        log.info("Starting 300-day backfill at application startup");
+        log.info("Starting 1000-day backfill at application startup");
         try {
             // Run the same logic as pollSearch but without the scheduler
             runBackfillOnce();
@@ -143,10 +143,10 @@ public class DhpoFetchCoordinator {
                         try {
                             // 300-day backfill logic
                             LocalDateTime now = LocalDateTime.now();
-                            LocalDateTime startDate = now.minusDays(300);
-                            for (int i = 0; i < 30; i++) {
-                                LocalDateTime from = startDate.plusDays(10L * i);
-                                LocalDateTime to = from.plusDays(10);
+                            LocalDateTime startDate = now.minusDays(1000);
+                            for (int i = 0; i < 50; i++) {
+                                LocalDateTime from = startDate.plusDays(20L * i);
+                                LocalDateTime to = from.plusDays(20);
                                 // submissions (direction=1, tx=2) - TransactionStatus=1 (new/undownloaded)
                                 searchWindowRange(f, 1, 2, 1, from, to);
                                 // submissions (direction=1, tx=2) - TransactionStatus=2 (downloaded)

@@ -33,7 +33,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.Objects;
 
@@ -160,8 +159,17 @@ public class Pipeline {
     public record Result(
             long ingestionFileId,
             int rootType, // 1=submission, 2=remittance
+            // Submission counts
             int parsedClaims, int persistedClaims,
             int parsedActivities, int persistedActivities,
+            int parsedDiagnoses, int persistedDiagnoses,
+            int parsedEncounters, int persistedEncounters,
+            int parsedObservations, int persistedObservations,
+            // Remittance counts
+            int parsedRemitClaims, int persistedRemitClaims,
+            int parsedRemitActivities, int persistedRemitActivities,
+            // Event projection counts (for debugging)
+            int projectedEvents, int projectedStatusRows,
             OffsetDateTime txTime
     ) {}
 
@@ -208,7 +216,8 @@ public class Pipeline {
                     }
                 } catch (Exception ignore) {}
                 success = true;
-                return new Result(filePk, rootType == ROOT_SUBMISSION ? 1 : 2, 0, 0, 0, 0, null);
+                return new Result(filePk.longValue(), rootType == ROOT_SUBMISSION ? 1 : 2, 
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, OffsetDateTime.now());
             }
             IngestionFile fileRow = new IngestionFile();
             fileRow.setId(filePk);
@@ -268,7 +277,16 @@ public class Pipeline {
                         success = true;
                         int claimCount = dto.claims().size();
                         int actCount = countActs(dto);
-                        return new Result(filePk, 1, claimCount, 0, actCount, 0, dto.header().transactionDate());
+                        return new Result(filePk, 1, 
+                            claimCount, 0, 
+                            actCount, 0,
+                            0, 0, // no submission diagnoses
+                            0, 0, // no encounters  
+                            0, 0, // no observations
+                            0, 0, // no remit counts
+                            0, 0, // no remit activities
+                            0, 0, // no events for already processed
+                            dto.header().transactionDate());
                     }
 
                     // Full business validation
@@ -287,7 +305,16 @@ public class Pipeline {
                     success =true;
                     int claimCount = dto.claims().size();
                     int actCount = countActs(dto);
-                    return new Result(filePk, 1, claimCount, counts.claims(), actCount, counts.acts(), dto.header().transactionDate());
+                    return new Result(filePk, 1, 
+                        claimCount, counts.claims(), 
+                        actCount, counts.acts(),
+                        countDiagnoses(dto), counts.dxs(),
+                        countEncounters(dto), counts.encounters(),
+                        countObservations(dto), counts.obs(),
+                        0, 0, // no remit counts
+                        0, 0, // no remit activities
+                        counts.projectedEvents(), counts.projectedStatusRows(),
+                        dto.header().transactionDate());
                 }
 
                 case REMITTANCE -> {
@@ -327,7 +354,16 @@ public class Pipeline {
                         success = true;
                         int claimCount = dto.claims().size();
                         int actCount = countActs(dto);
-                        return new Result(filePk, 2, claimCount, 0, actCount, 0, dto.header().transactionDate());
+                        return new Result(filePk, 2, 
+                            claimCount, 0, 
+                            actCount, 0,
+                            0, 0, // no submission diagnoses
+                            0, 0, // no encounters  
+                            0, 0, // no observations
+                            claimCount, 0,
+                            actCount, 0,
+                            0, 0, // no events for already processed
+                            dto.header().transactionDate());
                     }
 
                     try { validateRemittance(dto); }
@@ -340,7 +376,16 @@ public class Pipeline {
                     success = true;
                     int claimCount = dto.claims().size();
                     int actCount = countActs(dto);
-                    return new Result(filePk, 2, claimCount, counts.remitClaims(), actCount, counts.remitActs(), dto.header().transactionDate());
+                    return new Result(filePk, 2, 
+                        claimCount, counts.remitClaims(), 
+                        actCount, counts.remitActs(),
+                        0, 0, // no submission diagnoses
+                        0, 0, // no encounters  
+                        0, 0, // no observations
+                        claimCount, counts.remitClaims(),
+                        actCount, counts.remitActs(),
+                        counts.projectedEvents(), counts.projectedStatusRows(),
+                        dto.header().transactionDate());
                 }
             }
 
@@ -370,10 +415,10 @@ public class Pipeline {
         return jdbc.queryForObject("""
                     INSERT INTO claims.ingestion_file
                       (file_id, file_name,root_type, sender_id, receiver_id, transaction_date,
-                       record_count_declared, disposition_flag, xml_bytes)
+                       record_count_declared, disposition_flag, xml_bytes, created_at)
                     VALUES
                       (?,     ?,  ?,         'UNKNOWN', 'UNKNOWN',  now(),
-                       0,                   'UNKNOWN', ?)
+                       0,                   'UNKNOWN', ?, now())
                     ON CONFLICT (file_id) DO UPDATE
                        SET updated_at = now()                 -- touch row, no rollback-inducing error
                     RETURNING id
@@ -410,6 +455,25 @@ public class Pipeline {
     }
     private static int countActs(RemittanceAdviceDTO dto) {
         return dto.claims().stream().mapToInt(c -> c.activities() == null ? 0 : c.activities().size()).sum();
+    }
+
+    private static int countDiagnoses(SubmissionDTO dto) {
+        return dto.claims().stream()
+            .mapToInt(c -> c.diagnoses() == null ? 0 : c.diagnoses().size())
+            .sum();
+    }
+
+    private static int countEncounters(SubmissionDTO dto) {
+        return (int) dto.claims().stream()
+            .filter(c -> c.encounter() != null)
+            .count();
+    }
+
+    private static int countObservations(SubmissionDTO dto) {
+        return dto.claims().stream()
+            .flatMap(c -> c.activities() == null ? java.util.stream.Stream.empty() : c.activities().stream())
+            .mapToInt(a -> a.observations() == null ? 0 : a.observations().size())
+            .sum();
     }
 
     // ---------- Business validation (RESTORED as requested) ----------

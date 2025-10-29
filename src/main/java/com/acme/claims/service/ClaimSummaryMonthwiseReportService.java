@@ -710,33 +710,21 @@ public class ClaimSummaryMonthwiseReportService {
         long startTime = System.currentTimeMillis();
         
         try (Connection conn = dataSource.getConnection()) {
-            // 1. Get basic claim information
-            ClaimDetailsResponse.ClaimBasicInfo claimInfo = getClaimBasicInfo(conn, claimId);
-            if (claimInfo == null) {
+            // 1. Get original submission data (type=1)
+            ClaimDetailsResponse.SubmissionData submission = getSubmissionData(conn, claimId);
+            if (submission == null) {
                 log.warn("Claim not found: {}", claimId);
                 throw new RuntimeException("Claim not found: " + claimId);
             }
-
-            // 2. Get encounter information
-            ClaimDetailsResponse.EncounterInfo encounterInfo = getClaimEncounterInfo(conn, claimId);
-
-            // 3. Get diagnosis information
-            List<ClaimDetailsResponse.DiagnosisInfo> diagnosisInfo = getClaimDiagnosisInfo(conn, claimId);
-
-            // 4. Get activities information
-            List<ClaimDetailsResponse.ActivityInfo> activitiesInfo = getClaimActivitiesInfo(conn, claimId);
-
-            // 5. Get remittance information
-            ClaimDetailsResponse.RemittanceInfo remittanceInfo = getClaimRemittanceInfo(conn, claimId);
-
-            // 6. Get claim events/timeline
+            
+            // 2. Get all resubmissions (type=2) ordered by event_time
+            List<ClaimDetailsResponse.ResubmissionData> resubmissions = getResubmissionsData(conn, claimId);
+            
+            // 3. Get all remittances (type=3) ordered by event_time
+            List<ClaimDetailsResponse.RemittanceData> remittances = getRemittancesData(conn, claimId);
+            
+            // 4. Get timeline (keep for compatibility)
             List<ClaimDetailsResponse.ClaimTimelineEvent> claimTimeline = getClaimTimeline(conn, claimId);
-
-            // 7. Get attachments
-            List<ClaimDetailsResponse.AttachmentInfo> attachments = getClaimAttachments(conn, claimId);
-
-            // 8. Get transaction types (claim lifecycle)
-            List<ClaimDetailsResponse.TransactionType> transactionTypes = getClaimTransactionTypes(conn, claimId);
 
             long executionTime = System.currentTimeMillis() - startTime;
 
@@ -746,27 +734,23 @@ public class ClaimSummaryMonthwiseReportService {
                     .executionTimeMs(executionTime)
                     .additionalMetadata(Map.of(
                             "dataRetrievalTime", executionTime + "ms",
-                            "sectionsRetrieved", 8,
-                            "hasEncounterInfo", encounterInfo != null,
-                            "hasRemittanceInfo", remittanceInfo != null,
-                            "diagnosisCount", diagnosisInfo.size(),
-                            "activitiesCount", activitiesInfo.size(),
+                            "sectionsRetrieved", 4,
+                            "hasSubmission", submission != null,
+                            "resubmissionsCount", resubmissions.size(),
+                            "remittancesCount", remittances.size(),
                             "timelineEventsCount", claimTimeline.size(),
-                            "attachmentsCount", attachments.size(),
-                            "transactionTypesCount", transactionTypes.size()
+                            "submissionAttachmentsCount", submission.getAttachments() != null ? submission.getAttachments().size() : 0,
+                            "totalResubmissionAttachmentsCount", resubmissions.stream().mapToInt(r -> r.getAttachments() != null ? r.getAttachments().size() : 0).sum(),
+                            "totalRemittanceAttachmentsCount", remittances.stream().mapToInt(r -> r.getAttachments() != null ? r.getAttachments().size() : 0).sum()
                     ))
                     .build();
 
             ClaimDetailsResponse response = ClaimDetailsResponse.builder()
                     .claimId(claimId)
-                    .claimInfo(claimInfo)
-                    .encounterInfo(encounterInfo)
-                    .diagnosisInfo(diagnosisInfo)
-                    .activitiesInfo(activitiesInfo)
-                    .remittanceInfo(remittanceInfo)
+                    .submission(submission)
+                    .resubmissions(resubmissions)
+                    .remittances(remittances)
                     .claimTimeline(claimTimeline)
-                    .attachments(attachments)
-                    .transactionTypes(transactionTypes)
                     .metadata(metadata)
                     .build();
 
@@ -1234,5 +1218,320 @@ public class ClaimSummaryMonthwiseReportService {
             case 3 -> "Remittance";
             default -> "Unknown Event";
         };
+    }
+
+    /**
+     * Get original submission data (type=1) with file name and all associated data
+     */
+    private ClaimDetailsResponse.SubmissionData getSubmissionData(Connection conn, String claimId) throws SQLException {
+        String sql = """
+            SELECT 
+                ce.id as claim_event_id,
+                if.id as ingestion_file_id,
+                if.file_name,
+                ce.event_time as submission_date
+            FROM claims.claim_event ce
+            JOIN claims.ingestion_file if ON if.id = ce.ingestion_file_id
+            WHERE ce.claim_key_id = (SELECT id FROM claims.claim_key WHERE claim_id = ?)
+              AND ce.type = 1
+            """;
+
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, claimId);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    // Get all the existing data using existing methods
+                    ClaimDetailsResponse.ClaimBasicInfo claimInfo = getClaimBasicInfo(conn, claimId);
+                    ClaimDetailsResponse.EncounterInfo encounterInfo = getClaimEncounterInfo(conn, claimId);
+                    List<ClaimDetailsResponse.DiagnosisInfo> diagnosisInfo = getClaimDiagnosisInfo(conn, claimId);
+                    List<ClaimDetailsResponse.ActivityInfo> activitiesInfo = getClaimActivitiesInfo(conn, claimId);
+                    
+                    // Get attachments for this specific submission event
+                    List<ClaimDetailsResponse.AttachmentInfo> attachments = getAttachmentsForEvent(conn, claimId, rs.getLong("claim_event_id"));
+
+                    return ClaimDetailsResponse.SubmissionData.builder()
+                            .fileName(rs.getString("file_name"))
+                            .ingestionFileId(rs.getLong("ingestion_file_id"))
+                            .submissionDate(rs.getTimestamp("submission_date") != null ? 
+                                    rs.getTimestamp("submission_date").toLocalDateTime() : null)
+                            .claimInfo(claimInfo)
+                            .encounterInfo(encounterInfo)
+                            .diagnosisInfo(diagnosisInfo)
+                            .activitiesInfo(activitiesInfo)
+                            .attachments(attachments)
+                            .build();
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Get all resubmissions (type=2) with activity snapshots and file names
+     */
+    private List<ClaimDetailsResponse.ResubmissionData> getResubmissionsData(Connection conn, String claimId) throws SQLException {
+        String sql = """
+            SELECT 
+                ce.id as claim_event_id,
+                if.id as ingestion_file_id,
+                if.file_name,
+                ce.event_time as resubmission_date,
+                cr.resubmission_type,
+                cr.comment as resubmission_comment
+            FROM claims.claim_event ce
+            JOIN claims.ingestion_file if ON if.id = ce.ingestion_file_id
+            JOIN claims.claim_resubmission cr ON cr.claim_event_id = ce.id
+            WHERE ce.claim_key_id = (SELECT id FROM claims.claim_key WHERE claim_id = ?)
+              AND ce.type = 2
+            ORDER BY ce.event_time ASC
+            """;
+
+        List<ClaimDetailsResponse.ResubmissionData> resubmissions = new ArrayList<>();
+
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, claimId);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    Long claimEventId = rs.getLong("claim_event_id");
+                    
+                    // Get activity snapshots for this resubmission event
+                    List<ClaimDetailsResponse.ActivityInfo> activitiesInfo = getActivitySnapshotsForEvent(conn, claimEventId);
+                    
+                    // Get attachments for this specific resubmission event
+                    List<ClaimDetailsResponse.AttachmentInfo> attachments = getAttachmentsForEvent(conn, claimId, claimEventId);
+
+                    resubmissions.add(ClaimDetailsResponse.ResubmissionData.builder()
+                            .fileName(rs.getString("file_name"))
+                            .ingestionFileId(rs.getLong("ingestion_file_id"))
+                            .claimEventId(claimEventId)
+                            .resubmissionDate(rs.getTimestamp("resubmission_date") != null ? 
+                                    rs.getTimestamp("resubmission_date").toLocalDateTime() : null)
+                            .resubmissionType(rs.getString("resubmission_type"))
+                            .resubmissionComment(rs.getString("resubmission_comment"))
+                            .activitiesInfo(activitiesInfo)
+                            .attachments(attachments)
+                            .build());
+                }
+            }
+        }
+
+        return resubmissions;
+    }
+
+    /**
+     * Get all remittances (type=3) with activities and file names
+     */
+    private List<ClaimDetailsResponse.RemittanceData> getRemittancesData(Connection conn, String claimId) throws SQLException {
+        String sql = """
+            SELECT 
+                ce.id as claim_event_id,
+                if.id as ingestion_file_id,
+                if.file_name,
+                ce.event_time as remittance_date,
+                r.id as remittance_id,
+                rc.id as remittance_claim_id,
+                rc.payment_reference,
+                rc.date_settlement,
+                rc.denial_code,
+                rc.id_payer,
+                rc.provider_id
+            FROM claims.claim_event ce
+            JOIN claims.ingestion_file if ON if.id = ce.ingestion_file_id
+            JOIN claims.remittance r ON r.id = ce.remittance_id
+            JOIN claims.remittance_claim rc ON rc.remittance_id = r.id 
+                AND rc.claim_key_id = ce.claim_key_id
+            WHERE ce.claim_key_id = (SELECT id FROM claims.claim_key WHERE claim_id = ?)
+              AND ce.type = 3
+            ORDER BY ce.event_time ASC
+            """;
+
+        List<ClaimDetailsResponse.RemittanceData> remittances = new ArrayList<>();
+
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, claimId);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    Long remittanceClaimId = rs.getLong("remittance_claim_id");
+                    
+                    // Get remittance activities for this remittance
+                    List<ClaimDetailsResponse.RemittanceActivityInfo> activities = getRemittanceActivitiesForClaim(conn, remittanceClaimId);
+                    
+                    // Get attachments for this specific remittance event
+                    List<ClaimDetailsResponse.AttachmentInfo> attachments = getAttachmentsForEvent(conn, claimId, rs.getLong("claim_event_id"));
+
+                    remittances.add(ClaimDetailsResponse.RemittanceData.builder()
+                            .fileName(rs.getString("file_name"))
+                            .ingestionFileId(rs.getLong("ingestion_file_id"))
+                            .remittanceId(rs.getLong("remittance_id"))
+                            .remittanceClaimId(remittanceClaimId)
+                            .remittanceDate(rs.getTimestamp("remittance_date") != null ? 
+                                    rs.getTimestamp("remittance_date").toLocalDateTime() : null)
+                            .paymentReference(rs.getString("payment_reference"))
+                            .settlementDate(rs.getTimestamp("date_settlement") != null ? 
+                                    rs.getTimestamp("date_settlement").toLocalDateTime() : null)
+                            .denialCode(rs.getString("denial_code"))
+                            .remittancePayerId(rs.getString("id_payer"))
+                            .remittanceProviderId(rs.getString("provider_id"))
+                            .activities(activities)
+                            .attachments(attachments)
+                            .build());
+                }
+            }
+        }
+
+        return remittances;
+    }
+
+    /**
+     * Get attachments for a specific claim event
+     */
+    private List<ClaimDetailsResponse.AttachmentInfo> getAttachmentsForEvent(Connection conn, String claimId, Long claimEventId) throws SQLException {
+        String sql = """
+            SELECT 
+                ca.id,
+                ca.file_name,
+                ca.mime_type,
+                ca.data_length,
+                ca.created_at,
+                ce.event_time as attachment_event_time,
+                ce.type as attachment_event_type
+            FROM claims.claim_attachment ca
+            LEFT JOIN claims.claim_event ce ON ce.id = ca.claim_event_id
+            WHERE ca.claim_key_id = (SELECT id FROM claims.claim_key WHERE claim_id = ?)
+              AND ca.claim_event_id = ?
+            ORDER BY ca.created_at ASC
+            """;
+
+        List<ClaimDetailsResponse.AttachmentInfo> attachments = new ArrayList<>();
+
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, claimId);
+            stmt.setLong(2, claimEventId);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    attachments.add(ClaimDetailsResponse.AttachmentInfo.builder()
+                            .attachmentId(rs.getLong("id"))
+                            .fileName(rs.getString("file_name"))
+                            .mimeType(rs.getString("mime_type"))
+                            .dataLength(rs.getInt("data_length"))
+                            .createdAt(rs.getTimestamp("created_at") != null ? 
+                                    rs.getTimestamp("created_at").toLocalDateTime() : null)
+                            .attachmentEventTime(rs.getTimestamp("attachment_event_time") != null ? 
+                                    rs.getTimestamp("attachment_event_time").toLocalDateTime() : null)
+                            .attachmentEventType(getEventTypeDescription(rs.getInt("attachment_event_type")))
+                            .build());
+                }
+            }
+        }
+
+        return attachments;
+    }
+
+    /**
+     * Get activity snapshots for a specific claim event (for resubmissions)
+     */
+    private List<ClaimDetailsResponse.ActivityInfo> getActivitySnapshotsForEvent(Connection conn, Long claimEventId) throws SQLException {
+        String sql = """
+            SELECT 
+                cea.activity_id_at_event,
+                cea.start_at_event,
+                cea.type_at_event,
+                cea.code_at_event,
+                cea.quantity_at_event,
+                cea.net_at_event,
+                cea.clinician_at_event,
+                cea.prior_authorization_id_at_event,
+                cea.list_price_at_event,
+                cea.gross_at_event,
+                cea.patient_share_at_event,
+                cea.payment_amount_at_event,
+                cea.denial_code_at_event
+            FROM claims.claim_event_activity cea
+            WHERE cea.claim_event_id = ?
+            ORDER BY cea.activity_id_at_event
+            """;
+
+        List<ClaimDetailsResponse.ActivityInfo> activities = new ArrayList<>();
+
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, claimEventId);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    activities.add(ClaimDetailsResponse.ActivityInfo.builder()
+                            .activityNumber(rs.getString("activity_id_at_event"))
+                            .startDate(rs.getTimestamp("start_at_event") != null ? 
+                                    rs.getTimestamp("start_at_event").toLocalDateTime() : null)
+                            .activityType(rs.getString("type_at_event"))
+                            .activityCode(rs.getString("code_at_event"))
+                            .quantity(rs.getBigDecimal("quantity_at_event"))
+                            .netAmount(rs.getBigDecimal("net_at_event"))
+                            .clinician(rs.getString("clinician_at_event"))
+                            .priorAuthorizationId(rs.getString("prior_authorization_id_at_event"))
+                            .build());
+                }
+            }
+        }
+
+        return activities;
+    }
+
+    /**
+     * Get remittance activities for a specific remittance claim
+     */
+    private List<ClaimDetailsResponse.RemittanceActivityInfo> getRemittanceActivitiesForClaim(Connection conn, Long remittanceClaimId) throws SQLException {
+        String sql = """
+            SELECT 
+                ra.id,
+                ra.activity_id,
+                ra.start_at,
+                ra.type as activity_type,
+                ra.code as activity_code,
+                ra.quantity,
+                ra.net as activity_net,
+                ra.list_price,
+                ra.gross,
+                ra.patient_share,
+                ra.payment_amount,
+                ra.denial_code as activity_denial_code,
+                ra.clinician
+            FROM claims.remittance_activity ra
+            WHERE ra.remittance_claim_id = ?
+            ORDER BY ra.activity_id
+            """;
+
+        List<ClaimDetailsResponse.RemittanceActivityInfo> activities = new ArrayList<>();
+
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, remittanceClaimId);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    activities.add(ClaimDetailsResponse.RemittanceActivityInfo.builder()
+                            .remittanceActivityId(rs.getLong("id"))
+                            .activityId(rs.getString("activity_id"))
+                            .startDate(rs.getTimestamp("start_at") != null ? 
+                                    rs.getTimestamp("start_at").toLocalDateTime() : null)
+                            .activityType(rs.getString("activity_type"))
+                            .activityCode(rs.getString("activity_code"))
+                            .quantity(rs.getBigDecimal("quantity"))
+                            .netAmount(rs.getBigDecimal("activity_net"))
+                            .listPrice(rs.getBigDecimal("list_price"))
+                            .grossAmount(rs.getBigDecimal("gross"))
+                            .patientShare(rs.getBigDecimal("patient_share"))
+                            .paymentAmount(rs.getBigDecimal("payment_amount"))
+                            .denialCode(rs.getString("activity_denial_code"))
+                            .clinician(rs.getString("clinician"))
+                            .build());
+                }
+            }
+        }
+
+        return activities;
     }
 }

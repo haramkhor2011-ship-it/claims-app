@@ -10,6 +10,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securepass}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgresql.conf:/var/lib/postgresql/data/pg_stat.conf:ro
+    command: postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.max=10000 -c pg_stat_statements.track=all
     ports:
       - "5432:5432"
     networks:
@@ -45,6 +47,7 @@ services:
       dockerfile: Dockerfile
     container_name: claims-db-init
     environment:
+      POSTGRES_HOST: postgres
       POSTGRES_DB: ${POSTGRES_DB:-claims}
       POSTGRES_USER: ${POSTGRES_USER:-claims_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securepass}
@@ -61,15 +64,24 @@ services:
       dockerfile: Dockerfile
     container_name: claims-app
     environment:
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-docker,ingestion,prod,soap}
+      SPRING_PROFILES_ACTIVE: docker,ingestion,prod,soap
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/claims
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:-claims_user}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-securepass}
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
       DB_USER: ${DB_USER:-claims_user}
       DB_PASSWORD: ${DB_PASSWORD:-securepass}
+      REDIS_HOST: redis
       DHPO_SOAP_ENDPOINT: ${DHPO_SOAP_ENDPOINT:-https://qa.eclaimlink.ae/dhpo/ValidateTransactions.asmx}
       SOAP_POLL_INTERVAL_MS: ${SOAP_POLL_INTERVAL_MS:-1800000}
       CLAIMS_AME_STORE_PASS: ${CLAIMS_AME_STORE_PASS}
       JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx2048m -XX:+UseG1GC}
+      JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx2048m -XX:+UseG1GC --enable-preview}
+      CLAIMS_REFDATA_BOOTSTRAP_ENABLED: "true"
     volumes:
       - ./data/ready:/app/data/ready
       - ./config:/app/config
@@ -79,6 +91,10 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     networks:
       - claims-network
     restart: unless-stopped

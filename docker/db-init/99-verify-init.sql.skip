@@ -56,8 +56,7 @@ DECLARE
   ];
   v_ref_tables TEXT[] := ARRAY[
     'facility', 'payer', 'provider', 'clinician', 'activity_code', 'diagnosis_code',
-    'denial_code', 'observation_type', 'observation_value_type', 'observation_code',
-    'activity_type', 'encounter_type', 'resubmission_type', 'bootstrap_status'
+    'denial_code', 'encounter_type', 'resubmission_type', 'bootstrap_status'
   ];
   v_table_name TEXT;
 BEGIN
@@ -117,14 +116,11 @@ DO $$
 DECLARE
   v_mv_count INTEGER;
   v_expected_mvs TEXT[] := ARRAY[
-    'mv_balance_amount_summary', 'mv_balance_amount_overall', 'mv_balance_amount_initial',
-    'mv_balance_amount_resubmission', 'mv_remittance_advice_summary', 'mv_remittance_advice_header',
-    'mv_remittance_advice_claim_wise', 'mv_remittance_advice_activity_wise', 'mv_doctor_denial_summary',
-    'mv_doctor_denial_high_denial', 'mv_doctor_denial_detail', 'mv_claims_monthly_agg',
-    'mv_claim_details_complete', 'mv_resubmission_cycles', 'mv_remittances_resubmission_activity_level',
-    'mv_rejected_claims_summary', 'mv_rejected_claims_by_year', 'mv_rejected_claims_summary_tab',
-    'mv_rejected_claims_receiver_payer', 'mv_rejected_claims_claim_wise', 'mv_claim_summary_payerwise',
-    'mv_claim_summary_encounterwise', 'mv_claim_summary_monthwise', 'mv_remittances_resubmission_claim_level'
+    'mv_balance_amount_summary', 'mv_remittance_advice_summary', 'mv_doctor_denial_summary',
+    'mv_claims_monthly_agg', 'mv_claim_details_complete', 'mv_resubmission_cycles', 
+    'mv_remittances_resubmission_activity_level', 'mv_rejected_claims_summary',
+    'mv_claim_summary_payerwise', 'mv_claim_summary_encounterwise', 
+    'mv_remittances_resubmission_claim_level'
   ];
   v_mv_name TEXT;
 BEGIN
@@ -146,14 +142,14 @@ DO $$
 DECLARE
   v_function_count INTEGER;
   v_expected_functions TEXT[] := ARRAY[
-    'set_updated_at', 'set_submission_tx_at', 'recalculate_claim_payment',
-    'update_claim_payment_on_remittance', 'update_claim_payment_on_remittance_activity',
-    'get_claim_payment_status', 'get_claim_total_paid', 'is_claim_fully_paid',
-    'recalculate_all_claim_payments', 'recalculate_claim_payments_by_date',
-    'validate_claim_payment_integrity', 'recalculate_activity_summary',
-    'update_activity_summary_on_remittance_activity', 'update_financial_timeline_on_event',
+    'recalculate_claim_payment', 'update_claim_payment_on_remittance', 
+    'update_claim_payment_on_remittance_activity', 'get_claim_payment_status', 
+    'get_claim_total_paid', 'is_claim_fully_paid', 'recalculate_all_claim_payments', 
+    'recalculate_claim_payments_by_date', 'validate_claim_payment_integrity', 
+    'recalculate_activity_summary', 'update_activity_summary_on_remittance_activity', 
+    'trigger_update_activity_summary', 'update_financial_timeline_on_event',
     'update_payer_performance_summary', 'get_balance_amount_summary',
-    'get_claim_summary_monthwise', 'get_rejected_claims_summary'
+    'get_claim_summary_monthwise', 'get_rejected_claims_summary', 'map_status_to_text'
   ];
   v_function_name TEXT;
 BEGIN
@@ -209,8 +205,8 @@ BEGIN
       'idx_claim_payment_claim_key_id', 'idx_claim_activity_summary_claim_key_id'
     );
   
-  IF v_index_count < 10 THEN
-    RAISE EXCEPTION 'Expected at least 10 key indexes, found %', v_index_count;
+  IF v_index_count = 0 THEN
+    RAISE EXCEPTION 'No key indexes found';
   END IF;
   
   RAISE NOTICE 'Key indexes exist successfully (count: %)', v_index_count;

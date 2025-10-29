@@ -99,7 +99,7 @@
  * @since 1.0
  * @author Claims Team
  */
- * </ul>
+ /* </ul>
  *
  * <h3>Duplicate Prevention</h3>
  * <ul>
@@ -170,7 +170,9 @@ import com.acme.claims.ingestion.audit.RunContext;
 import com.acme.claims.ingestion.config.IngestionProperties;
 import com.acme.claims.ingestion.fetch.Fetcher;
 import com.acme.claims.ingestion.fetch.WorkItem;
+import com.acme.claims.ingestion.persist.PersistService;
 import com.acme.claims.ingestion.verify.VerifyService;
+import java.math.BigDecimal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -203,6 +205,7 @@ public class Orchestrator {
     private final IngestionAudit audit;
     private final Environment env;
     private final JdbcTemplate jdbc;
+    private final PersistService persist; // For audit calculations
 
     /**
      * # processingFiles - Thread-Safe File Deduplication Set
@@ -240,7 +243,8 @@ public class Orchestrator {
                         Acker acker,
                         IngestionAudit audit,
                         Environment env,
-                        JdbcTemplate jdbc) {
+                        JdbcTemplate jdbc,
+                        PersistService persist) {
         this.fetcher = fetcher;
         this.props = props;
         this.queue = queue;
@@ -251,6 +255,7 @@ public class Orchestrator {
         this.audit = audit;
         this.env = env;
         this.jdbc = jdbc;
+        this.persist = persist;
     }
 
     /**
@@ -273,7 +278,7 @@ public class Orchestrator {
      *   <li><b>Worker Count:</b> Number of parallel processing threads</li>
      * </ul>
      *
-     * @param event Spring application ready event
+     * Spring application ready event
      */
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
@@ -394,8 +399,16 @@ public class Orchestrator {
                 }
             }
 
-            if (queue.remainingCapacity() > (workers * 2)) {
-                try { fetcher.resume(); } catch (Exception ignore) {}
+            // Resume fetcher when queue has 30% capacity remaining (70% full)
+            int queueCapacity = props.getQueue().getCapacity();
+            int resumeThreshold = (int) (queueCapacity * 0.3);
+            if (queue.remainingCapacity() > resumeThreshold) {
+                try { 
+                    fetcher.resume(); 
+                    log.debug("Fetcher resumed - queue capacity: {}/{} ({}% full)", 
+                        queue.size(), queueCapacity, 
+                        (int) ((queue.size() * 100.0) / queueCapacity));
+                } catch (Exception ignore) {}
             }
             log.debug("Drain cycle end; dispatched={}, runId={}", submitted, runId);
             
@@ -497,9 +510,48 @@ public class Orchestrator {
 
             // Audit successful file processing
             if (currentRunId != null && ingestionFileId != null) {
-                audit.fileOkSafely(currentRunId, ingestionFileId, verified, 
+                long durationMs = (System.nanoTime() - t0) / 1_000_000L;
+                String mode = (wi.sourcePath() != null) ? "file" : "memory";
+                String workerThread = Thread.currentThread().getName();
+                
+                // Calculate amounts and entity counts for audit (non-blocking with fallback to null/zero)
+                BigDecimal totalGross = null;
+                BigDecimal totalNet = null;
+                BigDecimal totalPatientShare = null;
+                int uniquePayers = 0;
+                int uniqueProviders = 0;
+                
+                try {
+                    var amounts = persist.calculateAmountTotals(ingestionFileId);
+                    totalGross = amounts.totalGross();
+                    totalNet = amounts.totalNet();
+                    totalPatientShare = amounts.totalPatientShare();
+                    
+                    var entities = persist.calculateEntityCounts(ingestionFileId);
+                    uniquePayers = entities.uniquePayers();
+                    uniqueProviders = entities.uniqueProviders();
+                    
+                    log.debug("Audit calculations for fileId={}: gross={}, net={}, patient={}, payers={}, providers={}",
+                        ingestionFileId, totalGross, totalNet, totalPatientShare, uniquePayers, uniqueProviders);
+                } catch (Exception calcEx) {
+                    log.warn("Failed to calculate audit values for fileId={}, using defaults: {}", 
+                        ingestionFileId, calcEx.getMessage());
+                    // Continue with null/zero values - non-blocking
+                }
+                
+                audit.fileOkEnhancedSafely(currentRunId, ingestionFileId, verified,
                     result.parsedClaims(), result.persistedClaims(),
-                    result.parsedActivities(), result.persistedActivities());
+                    result.parsedActivities(), result.persistedActivities(),
+                    result.parsedEncounters(), result.persistedEncounters(),
+                    result.parsedDiagnoses(), result.persistedDiagnoses(),
+                    result.parsedObservations(), result.persistedObservations(),
+                    result.projectedEvents(), result.projectedStatusRows(),
+                    durationMs, wi.xmlBytes() != null ? wi.xmlBytes().length : 0L,
+                    mode, workerThread,
+                    totalGross, totalNet, totalPatientShare,
+                    uniquePayers, uniqueProviders,
+                    acker != null, success,
+                    verified ? 0 : 1);
             }
 
             long ms = (System.nanoTime() - t0) / 1_000_000;

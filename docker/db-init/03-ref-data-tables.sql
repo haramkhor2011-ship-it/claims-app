@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS claims_ref.payer (
   status         TEXT DEFAULT 'ACTIVE',
   classification TEXT,
   created_at     TIMESTAMPTZ DEFAULT NOW(),
-  updated_at     TIMESTAMPTZ DEFAULT NOW()
+  updated_at     TIMESTAMPTZ
 );
 
 COMMENT ON TABLE claims_ref.payer IS 'Master list of Payers (Claim.PayerID)';
@@ -161,7 +161,6 @@ CREATE TABLE IF NOT EXISTS claims_ref.denial_code (
   id          BIGSERIAL PRIMARY KEY,
   code        TEXT NOT NULL UNIQUE,
   description TEXT,
-  payer_code  TEXT,  -- optional scope
   created_at  TIMESTAMPTZ DEFAULT NOW(),
   updated_at  TIMESTAMPTZ
 );
@@ -169,9 +168,7 @@ CREATE TABLE IF NOT EXISTS claims_ref.denial_code (
 COMMENT ON TABLE claims_ref.denial_code IS 'Adjudication denial codes; optionally scoped by payer_code';
 
 CREATE INDEX IF NOT EXISTS idx_denial_code_lookup ON claims_ref.denial_code(code);
-CREATE INDEX IF NOT EXISTS idx_denial_code_payer ON claims_ref.denial_code(payer_code);
 CREATE INDEX IF NOT EXISTS idx_ref_denial_desc_trgm ON claims_ref.denial_code USING gin (description gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_ref_denial_payer ON claims_ref.denial_code(payer_code);
 
 -- ==========================================================================================================
 -- SECTION 8: OBSERVATION DICTIONARIES
@@ -182,17 +179,12 @@ CREATE TABLE IF NOT EXISTS claims_ref.observation_type (
   description  TEXT
 );
 
-CREATE TABLE IF NOT EXISTS claims_ref.observation_value_type (
-  value_type   TEXT PRIMARY KEY,  -- curated unit/value type (optional)
-  description  TEXT
-);
-
 CREATE TABLE IF NOT EXISTS claims_ref.observation_code (
   id          BIGSERIAL PRIMARY KEY,
   code        TEXT NOT NULL UNIQUE, -- curated short-hand like A1C/BPS/etc.
   description TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ DEFAULT NOW()
+  updated_at  TIMESTAMPTZ
 );
 
 -- Seed observation types
@@ -211,11 +203,6 @@ ON CONFLICT (obs_type) DO UPDATE SET description = EXCLUDED.description;
 -- SECTION 9: TYPE DICTIONARIES
 -- ==========================================================================================================
 
-CREATE TABLE IF NOT EXISTS claims_ref.activity_type (
-  type_code   TEXT PRIMARY KEY,
-  description TEXT
-);
-
 CREATE TABLE IF NOT EXISTS claims_ref.encounter_type (
   type_code   TEXT PRIMARY KEY,
   description TEXT
@@ -225,17 +212,6 @@ CREATE TABLE IF NOT EXISTS claims_ref.resubmission_type (
   type_code   TEXT PRIMARY KEY,
   description TEXT
 );
-
--- Seed activity types
-INSERT INTO claims_ref.activity_type(type_code, description) VALUES
-  ('PROCEDURE', 'Medical procedure'),
-  ('DIAGNOSIS', 'Diagnostic service'),
-  ('TREATMENT', 'Treatment service'),
-  ('CONSULTATION', 'Medical consultation'),
-  ('LABORATORY', 'Laboratory test'),
-  ('RADIOLOGY', 'Radiology service'),
-  ('PHARMACY', 'Pharmacy service')
-ON CONFLICT (type_code) DO UPDATE SET description = EXCLUDED.description;
 
 -- Seed encounter types
 INSERT INTO claims_ref.encounter_type(type_code, description) VALUES
@@ -249,14 +225,6 @@ INSERT INTO claims_ref.encounter_type(type_code, description) VALUES
   ('DISCHARGE', 'Patient discharge'),
   ('DEPARTURE', 'Patient departure'),
   ('COMPLETION', 'Service completion')
-ON CONFLICT (type_code) DO UPDATE SET description = EXCLUDED.description;
-
--- Seed resubmission types
-INSERT INTO claims_ref.resubmission_type(type_code, description) VALUES
-  ('correction','Correction'),
-  ('internal complaint','Internal complaint'),
-  ('legacy','Legacy'),
-  ('reconciliation','Reconciliation')
 ON CONFLICT (type_code) DO UPDATE SET description = EXCLUDED.description;
 
 -- ==========================================================================================================

@@ -542,20 +542,28 @@ COMMENT ON MATERIALIZED VIEW claims.mv_resubmission_cycles IS 'Pre-computed resu
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittances_resubmission_activity_level CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_remittances_resubmission_activity_level AS
 WITH activity_financials AS (
-    -- CUMULATIVE-WITH-CAP: Calculate financial metrics per activity using claim_activity_summary
-    -- WHY: Prevents overcounting from multiple remittances per activity, uses latest denial logic
-    -- HOW: Leverages claims.claim_activity_summary which already implements cumulative-with-cap semantics
+    -- Use pre-aggregated claim_activity_summary directly - no need to recalculate from raw data
+    -- WHY: claim_activity_summary already has cumulative-with-cap semantics and all financial metrics
+    -- HOW: Simply join and use pre-computed values from claims.claim_activity_summary
     SELECT 
         a.id as activity_internal_id,
         a.claim_id,
         a.activity_id,
-        a.net::numeric as submitted_amount,
+        COALESCE(cas.submitted_amount, a.net::numeric, 0::numeric) as submitted_amount,  -- Use summary submitted_amount if available
         COALESCE(cas.paid_amount, 0::numeric) as total_paid,                    -- capped paid across remittances
         COALESCE(cas.submitted_amount, 0::numeric) as total_remitted,          -- submitted as remitted baseline
         COALESCE(cas.denied_amount, 0::numeric) as rejected_amount,            -- denied only when latest denial and zero paid
         COALESCE(cas.remittance_count, 0) as remittance_count,                 -- remittance count from pre-computed summary
-        (cas.denial_codes)[1] as latest_denial_code,                           -- latest denial from pre-computed summary
-        (cas.denial_codes)[array_length(cas.denial_codes, 1)] as initial_denial_code,  -- first denial from pre-computed summary
+        CASE 
+            WHEN cas.denial_codes IS NOT NULL AND array_length(cas.denial_codes, 1) > 0 
+            THEN (cas.denial_codes)[1] 
+            ELSE NULL 
+        END as latest_denial_code,                           -- latest denial from pre-computed summary
+        CASE 
+            WHEN cas.denial_codes IS NOT NULL AND array_length(cas.denial_codes, 1) > 0 
+            THEN (cas.denial_codes)[array_length(cas.denial_codes, 1)] 
+            ELSE NULL 
+        END as initial_denial_code,  -- first denial from pre-computed summary
         -- Additional calculated fields using pre-computed activity status
         CASE WHEN cas.activity_status = 'FULLY_PAID' THEN 1 ELSE 0 END as fully_paid_count,
         CASE WHEN cas.activity_status = 'FULLY_PAID' THEN cas.paid_amount ELSE 0::numeric END as fully_paid_amount,
@@ -563,20 +571,15 @@ WITH activity_financials AS (
         CASE WHEN cas.activity_status = 'REJECTED' THEN cas.denied_amount ELSE 0::numeric END as fully_rejected_amount,
         CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN 1 ELSE 0 END as partially_paid_count,
         CASE WHEN cas.activity_status = 'PARTIALLY_PAID' THEN cas.paid_amount ELSE 0::numeric END as partially_paid_amount,
-        -- Self-pay detection
-        COUNT(CASE WHEN c.payer_id = 'Self-Paid' THEN 1 END) as self_pay_count,
-        SUM(CASE WHEN c.payer_id = 'Self-Paid' THEN a.net ELSE 0::numeric END) as self_pay_amount,
-        -- Taken back amounts (from raw remittance data as this is not in summary)
-        COALESCE(SUM(CASE WHEN ra.payment_amount < 0 THEN ABS(ra.payment_amount) ELSE 0::numeric END), 0::numeric) as taken_back_amount,
-        COALESCE(COUNT(CASE WHEN ra.payment_amount < 0 THEN 1 END), 0) as taken_back_count
+        -- Self-pay detection (need to check claim.payer_id as this is not in summary)
+        CASE WHEN c.payer_id = 'Self-Paid' THEN 1 ELSE 0 END as self_pay_count,
+        CASE WHEN c.payer_id = 'Self-Paid' THEN COALESCE(cas.submitted_amount, a.net::numeric, 0) ELSE 0::numeric END as self_pay_amount,
+        -- Taken back amounts (NOW USING PRE-AGGREGATED SUMMARY DATA)
+        COALESCE(cas.taken_back_amount, 0::numeric) as taken_back_amount,
+        COALESCE(cas.taken_back_count, 0) as taken_back_count
     FROM claims.activity a
     LEFT JOIN claims.claim c ON a.claim_id = c.id
     LEFT JOIN claims.claim_activity_summary cas ON cas.claim_key_id = c.claim_key_id AND cas.activity_id = a.activity_id
-    LEFT JOIN claims.remittance_activity ra ON a.activity_id = ra.activity_id
-      AND ra.remittance_claim_id IN (
-        SELECT id FROM claims.remittance_claim rc2 WHERE rc2.claim_key_id = c.claim_key_id
-      )
-    GROUP BY a.id, a.claim_id, a.activity_id, a.net, c.payer_id, cas.paid_amount, cas.submitted_amount, cas.denied_amount, cas.remittance_count, cas.denial_codes, cas.activity_status
 ),
 claim_resubmission_summary AS (
     -- Calculate resubmission metrics per claim
@@ -822,6 +825,130 @@ CREATE INDEX IF NOT EXISTS idx_mv_remittances_resubmission_clinician
 ON claims.mv_remittances_resubmission_activity_level(clinician, encounter_start);
 
 COMMENT ON MATERIALIZED VIEW claims.mv_remittances_resubmission_activity_level IS 'Pre-computed remittances and resubmission activity-level data for sub-second report performance - FIXED: Aggregated cycles to prevent duplicates';
+
+-- ==========================================================================================================
+-- MATERIALIZED VIEW: mv_remittances_resubmission_claim_level (Claim-level remittance and resubmission data)
+-- ==========================================================================================================
+DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittances_resubmission_claim_level CASCADE;
+CREATE MATERIALIZED VIEW claims.mv_remittances_resubmission_claim_level AS
+WITH claim_remittance_summary AS (
+  -- Pre-aggregate remittance data at claim level
+  SELECT 
+    rc.claim_key_id,
+    COUNT(DISTINCT rc.id) AS remittance_count,
+    SUM(ra.payment_amount) AS total_payment_amount,
+    SUM(CASE WHEN ra.denial_code IS NOT NULL THEN ra.net ELSE 0 END) AS total_denied_amount,
+    MIN(rc.date_settlement) AS first_remittance_date,
+    MAX(rc.date_settlement) AS last_remittance_date,
+    MAX(rc.payment_reference) AS last_payment_reference,
+    MAX(r.receiver_name) AS receiver_name,
+    MAX(r.receiver_id) AS receiver_id
+  FROM claims.remittance_claim rc
+  JOIN claims.remittance r ON r.id = rc.remittance_id
+  LEFT JOIN claims.remittance_activity ra ON ra.remittance_claim_id = rc.id
+  GROUP BY rc.claim_key_id
+),
+claim_resubmission_summary AS (
+  -- Pre-aggregate resubmission data at claim level
+  SELECT 
+    ce.claim_key_id,
+    COUNT(*) AS resubmission_count,
+    MIN(ce.event_time) AS first_resubmission_date,
+    MAX(ce.event_time) AS last_resubmission_date,
+    MAX(cr.comment) AS last_resubmission_comment,
+    MAX(cr.resubmission_type) AS last_resubmission_type
+  FROM claims.claim_event ce
+  JOIN claims.claim_resubmission cr ON cr.claim_event_id = ce.id
+  WHERE ce.type = 2  -- RESUBMISSION events
+  GROUP BY ce.claim_key_id
+)
+SELECT 
+  ck.id AS claim_key_id,
+  ck.claim_id AS external_claim_id,
+  c.id AS claim_id_internal,
+  c.payer_id,
+  c.provider_id,
+  c.member_id,
+  c.emirates_id_number,
+  c.gross AS claim_gross_amount,
+  c.patient_share AS claim_patient_share,
+  c.net AS claim_net_amount,
+  c.tx_at AS claim_submission_date,
+  c.comments AS claim_comments,
+  
+  -- Encounter information
+  e.facility_id,
+  e.type AS encounter_type,
+  e.start_at AS encounter_start,
+  e.end_at AS encounter_end,
+  
+  -- Remittance summary
+  COALESCE(crs.remittance_count, 0) AS remittance_count,
+  COALESCE(crs.total_payment_amount, 0) AS total_payment_amount,
+  COALESCE(crs.total_denied_amount, 0) AS total_denied_amount,
+  crs.first_remittance_date,
+  crs.last_remittance_date,
+  crs.last_payment_reference,
+  crs.receiver_name,
+  crs.receiver_id,
+  
+  -- Resubmission summary
+  COALESCE(crss.resubmission_count, 0) AS resubmission_count,
+  crss.first_resubmission_date,
+  crss.last_resubmission_date,
+  crss.last_resubmission_comment,
+  crss.last_resubmission_type,
+  
+  -- Calculated fields
+  c.net - COALESCE(crs.total_payment_amount, 0) AS balance_amount,
+  CASE 
+    WHEN c.net - COALESCE(crs.total_payment_amount, 0) > 0 THEN 'PENDING'
+    WHEN c.net - COALESCE(crs.total_payment_amount, 0) = 0 THEN 'PAID'
+    ELSE 'OVERPAID'
+  END AS payment_status,
+  
+  CASE 
+    WHEN COALESCE(crss.resubmission_count, 0) > 0 THEN true
+    ELSE false
+  END AS has_resubmissions,
+  
+  CASE 
+    WHEN COALESCE(crs.remittance_count, 0) > 0 THEN true
+    ELSE false
+  END AS has_remittances,
+  
+  -- Reference data
+  f.name AS facility_name,
+  f.facility_code,
+  p.name AS provider_name,
+  p.provider_code,
+  pay.name AS payer_name,
+  pay.payer_code
+
+FROM claims.claim_key ck
+JOIN claims.claim c ON c.claim_key_id = ck.id
+LEFT JOIN claims.encounter e ON e.claim_id = c.id
+LEFT JOIN claims_ref.facility f ON f.id = e.facility_ref_id
+LEFT JOIN claims_ref.provider p ON p.id = c.provider_ref_id
+LEFT JOIN claims_ref.payer pay ON pay.id = c.payer_ref_id
+LEFT JOIN claim_remittance_summary crs ON crs.claim_key_id = ck.id
+LEFT JOIN claim_resubmission_summary crss ON crss.claim_key_id = ck.id;
+
+-- SUB-SECOND PERFORMANCE INDEXES
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittances_resubmission_claim_level_unique 
+ON claims.mv_remittances_resubmission_claim_level(claim_key_id);
+
+CREATE INDEX IF NOT EXISTS idx_mv_remittances_resubmission_claim_level_covering 
+ON claims.mv_remittances_resubmission_claim_level(payer_id, claim_submission_date) 
+INCLUDE (remittance_count, resubmission_count, payment_status);
+
+CREATE INDEX IF NOT EXISTS idx_mv_remittances_resubmission_claim_level_facility 
+ON claims.mv_remittances_resubmission_claim_level(facility_id, encounter_start);
+
+CREATE INDEX IF NOT EXISTS idx_mv_remittances_resubmission_claim_level_status 
+ON claims.mv_remittances_resubmission_claim_level(payment_status, has_resubmissions);
+
+COMMENT ON MATERIALIZED VIEW claims.mv_remittances_resubmission_claim_level IS 'Claim-level view of remittance and resubmission data with pre-computed aggregations';
 
 -- ==========================================================================================================
 -- SECTION 7: REFRESH FUNCTIONS
@@ -1348,9 +1475,14 @@ COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_encounterwise IS 'Pre-compu
 -- ==========================================================================================================
 
 -- ==========================================================================================================
--- BALANCE AMOUNT REPORT - TAB-SPECIFIC MVs
+-- COMMENTED OUT: BALANCE AMOUNT REPORT - TAB-SPECIFIC MVs (3 MVs)
 -- ==========================================================================================================
-
+-- These MVs are aliases of views. They select from base views using "SELECT * FROM views"
+-- which creates dependency on view column structure. Indexes need to be added manually after 
+-- verifying actual column structure of the materialized views.
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 -- Tab A: Overall balances
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_balance_amount_overall CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_balance_amount_overall AS
@@ -1365,11 +1497,20 @@ SELECT * FROM claims.v_initial_not_remitted_balance;
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_balance_amount_resubmission CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_balance_amount_resubmission AS
 SELECT * FROM claims.v_after_resubmission_not_remitted_balance;
+*/
 
 -- ==========================================================================================================
--- REMITTANCE ADVICE REPORT - TAB-SPECIFIC MVs
+-- COMMENTED OUT: REMITTANCE ADVICE REPORT - TAB-SPECIFIC MVs (3 MVs)
 -- ==========================================================================================================
-
+-- These MVs are aliases of views. They select from base views using "SELECT * FROM views"
+-- which creates dependency on view column structure. Indexes need to be added manually after 
+-- verifying actual column structure of the materialized views.
+--
+-- NOTE: The underlying views have schema errors (non-existent columns in remittance table)
+-- which means these MVs will also fail with the same errors when executed.
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 -- Tab A: Header summary
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittance_advice_header CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_remittance_advice_header AS
@@ -1384,11 +1525,20 @@ SELECT * FROM claims.v_remittance_advice_claim_wise;
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittance_advice_activity_wise CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_remittance_advice_activity_wise AS
 SELECT * FROM claims.v_remittance_advice_activity_wise;
+*/
 
 -- ==========================================================================================================
--- DOCTOR DENIAL REPORT - TAB-SPECIFIC MVs
+-- COMMENTED OUT: DOCTOR DENIAL REPORT - TAB-SPECIFIC MVs (2 MVs)
 -- ==========================================================================================================
-
+-- These MVs are aliases of views. They select from base views using "SELECT * FROM views"
+-- which creates dependency on view column structure. Indexes need to be added manually after 
+-- verifying actual column structure of the materialized views.
+--
+-- NOTE: The underlying views have schema errors (non-existent columns in activity/remittance tables)
+-- which means these MVs will also fail with the same errors when executed.
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 -- Tab A: High denial doctors
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_doctor_denial_high_denial CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_doctor_denial_high_denial AS
@@ -1398,11 +1548,20 @@ SELECT * FROM claims.v_doctor_denial_high_denial;
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_doctor_denial_detail CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_doctor_denial_detail AS
 SELECT * FROM claims.v_doctor_denial_detail;
+*/
 
 -- ==========================================================================================================
--- REJECTED CLAIMS REPORT - TAB-SPECIFIC MVs
+-- COMMENTED OUT: REJECTED CLAIMS REPORT - TAB-SPECIFIC MVs (4 MVs)
 -- ==========================================================================================================
-
+-- These MVs are aliases of views. They select from base views using "SELECT * FROM views"
+-- which creates dependency on view column structure. Indexes need to be added manually after 
+-- verifying actual column structure of the materialized views.
+--
+-- NOTE: The underlying views have schema errors (non-existent columns in remittance table)
+-- which means these MVs will also fail with the same errors when executed.
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
 -- Tab A: Summary by year
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_by_year CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_rejected_claims_by_year AS
@@ -1422,81 +1581,63 @@ SELECT * FROM claims.v_rejected_claims_receiver_payer;
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_rejected_claims_claim_wise CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_rejected_claims_claim_wise AS
 SELECT * FROM claims.v_rejected_claims_claim_wise;
+*/
 
 -- ==========================================================================================================
--- CLAIM SUMMARY REPORT - TAB-SPECIFIC MVs
+-- COMMENTED OUT: CLAIM SUMMARY AND RESUBMISSION MVs (2 MVs)
 -- ==========================================================================================================
-
--- Tab A: Monthwise (missing MV)
+-- These MVs are aliases of views. They select from base views using "SELECT * FROM views"
+-- which creates dependency on view column structure. Indexes need to be added manually after 
+-- verifying actual column structure of the materialized views.
+--
+-- ORIGINAL DEFINITION (COMMENTED OUT):
+/*
+-- Tab A: Monthwise (claim summary)
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_claim_summary_monthwise CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_claim_summary_monthwise AS
 SELECT * FROM claims.v_claim_summary_monthwise;
 
--- ==========================================================================================================
--- RESUBMISSION REPORT - TAB-SPECIFIC MVs
--- ==========================================================================================================
-
--- Tab B: Claim level (missing MV)
+-- Tab B: Claim level (resubmission report)
 DROP MATERIALIZED VIEW IF EXISTS claims.mv_remittances_resubmission_claim_level CASCADE;
 CREATE MATERIALIZED VIEW claims.mv_remittances_resubmission_claim_level AS
 SELECT * FROM claims.v_remittances_resubmission_claim_level;
+*/
 
 -- ==========================================================================================================
 -- TAB-SPECIFIC MV INDEXES
 -- ==========================================================================================================
-
--- Balance Amount MVs
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_balance_amount_overall_unique 
-ON claims.mv_balance_amount_overall(claim_key_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_balance_amount_initial_unique 
-ON claims.mv_balance_amount_initial(claim_key_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_balance_amount_resubmission_unique 
-ON claims.mv_balance_amount_resubmission(claim_key_id);
-
--- Remittance Advice MVs
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittance_advice_header_unique 
-ON claims.mv_remittance_advice_header(claim_key_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittance_advice_claim_wise_unique 
-ON claims.mv_remittance_advice_claim_wise(claim_key_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittance_advice_activity_wise_unique 
-ON claims.mv_remittance_advice_activity_wise(claim_key_id, activity_id);
-
--- Doctor Denial MVs
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_doctor_denial_high_denial_unique 
-ON claims.mv_doctor_denial_high_denial(clinician_id, facility_id, report_month);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_doctor_denial_detail_unique 
-ON claims.mv_doctor_denial_detail(claim_key_id, activity_id);
-
--- Rejected Claims MVs
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_by_year_unique 
-ON claims.mv_rejected_claims_by_year(claim_year, facility_id, payer_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_summary_tab_unique 
-ON claims.mv_rejected_claims_summary_tab(facility_id, payer_id, report_month);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_receiver_payer_unique 
-ON claims.mv_rejected_claims_receiver_payer(facility_id, payer_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rejected_claims_claim_wise_unique 
-ON claims.mv_rejected_claims_claim_wise(claim_key_id, activity_id);
-
--- Claim Summary MVs
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_claim_summary_monthwise_unique 
-ON claims.mv_claim_summary_monthwise(month_bucket, facility_id, payer_id, encounter_type);
-
--- Resubmission MVs
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_remittances_resubmission_claim_level_unique 
-ON claims.mv_remittances_resubmission_claim_level(claim_key_id);
+-- NOTE: Indexes for view-based MVs are removed because these MVs are created with "SELECT * FROM views"
+-- and their column structure depends on the underlying views. Indexes should be added manually after verifying
+-- the actual column structure of the materialized views.
+-- 
+-- To add indexes later, use this query to check the columns:
+-- SELECT column_name, data_type 
+-- FROM information_schema.columns 
+-- WHERE table_schema = 'claims' AND table_name = 'mv_name_here';
+-- 
+-- View-based MVs that need manual indexing:
+-- - mv_balance_amount_overall (from v_balance_amount_to_be_received)
+-- - mv_balance_amount_initial (from v_initial_not_remitted_balance)
+-- - mv_balance_amount_resubmission (from v_after_resubmission_not_remitted_balance)
+-- - mv_remittance_advice_header (from v_remittance_advice_header)
+-- - mv_remittance_advice_claim_wise (from v_remittance_advice_claim_wise)
+-- - mv_remittance_advice_activity_wise (from v_remittance_advice_activity_wise)
+-- - mv_doctor_denial_high_denial (from v_doctor_denial_high_denial)
+-- - mv_doctor_denial_detail (from v_doctor_denial_detail)
+-- - mv_rejected_claims_by_year (from v_rejected_claims_summary_by_year)
+-- - mv_rejected_claims_summary_tab (from v_rejected_claims_summary)
+-- - mv_rejected_claims_receiver_payer (from v_rejected_claims_receiver_payer)
+-- - mv_rejected_claims_claim_wise (from v_rejected_claims_claim_wise)
+-- - mv_claim_summary_monthwise (from v_claim_summary_monthwise)
+-- - mv_remittances_resubmission_claim_level (from v_remittances_resubmission_claim_level)
 
 -- ==========================================================================================================
--- TAB-SPECIFIC MV COMMENTS
+-- TAB-SPECIFIC MV COMMENTS (COMMENTED OUT)
 -- ==========================================================================================================
-
+-- COMMENT statements for the 14 view-based MVs are commented out because the MVs themselves are commented out.
+--
+-- ORIGINAL COMMENTS (COMMENTED OUT):
+/*
 COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_overall IS 'Tab A: Overall balances - matches v_balance_amount_to_be_received';
 COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_initial IS 'Tab B: Initial not remitted - matches v_initial_not_remitted_balance';
 COMMENT ON MATERIALIZED VIEW claims.mv_balance_amount_resubmission IS 'Tab C: After resubmission - matches v_after_resubmission_not_remitted_balance';
@@ -1516,6 +1657,7 @@ COMMENT ON MATERIALIZED VIEW claims.mv_rejected_claims_claim_wise IS 'Tab D: Cla
 COMMENT ON MATERIALIZED VIEW claims.mv_claim_summary_monthwise IS 'Tab A: Monthwise - matches v_claim_summary_monthwise';
 
 COMMENT ON MATERIALIZED VIEW claims.mv_remittances_resubmission_claim_level IS 'Tab B: Claim level - matches v_remittances_resubmission_claim_level';
+*/
 
 -- ==========================================================================================================
 -- ADDITIONAL PERFORMANCE INDEXES (from docker file)
@@ -1554,6 +1696,7 @@ BEGIN
   REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_rejected_claims_summary;
   REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claim_summary_payerwise;
   REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_claim_summary_encounterwise;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY claims.mv_remittances_resubmission_claim_level;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1685,10 +1828,55 @@ COMMENT ON FUNCTION monitor_mv_performance() IS 'Monitors materialized view perf
 --
 
 -- ==========================================================================================================
+-- SUMMARY: COMMENTED OUT MATERIALIZED VIEWS (14 VIEW-BASED MVs)
+-- ==========================================================================================================
+-- Total view-based MVs commented: 14
+-- 
+-- These MVs use "SELECT * FROM views" pattern which creates dependencies on view column structure.
+-- They inherit schema errors from their underlying views.
+--
+-- VIEW-BASED MVs COMMENTED OUT (14):
+--   1. mv_balance_amount_overall - Alias of v_balance_amount_to_be_received
+--   2. mv_balance_amount_initial - Alias of v_initial_not_remitted_balance
+--   3. mv_balance_amount_resubmission - Alias of v_after_resubmission_not_remitted_balance
+--   4. mv_remittance_advice_header - Alias of v_remittance_advice_header (HAS SCHEMA ERRORS)
+--   5. mv_remittance_advice_claim_wise - Alias of v_remittance_advice_claim_wise (HAS SCHEMA ERRORS)
+--   6. mv_remittance_advice_activity_wise - Alias of v_remittance_advice_activity_wise (HAS SCHEMA ERRORS)
+--   7. mv_doctor_denial_high_denial - Alias of v_doctor_denial_high_denial
+--   8. mv_doctor_denial_detail - Alias of v_doctor_denial_detail (HAS SCHEMA ERRORS)
+--   9. mv_rejected_claims_by_year - Alias of v_rejected_claims_summary_by_year
+--   10. mv_rejected_claims_summary_tab - Alias of v_rejected_claims_summary
+--   11. mv_rejected_claims_receiver_payer - Alias of v_rejected_claims_receiver_payer (HAS SCHEMA ERRORS)
+--   12. mv_rejected_claims_claim_wise - Alias of v_rejected_claims_claim_wise (HAS SCHEMA ERRORS)
+--   13. mv_claim_summary_monthwise - Alias of v_claim_summary_monthwise
+--   14. mv_remittances_resubmission_claim_level - Alias of v_remittances_resubmission_claim_level
+--
+-- WHY THEY ARE COMMENTED OUT:
+--   - These MVs inherit schema errors from their underlying views
+--   - Views reference non-existent columns (r.receiver_name, ra.denial_reason, etc.)
+--   - Cannot add indexes until column structure is verified
+--   - Need to fix underlying views first before creating these MVs
+--
+-- REQUIRED FIXES FOR UNDERLYING VIEWS:
+--   1. Fix v_remittance_advice_header - Remove non-existent remittance table columns
+--   2. Fix v_remittance_advice_claim_wise - Remove non-existent remittance table columns
+--   3. Fix v_remittance_advice_activity_wise - Remove ra.denial_reason and a.description columns
+--   4. Fix v_doctor_denial_detail - Remove ra.denial_reason and a.description columns
+--   5. Fix v_rejected_claims_receiver_payer - Remove non-existent remittance table columns
+--   6. Fix v_rejected_claims_claim_wise - Remove ra.denial_reason and non-existent remittance columns
+--
+-- OPTIMIZATION OPPORTUNITIES:
+--   - Use claim_payment table for claim-level financial aggregations
+--   - Use claim_activity_summary table for activity-level financial metrics
+--   - Leverage pre-computed remittance_count and resubmission_count
+--   - Use denial_codes array from claim_activity_summary
+--
+-- ==========================================================================================================
 -- INITIAL DATA POPULATION - CALL AFTER ALL MVs ARE CREATED
 -- ==========================================================================================================
 
 -- Populate materialized views with initial data
-SELECT refresh_report_mvs_subsecond();
+-- NOTE: This is commented out because the 14 view-based MVs are commented out
+-- SELECT refresh_report_mvs_subsecond();
 
 -- ==========================================================================================================

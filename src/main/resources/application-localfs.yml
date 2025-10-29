@@ -4,10 +4,10 @@ spring:
     username: claims_user
     password: securepass
     hikari:
-      maximum-pool-size: 12
-      minimum-idle: 3
+      maximum-pool-size: 10      # Laptop optimized (8GB RAM, i5)
+      minimum-idle: 5
       auto-commit: false
-      connection-timeout: 30000
+      connection-timeout: 15000
       leak-detection-threshold: 15000
 
   jpa:
@@ -59,18 +59,28 @@ claims:
       readyDir: ${CLAIMS_LOCALFS_WATCH:data/ready}
       archiveOkDir: ${CLAIMS_LOCALFS_ARCHIVE:data/archive/done}
       archiveFailDir: ${CLAIMS_LOCALFS_ERROR:data/archive/error}
+      
+      # Continuous scanning configuration
+      continuous-scan:
+        enabled: true
+        interval-ms: 5000          # Scan every 5 seconds
+        pause-sleep-ms: 150        # Sleep time when paused
 
     # ACK policy (default OFF per requirements)
     ack:
       enabled: false
 
-    # Threading (executor used by orchestrator/pipeline)
+    # Threading (executor used by orchestrator/pipeline) - Laptop optimized
     executor:
-      core-pool-size: 2
-      max-pool-size: 4
-      queue-capacity: 100
+      core-pool-size: 4          # Laptop optimized (8GB RAM, i5)
+      max-pool-size: 8           # Laptop optimized
+      queue-capacity: 100        # Keep reasonable for laptop
     poll:
-      fixedDelayMs: ${INGESTION_POLL_MS:20000}   # 20s default
+      fixedDelayMs: ${INGESTION_POLL_MS:1000}   # Faster polling for laptop testing
+    
+    # Concurrency settings for laptop
+    concurrency:
+      parser-workers: 4          # Laptop optimized
 
   parser:
     allowNonSchemaAttachments: false

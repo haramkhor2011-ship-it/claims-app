@@ -1,6 +1,4 @@
 spring:
-  profiles:
-    include: ingestion,prod,soap
   datasource:
     url: jdbc:postgresql://postgres:5432/claims
     username: ${DB_USER:claims_user}
@@ -32,6 +30,9 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus,loggers,env,threaddump
+  health:
+    redis:
+      enabled: false
 
 claims:
   ingestion:

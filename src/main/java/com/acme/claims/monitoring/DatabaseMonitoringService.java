@@ -196,25 +196,47 @@ public class DatabaseMonitoringService {
 
     private void collectQueryPerformanceMetrics(DatabaseHealthMetrics metrics) {
         try {
-            // Query performance statistics
-            String queryStatsQuery = "SELECT " +
-                "sum(calls) as total_calls, " +
-                "sum(total_time) as total_time_ms, " +
-                "avg(mean_time) as avg_query_time_ms, " +
-                "sum(calls) FILTER (WHERE mean_time > 1000) as slow_queries " +
-                "FROM pg_stat_statements " +
-                "WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())";
-            
-            jdbcTemplate.query(queryStatsQuery, rs -> {
-                metrics.setTotalQueryCalls(rs.getLong("total_calls"));
-                metrics.setTotalQueryTimeMs(rs.getDouble("total_time_ms"));
-                metrics.setAvgQueryTimeMs(rs.getDouble("avg_query_time_ms"));
-                metrics.setSlowQueries(rs.getLong("slow_queries"));
+            // Check if pg_stat_statements extension is available and loaded
+            String checkExtension = "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements') as ext_exists";
+            Boolean extExists = jdbcTemplate.query(checkExtension, rs -> {
+                if (rs.next()) {
+                    return rs.getBoolean("ext_exists");
+                }
+                return false;
             });
             
+            if (Boolean.FALSE.equals(extExists)) {
+                log.debug("pg_stat_statements extension not installed, skipping query performance metrics");
+                return;
+            }
+            
+            // Try to query pg_stat_statements - PostgreSQL 16+ uses total_exec_time/mean_exec_time
+            // For older versions (<13), we'd fall back to total_time/mean_time, but those aren't in PG16
+            String queryStatsSql = "SELECT " +
+                    "sum(calls) as total_calls, " +
+                    "sum(total_exec_time) as total_time_ms, " +
+                    "avg(mean_exec_time) as avg_query_time_ms, " +
+                    "sum(calls) FILTER (WHERE mean_exec_time > 1000) as slow_queries " +
+                    "FROM pg_stat_statements " +
+                    "WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())";
+            
+            try {
+                jdbcTemplate.query(queryStatsSql, rs -> {
+                    if (rs.next()) {
+                        metrics.setTotalQueryCalls(rs.getLong("total_calls"));
+                        metrics.setTotalQueryTimeMs(rs.getDouble("total_time_ms"));
+                        metrics.setAvgQueryTimeMs(rs.getDouble("avg_query_time_ms"));
+                        metrics.setSlowQueries(rs.getLong("slow_queries"));
+                    }
+                });
+            } catch (Exception queryEx) {
+                // Extension exists but may not be loaded via shared_preload_libraries
+                // This is expected if pg_stat_statements isn't fully enabled
+                log.debug("pg_stat_statements query failed (extension may not be loaded): {}", queryEx.getMessage());
+            }
         } catch (Exception e) {
-            // Gracefully skip metrics if extension is missing
-            log.warn("Failed to collect query performance metrics (pg_stat_statements may not be enabled)");
+            // Gracefully skip metrics if extension check fails
+            log.debug("Failed to check pg_stat_statements extension: {}", e.getMessage());
         }
     }
 

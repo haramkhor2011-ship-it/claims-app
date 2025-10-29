@@ -1,18 +1,17 @@
-FROM postgres:16-alpine
+FROM alpine:latest
 
-# Install additional tools if needed
-RUN apk add --no-cache bash
+# Install postgresql client tools
+RUN apk add --no-cache bash postgresql-client
 
 # Copy initialization scripts
-COPY *.sql /docker-entrypoint-initdb.d/
-COPY init.sh /docker-entrypoint-initdb.d/
+COPY *.sql /scripts/
+COPY init.sh /scripts/
 
 # Make init script executable
-RUN chmod +x /docker-entrypoint-initdb.d/init.sh
+RUN chmod +x /scripts/init.sh
 
 # Set working directory
-WORKDIR /docker-entrypoint-initdb.d
+WORKDIR /scripts
 
-# Healthcheck
-HEALTHCHECK --interval=5s --timeout=3s --retries=3 \
-  CMD pg_isready -h postgres -U claims_user || exit 1
+# Override entrypoint to run our init script
+ENTRYPOINT ["/scripts/init.sh"]

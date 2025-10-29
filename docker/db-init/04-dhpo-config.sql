@@ -34,11 +34,6 @@ CREATE TABLE IF NOT EXISTS claims.facility_dhpo_config (
   dhpo_password_enc     BYTEA NOT NULL,
   enc_meta_json         JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {kek_version:int, alg:"AES/GCM", iv:base64, tagBits:int}
 
-  -- AME schema (encrypted-at-rest, app decrypts on read)
-  login_ct              BYTEA,   -- AES-GCM ciphertext (base64 in app if you prefer)
-  pwd_ct                BYTEA,
-  enc_meta              JSONB DEFAULT '{}'::jsonb,  -- algo, keyId, iv sizes, version
-
   active                BOOLEAN NOT NULL DEFAULT TRUE,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -50,10 +45,6 @@ COMMENT ON COLUMN claims.facility_dhpo_config.enc_meta_json IS 'Enc metadata: {"
 
 CREATE INDEX IF NOT EXISTS idx_facility_dhpo_config_active ON claims.facility_dhpo_config(active);
 
-CREATE TRIGGER trg_facility_dhpo_config_updated_at
-  BEFORE UPDATE ON claims.facility_dhpo_config
-  FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
-
 -- ==========================================================================================================
 -- SECTION 2: INTEGRATION TOGGLES
 -- ==========================================================================================================
@@ -64,20 +55,17 @@ CREATE TABLE IF NOT EXISTS claims.integration_toggle (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+
 COMMENT ON TABLE claims.integration_toggle IS 'Feature toggles for integrations';
 
-CREATE TRIGGER trg_integration_toggle_updated_at
-  BEFORE UPDATE ON claims.integration_toggle
-  FOR EACH ROW EXECUTE FUNCTION claims.set_updated_at();
 
 -- ==========================================================================================================
 -- SECTION 3: DEFAULT INTEGRATION TOGGLES
 -- ==========================================================================================================
-
-INSERT INTO claims.integration_toggle(code, enabled) VALUES
-  ('dhpo.search.enabled', true),
-  ('dhpo.setDownloaded.enabled', true)
-ON CONFLICT (code) DO NOTHING;
+insert into claims.integration_toggle (code,enabled) values ('dhpo.new.enabled',false);
+insert into claims.integration_toggle (code,enabled) values ('dhpo.search.enabled',false);
+insert into claims.integration_toggle (code,enabled) values ('dhpo.setDownloaded.enabled',false);
+insert into claims.integration_toggle (code,enabled) values ('dhpo.startup.backfill.enabled',true);
 
 -- ==========================================================================================================
 -- SECTION 4: RESOLUTION RULES (DOCUMENTATION)

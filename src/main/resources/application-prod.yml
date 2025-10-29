@@ -4,11 +4,12 @@ spring:
     username: ${DB_USER:claims_user}
     password: ${DB_PASSWORD:securepass}
     hikari:
-      maximum-pool-size: 30
-      minimum-idle: 8
+      maximum-pool-size: 50      # Increased for 1000-day load
+      minimum-idle: 20
       auto-commit: true
-      connection-timeout: 15000
+      connection-timeout: 30000
       validation-timeout: 5000
+      leak-detection-threshold: 60000
 
   jpa:
     open-in-view: false
@@ -73,24 +74,27 @@ claims:
       endpoint: ${DHPO_SOAP_ENDPOINT}     # e.g. https://dhpo.example/soap
       username: ${DHPO_SOAP_USER}
       password: ${DHPO_SOAP_PASSWORD}
-      connect-timeout-ms: 5000
-      read-timeout-ms: 15000
+      connect-timeout-ms: 10000     # Tolerant for network issues
+      read-timeout-ms: 30000
 
     ack:
       enabled: true                       # best-effort after success (per requirements)
 
     executor:
-      core-pool-size: 6
-      max-pool-size: 12
-      queue-capacity: 1000
+      core-pool-size: 16          # Parallel processing
+      max-pool-size: 32
+      queue-capacity: 5000        # Large buffer for SOAP burst
+    
     poll:
-      fixedDelayMs: 1000   # 20s default
+      fixedDelayMs: 500           # Faster polling for high volume
+    
+    concurrency:
+      parser-workers: 16          # Parallel XML parsing
 
   parser:
     allowNonSchemaAttachments: false
     maxAttachmentBytes: 10485760
     failOnXsdError: false                  # stricter in prod
-
 
   # ===== Refdata & Bootstrap =====
   refdata:
@@ -99,46 +103,46 @@ claims:
       enabled: true
       location: "classpath:refdata/"
 
-# Optional: enable a real cache for ref lookups in prod (Caffeine)
-claims.security.ame:
-  enabled: true
-  keystore:
-    type: "PKCS12"
-    path: "file:config/claims.p12"
-    alias: "claims-ame"
-    passwordEnv: "CLAIMS_AME_STORE_PASS"
-  crypto:
-    kekRotationAllowed: true
-    gcmTagBits: 128
-    keyId : claims-ame.v1
+  security:
+    ame:
+      enabled: true
+      keystore:
+        type: "PKCS12"
+        path: "file:config/claims.p12"
+        alias: "claims-ame"
+        passwordEnv: "CLAIMS_AME_STORE_PASS"
+      crypto:
+        kekRotationAllowed: true
+        gcmTagBits: 128
+        keyId : claims-ame.v1
 
-# Active SOAP client properties
-claims.soap:
-  endpoint: ${DHPO_SOAP_ENDPOINT}
-  soap12: false
-  connectTimeoutMs: 5000
-  readTimeoutMs: 15000
-  retry:
-    maxAttempts: 3
-    backoffMs: 500
-  poll:
-    fixedDelayMs: 18000000
-  downloadConcurrency: 16
+  soap:
+    endpoint: ${DHPO_SOAP_ENDPOINT}
+    soap12: false
+    connectTimeoutMs: 5000
+    readTimeoutMs: 15000
+    retry:
+      maxAttempts: 3
+      backoffMs: 500
+    poll:
+      fixedDelayMs: 18000000
+    downloadConcurrency: 16
+
+  fetch:
+    stageToDisk:
+      force: false          # Don't force all files to disk
+      sizeThresholdBytes: 26214400  # 25 MB → disk
+      latencyThresholdMs: 8000      # >8s download → disk
+      readyDir: "data/ready"
 
 # DHPO client tuning
-dhpo.client:
-  getNewEnabled: false
-  searchDaysBack: 100
-  retriesOnMinus4: 3
-  connectTimeoutMs: 6000
-  readTimeoutMs: 15000
-  downloadTimeoutMs: 120000
-  stageToDiskThresholdMb: 25
-
-# Staging configuration - ensure small files stay in memory
-claims.fetch:
-  stageToDisk:
-    force: false          # Don't force all files to disk
-    sizeThresholdBytes: 26214400  # 25 MB → disk
-    latencyThresholdMs: 8000      # >8s download → disk
-    readyDir: "data/ready"
+dhpo:
+  client:
+    getNewEnabled: false
+    searchDaysBack: 1000          # Fetch 1000 days (as per requirement)
+    retriesOnMinus4: 3
+    connectTimeoutMs: 10000
+    readTimeoutMs: 30000
+    downloadTimeoutMs: 180000
+    stageToDiskThresholdMb: 25
+    downloadConcurrency: 24       # High parallelism for SOAP

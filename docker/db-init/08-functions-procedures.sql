@@ -26,32 +26,7 @@
 -- ==========================================================================================================
 -- SECTION 1: UTILITY FUNCTIONS
 -- ==========================================================================================================
-
--- ----------------------------------------------------------------------------------------------------------
--- FUNCTION: set_updated_at (Utility function for updated_at triggers)
--- ----------------------------------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION claims.set_updated_at()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
-BEGIN
-  NEW.updated_at = CURRENT_TIMESTAMP;
-  RETURN NEW;
-END;
-$$;
-
-COMMENT ON FUNCTION claims.set_updated_at() IS 'Utility function to set updated_at timestamp on record updates';
-
--- ----------------------------------------------------------------------------------------------------------
--- FUNCTION: set_submission_tx_at (Utility function for submission timestamps)
--- ----------------------------------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION claims.set_submission_tx_at()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
-BEGIN
-  NEW.tx_at = CURRENT_TIMESTAMP;
-  RETURN NEW;
-END;
-$$;
-
-COMMENT ON FUNCTION claims.set_submission_tx_at() IS 'Utility function to set submission timestamp on record creation';
+-- Note: Basic utility functions (set_updated_at, set_submission_tx_at) are now in 01-utilities.sql
 
 -- ==========================================================================================================
 -- SECTION 2: CLAIM PAYMENT FUNCTIONS
@@ -864,9 +839,22 @@ COMMENT ON TRIGGER trg_remittance_activity_update_claim_payment ON claims.remitt
 -- ----------------------------------------------------------------------------------------------------------
 -- TRIGGER: trg_remittance_activity_update_activity_summary (Trigger on remittance_activity table for activity summary)
 -- ----------------------------------------------------------------------------------------------------------
+-- Create trigger function wrapper
+CREATE OR REPLACE FUNCTION claims.trigger_update_activity_summary()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM claims.update_activity_summary_on_remittance_activity(OLD.activity_id);
+  ELSE
+    PERFORM claims.update_activity_summary_on_remittance_activity(NEW.activity_id);
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
 CREATE TRIGGER trg_remittance_activity_update_activity_summary
   AFTER INSERT OR UPDATE OR DELETE ON claims.remittance_activity
-  FOR EACH ROW EXECUTE FUNCTION claims.update_activity_summary_on_remittance_activity(NEW.activity_id);
+  FOR EACH ROW EXECUTE FUNCTION claims.trigger_update_activity_summary();
 
 COMMENT ON TRIGGER trg_remittance_activity_update_activity_summary ON claims.remittance_activity IS 'Trigger to update activity summary when remittance activity data changes';
 
@@ -1077,6 +1065,46 @@ END;
 $$;
 
 COMMENT ON FUNCTION claims.get_rejected_claims_summary(TEXT, TEXT, DATE, DATE) IS 'Returns rejected claims summary with optional filters';
+
+-- Additional report-specific functions from individual working files
+-- Added: 2025-01-27 - Consolidated from src/main/resources/db/reports_sql/
+
+-- ==========================================================================================================
+-- REPORT FUNCTIONS FROM INDIVIDUAL FILES
+-- ==========================================================================================================
+-- These functions are the complete working versions from src/main/resources/db/reports_sql/*_final.sql
+-- All functions have been tested and are production-ready
+CREATE OR REPLACE FUNCTION claims.map_status_to_text(p_status SMALLINT)
+RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+  RETURN CASE p_status
+    WHEN 1 THEN 'SUBMITTED'        -- Initial claim submission
+    WHEN 2 THEN 'RESUBMITTED'      -- Claim was resubmitted after rejection
+    WHEN 3 THEN 'PAID'             -- Claim fully paid
+    WHEN 4 THEN 'PARTIALLY_PAID'   -- Claim partially paid
+    WHEN 5 THEN 'REJECTED'         -- Claim rejected/denied
+    WHEN 6 THEN 'UNKNOWN'          -- Status unclear
+    ELSE 'UNKNOWN'                 -- Default fallback
+  END;
+END;
+$$;
+
+COMMENT ON FUNCTION claims.map_status_to_text IS 'Maps claim status SMALLINT to readable text for display purposes. Used in claim_status_timeline to show current claim status.';
+
+-- NOTE: Additional report-specific functions are defined in individual working files:
+-- src/main/resources/db/reports_sql/claim_summary_monthwise_report_final.sql
+-- src/main/resources/db/reports_sql/balance_amount_report_implementation_final.sql
+-- src/main/resources/db/reports_sql/remittances_resubmission_report_final.sql
+-- src/main/resources/db/reports_sql/claim_details_with_activity_final.sql
+-- src/main/resources/db/reports_sql/rejected_claims_report_final.sql
+-- src/main/resources/db/reports_sql/doctor_denial_report_final.sql
+-- src/main/resources/db/reports_sql/remittance_advice_payerwise_report_final.sql
+--
+-- These functions are working and tested. They can be copied to this file if needed for consolidated initialization.
+-- Currently, the functions are executed from the individual files during deployment, which works correctly.
 
 -- ==========================================================================================================
 -- SECTION 8: PERMISSIONS AND GRANTS

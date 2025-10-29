@@ -172,15 +172,16 @@ public class PersistService {
         );
         log.info("persistSubmission: created submission header id={} for ingestionFileId={}", submissionId, ingestionFileId);
 
-        int claims = 0, acts = 0, obs = 0, dxs = 0;
-        int skippedDup = 0, skippedInvalidClaim = 0;
+        int claims = 0, acts = 0, obs = 0, dxs = 0, encounters = 0, events = 0, statusRows = 0;
 
         for (SubmissionClaimDTO c : file.claims()) {
             try {
                 log.info("persistSingleClaim: start claimId={} payerId={} providerId={} emiratesId={} gross={} patientShare={} net={} activities={} diagnoses={}",
                         c.id(), c.payerId(), c.providerId(), c.emiratesIdNumber(), c.gross(), c.patientShare(), c.net(),
                         (c.activities() == null ? 0 : c.activities().size()), (c.diagnoses() == null ? 0 : c.diagnoses().size()));
+                
                 // Process each claim in its own transaction to prevent single failure from stopping entire file
+                // Duplicate detection is now handled INSIDE persistSingleClaim with proper transaction isolation
                 PersistCounts claimCounts = persistSingleClaim(ingestionFileId, submissionId, c, attachments, file);
 
                 log.info("persistSingleClaim: result claimId={} counts[c={},a={},obs={},dxs={}]",
@@ -190,6 +191,9 @@ public class PersistService {
                 acts += claimCounts.acts();
                 obs += claimCounts.obs();
                 dxs += claimCounts.dxs();
+                encounters += claimCounts.encounters();
+                events += claimCounts.projectedEvents();
+                statusRows += claimCounts.projectedStatusRows();
 
             } catch (Exception claimEx) {
                 final String claimIdBiz = c.id();
@@ -202,16 +206,10 @@ public class PersistService {
             }
         }
 
-            if (skippedDup > 0) {
-                errors.fileError(ingestionFileId, "VALIDATE", "DUP_SUBMISSION_NO_RESUB_SUMMARY",
-                        "Skipped " + skippedDup + " duplicate submission(s) without <Resubmission>.", false);
-            }
-            if (skippedInvalidClaim > 0) {
-                errors.fileError(ingestionFileId, "VALIDATE", "MISSING_CLAIM_REQUIRED_SUMMARY",
-                        "Skipped " + skippedInvalidClaim + " invalid claim(s) due to missing requireds.", false);
-            }
+        // Note: Duplicate detection and validation errors are now logged at the individual claim level
+        // within the transaction boundary to prevent race conditions
 
-        return new PersistCounts(claims, acts, obs, dxs, 0, 0);
+        return new PersistCounts(claims, acts, obs, dxs, encounters, 0, 0, events, statusRows);
     }
 
     /**
@@ -268,16 +266,16 @@ public class PersistService {
             errors.claimError(ingestionFileId, "VALIDATE", claimIdBiz, "MISSING_CLAIM_REQUIRED",
                     "Claim required fields missing; skipping claim.", false);
             log.warn("persistSingleClaim: validation failed, required field missing for claimId={}", claimIdBiz);
-            return new PersistCounts(0, 0, 0, 0, 0, 0);
+            return new PersistCounts(0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
 
-        // Duplicate prior SUBMISSION and current has no <Resubmission> → skip & log
-        if (isAlreadySubmitted(claimIdBiz) && c.resubmission() == null) {
-            log.info("Claim already submitted : {}", claimIdBiz);
-            log.info("persistSingleClaim: skipping duplicate without <Resubmission> claimId={}", claimIdBiz);
-            errors.claimError(ingestionFileId, "VALIDATE", claimIdBiz, "DUP_SUBMISSION_NO_RESUB",
-                    "Duplicate Claim.Submission without <Resubmission>; skipped.", false);
-            return new PersistCounts(0, 0, 0, 0, 0, 0);
+        // Determine if this is a resubmission for logging purposes
+        boolean isResubmission = c.resubmission() != null;
+        
+        if (isResubmission) {
+            log.info("Processing resubmission for claimId={}, resubmissionType={}", claimIdBiz, c.resubmission().type());
+        } else {
+            log.info("Processing initial submission for claimId={}", claimIdBiz);
         }
 
         // Upsert core graph
@@ -302,12 +300,14 @@ public class PersistService {
         }
 
         // Encounter (optional, but has NOT NULL cols in DDL)
+        int encounters = 0;
         if (c.encounter() != null && encounterHasRequired(ingestionFileId, claimIdBiz, c.encounter())) {
             // PATCH: resolve facility ref id
             final Long facilityRefId = (c.encounter().facilityId() == null) ? null
                     : refCodeResolver.resolveFacility(c.encounter().facilityId(), null, null, null, "SYSTEM", ingestionFileId, c.id())
                     .orElse(null);
             upsertEncounter(claimId, c.encounter(), facilityRefId);
+            encounters = 1;
         }
 
         // Diagnoses (optional)
@@ -349,10 +349,59 @@ public class PersistService {
         }
 
         // Events & Timeline (only for persisted claim)
-        long ev1 = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 1, submissionId, null);
-        log.info("persistSingleClaim: inserted submission event id={} for claimId={} ingestionFileId={}", ev1, claimIdBiz, ingestionFileId);
+        int events = 0, statusRows = 0;
+        long ev1;
+        if (isResubmission) {
+            // For resubmissions, try to find existing submission event first
+            Long existingEventId = jdbc.queryForObject(
+                "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
+                Long.class, claimKeyId
+            );
+            
+            if (existingEventId != null) {
+                ev1 = existingEventId;
+                log.info("Using existing submission event id={} for resubmission claimId={}", ev1, claimIdBiz);
+            } else {
+                // Edge case: resubmission flag set but no submission event found - create one
+                log.warn("Resubmission flag set but no existing submission event found for claimId={}, creating submission event", claimIdBiz);
+                ev1 = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 1, submissionId, null);
+                log.info("Created submission event id={} for resubmission claimId={}", ev1, claimIdBiz);
+                events++;
+            }
+        } else {
+            // For initial submissions, try to create submission event
+            // If it fails due to duplicate, retrieve the existing one
+            try {
+                ev1 = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 1, submissionId, null);
+                log.info("persistSingleClaim: inserted submission event id={} for claimId={} ingestionFileId={}", ev1, claimIdBiz, ingestionFileId);
+                events++;
+            } catch (Exception e) {
+                // Handle duplicate submission event (race condition)
+                if (e.getMessage() != null && e.getMessage().contains("duplicate key")) {
+                    log.info("Duplicate submission event detected for claimId={}, retrieving existing event", claimIdBiz);
+                    Long existingEventId = jdbc.queryForObject(
+                        "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
+                        Long.class, claimKeyId
+                    );
+                    
+                    if (existingEventId != null) {
+                        ev1 = existingEventId;
+                        log.info("Using existing submission event id={} for claimId={} (race condition resolved)", ev1, claimIdBiz);
+                        // Log this as a duplicate detection
+                        errors.claimError(ingestionFileId, "VALIDATE", claimIdBiz, "DUP_SUBMISSION_NO_RESUB",
+                                "Duplicate Claim.Submission without <Resubmission>; using existing event.", false);
+                    } else {
+                        throw new RuntimeException("Failed to retrieve existing submission event after duplicate key error for claimId=" + claimIdBiz, e);
+                    }
+                } else {
+                    throw e; // Re-throw if it's not a duplicate key issue
+                }
+            }
+        }
+        
         projectActivitiesToClaimEventFromSubmission(ev1, c.activities());
         insertStatusTimeline(claimKeyId, (short) 1, file.header().transactionDate(), ev1);
+        statusRows++;
 
         if (c.resubmission() != null) {
             long ev2 = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 2, submissionId, null);
@@ -360,6 +409,8 @@ public class PersistService {
             insertResubmission(ev2, c.resubmission(), file);
             projectActivitiesToClaimEventFromSubmission(ev2, c.activities());
             insertStatusTimeline(claimKeyId, (short) 2, file.header().transactionDate(), ev2);
+            events++;
+            statusRows++;
         }
 
         // Attachments (Submission-only)
@@ -370,10 +421,10 @@ public class PersistService {
             }
         }
 
-        log.info("Successfully persisted claim: {} with {} activities, {} observations, {} diagnoses",
-                claimIdBiz, acts, obs, dxs);
+        log.info("Successfully persisted claim: {} with {} activities, {} observations, {} diagnoses, {} encounters, {} events",
+                claimIdBiz, acts, obs, dxs, encounters, events);
 
-        return new PersistCounts(1, acts, obs, dxs, 0, 0);
+        return new PersistCounts(1, acts, obs, dxs, encounters, 0, 0, events, statusRows);
     }
 
     /* ========================= REMITTANCE PATH ========================= */
@@ -432,7 +483,7 @@ public class PersistService {
                 Long.class, ingestionFileId, file.header().transactionDate()
         );
 
-        int rClaims = 0, rActs = 0, skippedInvalidRemitClaim = 0;
+        int rClaims = 0, rActs = 0, events = 0, statusRows = 0, skippedInvalidRemitClaim = 0;
 
         for (RemittanceClaimDTO c : file.claims()) {
             // guard remittance-claim level (ID, IDPayer, ProviderID, PaymentReference as used)
@@ -450,6 +501,8 @@ public class PersistService {
                 PersistCounts claimCounts = persistSingleRemittanceClaim(ingestionFileId, remittanceId, c, attachments, file);
                 rClaims += claimCounts.remitClaims();
                 rActs += claimCounts.remitActs();
+                events += claimCounts.projectedEvents();
+                statusRows += claimCounts.projectedStatusRows();
             } catch (Exception claimEx) {
                 // Log error but continue with next claim (partial success)
                 errors.claimError(ingestionFileId, "PERSIST", c.id(),
@@ -465,7 +518,7 @@ public class PersistService {
                     "Skipped " + skippedInvalidRemitClaim + " invalid remittance claim(s) due to missing requireds.", false);
         }
 
-        return new PersistCounts(0, 0, 0, 0, rClaims, rActs);
+        return new PersistCounts(0, 0, 0, 0, 0, rClaims, rActs, events, statusRows);
     }
 
     /**
@@ -567,9 +620,9 @@ public class PersistService {
             }
         }
 
-        log.info("Successfully persisted remittance claim: {} with {} activities", claimIdBiz, rActs);
+        log.info("Successfully persisted remittance claim: {} with {} activities, 1 event", claimIdBiz, rActs);
 
-        return new PersistCounts(0, 0, 0, 0, 1, rActs);
+        return new PersistCounts(0, 0, 0, 0, 0, 1, rActs, 1, 1);
     }
 
     /**
@@ -655,21 +708,30 @@ public class PersistService {
      *
      * <p><b>Use Case:</b> Prevents duplicate claim processing while allowing legitimate resubmissions.</p>
      *
+     * <p><b>Race Condition Note:</b> This method provides a best-effort check. The actual protection
+     * against duplicates comes from the unique index `uq_claim_event_one_submission` and the
+     * exception handling in `insertClaimEvent`.</p>
+     *
      * @param claimIdBiz the business claim ID to check for prior submissions
      * @return {@code true} if claim has existing submission events, {@code false} otherwise
      */
     private boolean isAlreadySubmitted(String claimIdBiz) {
-        Long ck = jdbc.query(
-                "select id from claims.claim_key where claim_id=?",
-                ps -> ps.setString(1, claimIdBiz),
-                rs -> rs.next() ? rs.getLong(1) : null
-        );
-        if (ck == null) return false;
-        Integer n = jdbc.queryForObject(
-                "select count(*) from claims.claim_event where claim_key_id=? and type=1",
-                Integer.class, ck
-        );
-        return n > 0;
+        try {
+            // Use a more efficient query that checks both claim_key and claim_event in one go
+            Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*) 
+                FROM claims.claim_key ck 
+                JOIN claims.claim_event ce ON ck.id = ce.claim_key_id 
+                WHERE ck.claim_id = ? AND ce.type = 1
+                """, Integer.class, claimIdBiz);
+            
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.warn("Error checking if claim already submitted for claimId={}: {}", claimIdBiz, e.getMessage());
+            // Conservative approach: assume not submitted if we can't determine
+            // The unique index will catch duplicates anyway
+            return false;
+        }
     }
 
     /**
@@ -823,7 +885,12 @@ public class PersistService {
                 c.gross(), c.patientShare(), c.net(),
                 payerRefId, providerRefId, c.comments(), file.header().transactionDate()
         );
-        return jdbc.queryForObject("select id from claims.claim where claim_key_id=?", Long.class, claimKeyId);
+        
+        Long claimId = jdbc.queryForObject("select id from claims.claim where claim_key_id=?", Long.class, claimKeyId);
+        if (claimId == null) {
+            throw new RuntimeException("Failed to retrieve claim ID after upsert for claim_key_id=" + claimKeyId);
+        }
+        return claimId;
     }
 
 
@@ -877,7 +944,12 @@ public class PersistService {
                         """, claimId, a.id(), a.start(), a.type(), a.code(), a.quantity(), a.net(), a.clinician(), a.priorAuthorizationId(),
                 clinicianRefId, activityCodeRefId                             // PATCH
         );
-        return jdbc.queryForObject("select id from claims.activity where claim_id=? and activity_id=?", Long.class, claimId, a.id());
+        
+        Long activityId = jdbc.queryForObject("select id from claims.activity where claim_id=? and activity_id=?", Long.class, claimId, a.id());
+        if (activityId == null) {
+            throw new RuntimeException("Failed to retrieve activity ID after upsert for claim_id=" + claimId + ", activity_id=" + a.id());
+        }
+        return activityId;
     }
 
 
@@ -890,32 +962,68 @@ public class PersistService {
 
     private long insertClaimEvent(long claimKeyId, long ingestionFileId, OffsetDateTime time, short type,
                                   Long submissionId, Long remittanceId) {
-        // Use consistent constraint handling for all event types
-        // The uq_claim_event_dedup constraint ensures uniqueness on (claim_key_id, type, event_time)
-        // This prevents duplicate events for the same claim, type, and time
-        return jdbc.queryForObject("""
-                        WITH ins AS (
-                          INSERT INTO claims.claim_event(
-                            claim_key_id, ingestion_file_id, event_time, type, submission_id, remittance_id
-                          )
-                          VALUES (?,?,?,?,?,?)
-                          ON CONFLICT ON CONSTRAINT uq_claim_event_dedup DO UPDATE
-                            SET ingestion_file_id = EXCLUDED.ingestion_file_id
-                          RETURNING id
-                        )
-                        SELECT id FROM ins
-                        UNION ALL
-                        SELECT id
-                          FROM claims.claim_event
-                         WHERE claim_key_id = ? AND type = ? AND event_time = ?
-                        LIMIT 1
-                        """,
-                Long.class,
-                // insert params
-                claimKeyId, ingestionFileId, time, type, submissionId, remittanceId,
-                // fallback params
-                claimKeyId, type, time
-        );
+        // Handle both unique constraints:
+        // 1. uq_claim_event_dedup: (claim_key_id, type, event_time) - prevents duplicate events at same time
+        // 2. uq_claim_event_one_submission: (claim_key_id) WHERE type = 1 - prevents multiple submissions (UNIQUE INDEX)
+        
+        // For submission events (type=1), check if one already exists first
+        if (type == 1) {
+            Long existingEventId = jdbc.queryForObject(
+                "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
+                Long.class, claimKeyId
+            );
+            
+            if (existingEventId != null) {
+                log.info("Submission event already exists for claim_key_id={}, using existing event id={}", claimKeyId, existingEventId);
+                return existingEventId;
+            }
+        }
+        
+        try {
+            // Standard upsert for all event types
+            return jdbc.queryForObject("""
+                            WITH ins AS (
+                              INSERT INTO claims.claim_event(
+                                claim_key_id, ingestion_file_id, event_time, type, submission_id, remittance_id
+                              )
+                              VALUES (?,?,?,?,?,?)
+                              ON CONFLICT ON CONSTRAINT uq_claim_event_dedup DO UPDATE
+                                SET ingestion_file_id = EXCLUDED.ingestion_file_id
+                              RETURNING id
+                            )
+                            SELECT id FROM ins
+                            UNION ALL
+                            SELECT id
+                              FROM claims.claim_event
+                             WHERE claim_key_id = ? AND type = ? AND event_time = ?
+                            LIMIT 1
+                            """,
+                    Long.class,
+                    // insert params
+                    claimKeyId, ingestionFileId, time, type, submissionId, remittanceId,
+                    // fallback params
+                    claimKeyId, type, time
+            );
+        } catch (Exception e) {
+            // Handle unique index violations (uq_claim_event_one_submission) for submission events
+            if (e.getMessage() != null && e.getMessage().contains("duplicate key") && type == 1) {
+                log.info("Duplicate submission event detected for claim_key_id={}, retrieving existing event", claimKeyId);
+                
+                // Retrieve the existing submission event
+                Long existingEventId = jdbc.queryForObject(
+                    "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
+                    Long.class, claimKeyId
+                );
+                
+                if (existingEventId != null) {
+                    log.info("Found existing submission event id={} for claim_key_id={}", existingEventId, claimKeyId);
+                    return existingEventId;
+                }
+            }
+            
+            // Re-throw if it's not a duplicate key issue or if we can't find existing event
+            throw e;
+        }
     }
 
     private void projectActivitiesToClaimEventFromSubmission(long eventId, Set<ActivityDTO> acts) {
@@ -926,6 +1034,11 @@ public class PersistService {
                 "SELECT a.id FROM claims.activity a JOIN claims.claim c ON a.claim_id = c.id JOIN claims.claim_event ce ON c.claim_key_id = ce.claim_key_id WHERE a.activity_id = ? AND ce.id = ?",
                 Long.class, a.id(), eventId
             );
+            
+            if (activityIdRef == null) {
+                log.warn("Activity not found for activity_id={} and event_id={}, skipping activity projection", a.id(), eventId);
+                continue;
+            }
             
             jdbc.update("""
                                 insert into claims.claim_event_activity(
@@ -974,6 +1087,11 @@ public class PersistService {
                 """,
                 Long.class, a.id(), eventId
             );
+            
+            if (remittanceActivityIdRef == null) {
+                log.warn("Remittance activity not found for activity_id={} and event_id={}, skipping activity projection", a.id(), eventId);
+                continue;
+            }
             
             jdbc.update("""
                                 insert into claims.claim_event_activity(
@@ -1282,6 +1400,90 @@ public class PersistService {
         return ok;
     }
 
+    /* ========================= AUDIT CALCULATION METHODS ========================= */
+
+    /**
+     * Calculates amount totals (gross, net, patient share) for all claims in a file.
+     * Used for audit trail reporting.
+     * 
+     * @param ingestionFileId the ingestion file ID to calculate totals for
+     * @return AmountTotals containing total gross, net, and patient share amounts
+     * @since 2.1 - Enhanced audit reporting
+     */
+    public AmountTotals calculateAmountTotals(Long ingestionFileId) {
+        if (ingestionFileId == null) {
+            log.warn("calculateAmountTotals called with null fileId");
+            return new AmountTotals(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+        
+        try {
+            AmountTotals result = jdbc.queryForObject("""
+                SELECT 
+                    COALESCE(SUM(c.gross_amount), 0) as total_gross,
+                    COALESCE(SUM(c.net_amount), 0) as total_net,
+                    COALESCE(SUM(c.patient_share), 0) as total_patient_share
+                FROM claims.claim c
+                WHERE c.ingestion_file_id = ?
+                """, 
+                (rs, rowNum) -> new AmountTotals(
+                    rs.getBigDecimal("total_gross"),
+                    rs.getBigDecimal("total_net"), 
+                    rs.getBigDecimal("total_patient_share")
+                ), 
+                ingestionFileId);
+            
+            log.debug("Calculated amounts for fileId={}: gross={}, net={}, patient={}", 
+                ingestionFileId, result.totalGross(), result.totalNet(), result.totalPatientShare());
+            
+            return result;
+            
+        } catch (Exception e) {
+            log.error("Failed to calculate amount totals for fileId={}: {}", ingestionFileId, e.getMessage(), e);
+            // Return zeros on error - non-blocking
+            return new AmountTotals(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+    }
+
+    /**
+     * Calculates unique entity counts (payers and providers) for all claims in a file.
+     * Used for audit trail reporting.
+     * 
+     * @param ingestionFileId the ingestion file ID to calculate counts for
+     * @return EntityCounts containing unique payer and provider counts
+     * @since 2.1 - Enhanced audit reporting
+     */
+    public EntityCounts calculateEntityCounts(Long ingestionFileId) {
+        if (ingestionFileId == null) {
+            log.warn("calculateEntityCounts called with null fileId");
+            return new EntityCounts(0, 0);
+        }
+        
+        try {
+            EntityCounts result = jdbc.queryForObject("""
+                SELECT 
+                    COUNT(DISTINCT c.payer_ref_id) as unique_payers,
+                    COUNT(DISTINCT c.provider_ref_id) as unique_providers
+                FROM claims.claim c
+                WHERE c.ingestion_file_id = ?
+                """, 
+                (rs, rowNum) -> new EntityCounts(
+                    rs.getInt("unique_payers"),
+                    rs.getInt("unique_providers")
+                ), 
+                ingestionFileId);
+            
+            log.debug("Calculated entity counts for fileId={}: payers={}, providers={}", 
+                ingestionFileId, result.uniquePayers(), result.uniqueProviders());
+            
+            return result;
+            
+        } catch (Exception e) {
+            log.error("Failed to calculate entity counts for fileId={}: {}", ingestionFileId, e.getMessage(), e);
+            // Return zeros on error - non-blocking
+            return new EntityCounts(0, 0);
+        }
+    }
+
     /* ========================= DATA STRUCTURES ========================= */
 
     /**
@@ -1300,6 +1502,37 @@ public class PersistService {
      * @param remitClaims number of remittance claims persisted
      * @param remitActs number of remittance activities persisted
      */
-    public record PersistCounts(int claims, int acts, int obs, int dxs, int remitClaims, int remitActs) {
-    }
+    public record PersistCounts(
+        int claims, int acts, int obs, int dxs, 
+        int encounters,  // NEW - track encounter persistence
+        int remitClaims, int remitActs,
+        int projectedEvents, int projectedStatusRows  // NEW - for verification debugging
+    ) {}
+
+    /**
+     * # AmountTotals - Amount Calculation Results
+     *
+     * <p><b>Purpose:</b> Immutable record containing financial totals for claims in a file.</p>
+     *
+     * <p><b>Usage:</b> Returned by calculateAmountTotals() for audit trail reporting.</p>
+     *
+     * @param totalGross total gross amount across all claims
+     * @param totalNet total net amount across all claims  
+     * @param totalPatientShare total patient share across all claims
+     * @since 2.1 - Enhanced audit reporting
+     */
+    public record AmountTotals(BigDecimal totalGross, BigDecimal totalNet, BigDecimal totalPatientShare) {}
+
+    /**
+     * # EntityCounts - Entity Counting Results
+     *
+     * <p><b>Purpose:</b> Immutable record containing counts of unique entities in claims.</p>
+     *
+     * <p><b>Usage:</b> Returned by calculateEntityCounts() for audit trail reporting.</p>
+     *
+     * @param uniquePayers count of distinct payers in the file
+     * @param uniqueProviders count of distinct providers in the file
+     * @since 2.1 - Enhanced audit reporting
+     */
+    public record EntityCounts(int uniquePayers, int uniqueProviders) {}
 }

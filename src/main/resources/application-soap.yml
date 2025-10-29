@@ -33,6 +33,18 @@ claims:
       sizeThresholdBytes: 26214400  # 25 MB → disk
       latencyThresholdMs: 8000      # >8s download → disk
       readyDir: "data/ready"
+  security:
+    ame:
+      enabled: true
+      keystore:
+        type: "PKCS12"                    # or "PKCS12" or "FILE"
+        path: "file:config/claims.p12" # or "file:config/claims.p12" or "file:config/ame.key"
+        alias: "claims-ame"
+        passwordEnv: "CLAIMS_AME_STORE_PASS"   # only store/pass are env-based
+      crypto:
+        kekRotationAllowed: true
+        gcmTagBits: 128
+        keyId : claims-ame.v1 #  used in enc_meta to mark which key encrypted the row
 
 # env defaults (may be overridden by DB per facility)
 #DHPO_DEFAULT_LOGIN: "env-user"
@@ -47,15 +59,3 @@ dhpo:
     readTimeoutMs: 15000
     downloadTimeoutMs: 120000
     stageToDiskThresholdMb: 25
-
-claims.security.ame:
-  enabled: true
-  keystore:
-    type: "PKCS12"                    # or "PKCS12" or "FILE"
-    path: "file:config/claims.p12" # or "file:config/claims.p12" or "file:config/ame.key"
-    alias: "claims-ame"
-    passwordEnv: "CLAIMS_AME_STORE_PASS"   # only store/pass are env-based
-  crypto:
-    kekRotationAllowed: true
-    gcmTagBits: 128
-    keyId : claims-ame.v1 #  used in enc_meta to mark which key encrypted the row

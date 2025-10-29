@@ -1,0 +1,2 @@
+sqlparse==0.5.3
+markdown==3.5.1

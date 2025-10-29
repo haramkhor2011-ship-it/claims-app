@@ -106,8 +106,8 @@ public class RefdataCsvLoader {
                 recs -> batchUpsert(recs, """
                         insert into claims_ref.activity_code(code, code_system, description, status,type)
                         values (?,?,?,?,?)
-                        on conflict (code, code_system) do update
-                           set description=excluded.description, status=excluded.status
+                        on conflict (code, type) do update
+                           set description=excluded.description, status=excluded.status, code_system=excluded.code_system
                         """,
                         (rec) -> new Object[]{
                                 req(rec,"code", 1, 64, true),                               // ActivityCode: no whitespace
@@ -125,8 +125,8 @@ public class RefdataCsvLoader {
                 recs -> batchUpsert(recs, """
                         insert into claims_ref.diagnosis_code(code, code_system, description, status)
                         values (?,?,?,?)
-                        on conflict (code, code_system) do update
-                           set description=excluded.description, status=excluded.status
+                        on conflict (code, description) do update
+                           set code_system=excluded.code_system, status=excluded.status
                         """,
                         (rec) -> new Object[]{
                                 req(rec,"code", 1, 16, true),                                // ICD-10 codes are short
@@ -153,18 +153,23 @@ public class RefdataCsvLoader {
 
     @Transactional
     public int loadContractPackages() {
-        return loadCsv("contract_packages.csv",
-                Set.of("package_name","description","status"),
-                recs -> batchUpsert(recs, """
-                        insert into claims_ref.contract_package(package_name, description, status)
-                        values (?,?,?)
-                        on conflict (package_name) do update set description=excluded.description, status=excluded.status
-                        """,
-                        (rec) -> new Object[]{
-                                req(rec,"package_name", 1, 120, false),                      // package names may have spaces
-                                opt(rec,"description", 0, 512),
-                                def(rec,"status","ACTIVE", 1, 32, true)
-                        }));
+        // Contract package table not yet created in schema - skip for now
+        log.warn("Skipping contract_packages.csv load - table claims_ref.contract_package does not exist");
+        return 0;
+        
+        // TODO: Uncomment when contract_package table is created
+        // return loadCsv("contract_packages.csv",
+        //         Set.of("package_name","description","status"),
+        //         recs -> batchUpsert(recs, """
+        //                 insert into claims_ref.contract_package(package_name, description, status)
+        //                 values (?,?,?)
+        //                 on conflict (package_name) do update set description=excluded.description, status=excluded.status
+        //                 """,
+        //                 (rec) -> new Object[]{
+        //                         req(rec,"package_name", 1, 120, false),                      // package names may have spaces
+        //                         opt(rec,"description", 0, 512),
+        //                         def(rec,"status","ACTIVE", 1, 32, true)
+        //                 }));
     }
 
     // ===== Generic CSV framework (strict/lenient, headers, batching) =====

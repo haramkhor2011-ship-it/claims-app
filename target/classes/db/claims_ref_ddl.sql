@@ -78,7 +78,7 @@ create table if not exists claims_ref.activity_code (
   description  text,
   status       text default 'ACTIVE',
   created_at	 timestamptz default now(),
-  updated_at   timestamptz default now() default now(),
+  updated_at   timestamptz,
   constraint uq_activity_code unique (code, type)
 );
 comment on table claims_ref.activity_code is 'Service/procedure codes used in Activity.Code';

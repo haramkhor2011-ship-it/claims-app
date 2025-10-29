@@ -2,6 +2,9 @@
 # Stage 1: Build stage with Maven and Java 21
 FROM eclipse-temurin:21-jdk-alpine AS builder
 
+# Install Maven
+RUN apk add --no-cache maven
+
 # Set working directory
 WORKDIR /app
 
@@ -23,6 +26,9 @@ RUN addgroup -g 1001 -S claims && \
 
 # Set working directory
 WORKDIR /app
+
+# Install wget for healthcheck
+RUN apk add --no-cache wget
 
 # Create necessary directories
 RUN mkdir -p data/ready data/archive/done data/archive/error config logs && \
@@ -48,7 +54,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1
 
 # Set JVM options
-ENV JAVA_OPTS="-Xms512m -Xmx2048m -XX:+UseG1GC -XX:+UseContainerSupport"
+ENV JAVA_OPTS="-Xms512m -Xmx2048m -XX:+UseG1GC -XX:+UseContainerSupport --enable-preview"
 
 # Run the application
+# JAVA_OPTS can be overridden via environment variable from docker-compose.yml
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

@@ -33,57 +33,89 @@ import java.util.Map;
  * Example JSON:
  * {
  *   "claimId": "CLM001",
- *   "claimInfo": {
- *     "claimId": "CLM001",
- *     "payerId": "DHA",
- *     "providerId": "PROV001",
- *     "netAmount": 1500.00,
- *     "submissionDate": "2024-01-10T09:00:00Z"
+ *   "submission": {
+ *     "fileName": "submission_batch_001.xml",
+ *     "ingestionFileId": 123,
+ *     "submissionDate": "2024-01-10T09:00:00Z",
+ *     "claimInfo": {
+ *       "claimId": "CLM001",
+ *       "payerId": "DHA",
+ *       "providerId": "PROV001",
+ *       "netAmount": 1500.00,
+ *       "submissionDate": "2024-01-10T09:00:00Z"
+ *     },
+ *     "encounterInfo": {
+ *       "facilityId": "FAC001",
+ *       "encounterType": "OUTPATIENT",
+ *       "startDate": "2024-01-10T08:00:00Z"
+ *     },
+ *     "diagnosisInfo": [
+ *       {
+ *         "diagnosisCode": "Z00.00",
+ *         "diagnosisType": "Principal",
+ *         "diagnosisDescription": "Encounter for general adult medical examination"
+ *       }
+ *     ],
+ *     "activitiesInfo": [
+ *       {
+ *         "activityCode": "99213",
+ *         "netAmount": 150.00,
+ *         "quantity": 1.0,
+ *         "clinicianName": "Dr. Smith"
+ *       }
+ *     ],
+ *     "attachments": [
+ *       {
+ *         "fileName": "claim.pdf",
+ *         "createdAt": "2024-01-10T09:00:00Z",
+ *         "mimeType": "application/pdf"
+ *       }
+ *     ]
  *   },
- *   "encounterInfo": {
- *     "facilityId": "FAC001",
- *     "encounterType": "OUTPATIENT",
- *     "startDate": "2024-01-10T08:00:00Z"
- *   },
- *   "diagnosisInfo": [
+ *   "resubmissions": [
  *     {
- *       "diagnosisCode": "Z00.00",
- *       "diagnosisType": "Principal",
- *       "diagnosisDescription": "Encounter for general adult medical examination"
+ *       "fileName": "resubmission_batch_002.xml",
+ *       "ingestionFileId": 145,
+ *       "claimEventId": 567,
+ *       "resubmissionDate": "2024-01-20T10:00:00Z",
+ *       "resubmissionType": "CORRECTED",
+ *       "resubmissionComment": "Corrected diagnosis code",
+ *       "activitiesInfo": [
+ *         {
+ *           "activityCode": "99213",
+ *           "netAmount": 150.00,
+ *           "quantity": 1.0,
+ *           "clinicianName": "Dr. Smith"
+ *         }
+ *       ],
+ *       "attachments": []
  *     }
  *   ],
- *   "activitiesInfo": [
+ *   "remittances": [
  *     {
- *       "activityCode": "99213",
- *       "netAmount": 150.00,
- *       "quantity": 1.0,
- *       "clinicianName": "Dr. Smith"
+ *       "fileName": "remittance_batch_003.xml",
+ *       "ingestionFileId": 178,
+ *       "remittanceId": 89,
+ *       "remittanceClaimId": 234,
+ *       "remittanceDate": "2024-01-25T14:30:00Z",
+ *       "paymentReference": "PAY-2024-001",
+ *       "settlementDate": "2024-01-25T00:00:00Z",
+ *       "denialCode": null,
+ *       "activities": [
+ *         {
+ *           "activityId": "ACT001",
+ *           "paymentAmount": 150.00,
+ *           "denialCode": null
+ *         }
+ *       ],
+ *       "attachments": []
  *     }
  *   ],
- *   "remittanceInfo": {
- *     "paymentReference": "REM001",
- *     "settlementDate": "2024-01-15T10:30:00Z",
- *     "denialCode": null
- *   },
  *   "claimTimeline": [
  *     {
  *       "eventTime": "2024-01-10T09:00:00Z",
  *       "eventType": "Submission",
  *       "currentStatus": 1
- *     }
- *   ],
- *   "attachments": [
- *     {
- *       "fileName": "claim.pdf",
- *       "createdAt": "2024-01-10T09:00:00Z",
- *       "mimeType": "application/pdf"
- *     }
- *   ],
- *   "transactionTypes": [
- *     {
- *       "transactionType": "Initial Submission",
- *       "eventTime": "2024-01-10T09:00:00Z",
- *       "transactionDescription": "First time claim submission"
  *     }
  *   ],
  *   "metadata": {
@@ -105,29 +137,17 @@ public class ClaimDetailsResponse {
     @Schema(description = "The claim ID being requested", example = "CLM001")
     private String claimId;
     
-    @Schema(description = "Basic claim information")
-    private ClaimBasicInfo claimInfo;
+    @Schema(description = "Original submission data")
+    private SubmissionData submission;
     
-    @Schema(description = "Encounter information")
-    private EncounterInfo encounterInfo;
+    @Schema(description = "List of resubmissions ordered by event_time")
+    private List<ResubmissionData> resubmissions;
     
-    @Schema(description = "List of diagnosis information")
-    private List<DiagnosisInfo> diagnosisInfo;
+    @Schema(description = "List of remittances ordered by event_time")
+    private List<RemittanceData> remittances;
     
-    @Schema(description = "List of activities/procedures")
-    private List<ActivityInfo> activitiesInfo;
-    
-    @Schema(description = "Remittance information")
-    private RemittanceInfo remittanceInfo;
-    
-    @Schema(description = "Claim timeline/events")
+    @Schema(description = "Claim timeline/events (kept for backward compatibility)")
     private List<ClaimTimelineEvent> claimTimeline;
-    
-    @Schema(description = "List of attachments")
-    private List<AttachmentInfo> attachments;
-    
-    @Schema(description = "Transaction types (claim lifecycle)")
-    private List<TransactionType> transactionTypes;
     
     @Schema(description = "Response metadata")
     private ClaimDetailsMetadata metadata;
@@ -539,8 +559,128 @@ public class ClaimDetailsResponse {
         @Schema(description = "Execution time in milliseconds", example = "234")
         private Long executionTimeMs;
         
-        @Schema(description = "Additional metadata for UI rendering")
-        private Map<String, Object> additionalMetadata;
-    }
+    @Schema(description = "Additional metadata for UI rendering")
+    private Map<String, Object> additionalMetadata;
+}
+
+/**
+ * Submission data DTO - contains original submission information
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
+@Schema(description = "Original submission data")
+public static class SubmissionData {
+    
+    @Schema(description = "File name from ingestion_file", example = "submission_batch_001.xml")
+    private String fileName;
+    
+    @Schema(description = "Ingestion file ID", example = "123")
+    private Long ingestionFileId;
+    
+    @Schema(description = "Submission date", example = "2024-01-10T09:00:00Z")
+    private LocalDateTime submissionDate;
+    
+    @Schema(description = "Basic claim information")
+    private ClaimBasicInfo claimInfo;
+    
+    @Schema(description = "Encounter information")
+    private EncounterInfo encounterInfo;
+    
+    @Schema(description = "List of diagnosis information")
+    private List<DiagnosisInfo> diagnosisInfo;
+    
+    @Schema(description = "List of activities/procedures")
+    private List<ActivityInfo> activitiesInfo;
+    
+    @Schema(description = "List of attachments for this submission")
+    private List<AttachmentInfo> attachments;
+}
+
+/**
+ * Resubmission data DTO - contains resubmission information with activity snapshots
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
+@Schema(description = "Resubmission data")
+public static class ResubmissionData {
+    
+    @Schema(description = "File name from ingestion_file", example = "resubmission_batch_002.xml")
+    private String fileName;
+    
+    @Schema(description = "Ingestion file ID", example = "145")
+    private Long ingestionFileId;
+    
+    @Schema(description = "Claim event ID", example = "567")
+    private Long claimEventId;
+    
+    @Schema(description = "Resubmission date", example = "2024-01-20T10:00:00Z")
+    private LocalDateTime resubmissionDate;
+    
+    @Schema(description = "Resubmission type", example = "CORRECTED")
+    private String resubmissionType;
+    
+    @Schema(description = "Resubmission comment", example = "Corrected diagnosis code")
+    private String resubmissionComment;
+    
+    @Schema(description = "List of activities at resubmission time (from snapshots)")
+    private List<ActivityInfo> activitiesInfo;
+    
+    @Schema(description = "List of attachments for this resubmission")
+    private List<AttachmentInfo> attachments;
+}
+
+/**
+ * Remittance data DTO - contains remittance information with payment details
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
+@Schema(description = "Remittance data")
+public static class RemittanceData {
+    
+    @Schema(description = "File name from ingestion_file", example = "remittance_batch_003.xml")
+    private String fileName;
+    
+    @Schema(description = "Ingestion file ID", example = "178")
+    private Long ingestionFileId;
+    
+    @Schema(description = "Remittance ID", example = "89")
+    private Long remittanceId;
+    
+    @Schema(description = "Remittance claim ID", example = "234")
+    private Long remittanceClaimId;
+    
+    @Schema(description = "Remittance date", example = "2024-01-25T14:30:00Z")
+    private LocalDateTime remittanceDate;
+    
+    @Schema(description = "Payment reference", example = "PAY-2024-001")
+    private String paymentReference;
+    
+    @Schema(description = "Settlement date", example = "2024-01-25T00:00:00Z")
+    private LocalDateTime settlementDate;
+    
+    @Schema(description = "Claim-level denial code", example = "CO-4")
+    private String denialCode;
+    
+    @Schema(description = "Remittance payer ID", example = "DHA")
+    private String remittancePayerId;
+    
+    @Schema(description = "Remittance provider ID", example = "PROV001")
+    private String remittanceProviderId;
+    
+    @Schema(description = "List of remittance activities with payment amounts and denial codes")
+    private List<RemittanceActivityInfo> activities;
+    
+    @Schema(description = "List of attachments for this remittance")
+    private List<AttachmentInfo> attachments;
+}
 }
 
