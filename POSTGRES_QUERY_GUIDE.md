@@ -118,3 +118,9 @@ If you get permission errors, make sure you're using the correct user:
 docker exec -it claims-postgres psql -U claims_user -d claims
 ```
 
+
+
+
+
+
+

@@ -92,6 +92,10 @@ claims:
       parser-workers: 16          # Parallel XML parsing
 
   parser:
+  monitor:
+    kpi:
+      enabled: true            # optional KPI summary logs from v_ingestion_kpis (no pipeline changes)
+      fixedDelayMs: 120000     # 2 minutes for near-real-time visibility during 30-min poll cycles
     allowNonSchemaAttachments: false
     maxAttachmentBytes: 10485760
     failOnXsdError: false                  # stricter in prod
@@ -127,6 +131,13 @@ claims:
     poll:
       fixedDelayMs: 18000000
     downloadConcurrency: 16
+    facilityPoll:
+      strategy: "staggered"         # staggered | concurrent (planning knob; current code logs only)
+      staggerIntervalMs: 750         # delay between facilities when staggered
+      maxConcurrent: 8               # soft target for facility parallelism
+      enableAdvanced: false          # IMPORTANT: keep false to preserve current behavior
+  metrics:
+    facilityQueueEnabled: true       # when true, emits facility queue metrics from fetch coordinator
 
   fetch:
     stageToDisk:

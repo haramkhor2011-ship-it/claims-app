@@ -20,3 +20,9 @@ LEFT JOIN information_schema.key_column_usage kcu
 WHERE tc.table_schema = 'claims_ref'
     AND tc.table_name = 'contract_package';
 
+
+
+
+
+
+

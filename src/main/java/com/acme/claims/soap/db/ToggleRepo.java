@@ -21,6 +21,7 @@ public class ToggleRepo {
         jdbc.update("""
       insert into claims.integration_toggle(code, enabled) values(?, ?)
       on conflict(code) do update set enabled=excluded.enabled, updated_at=now()
+      -- Note: code is PRIMARY KEY, so using column-based ON CONFLICT
       """, code, enabled);
     }
 }

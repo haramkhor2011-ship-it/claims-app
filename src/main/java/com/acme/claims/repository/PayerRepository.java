@@ -172,8 +172,8 @@ public interface PayerRepository extends JpaRepository<Payer, Long> {
     @Query("""
         SELECT p FROM Payer p 
         WHERE (:searchTerm IS NULL OR 
-               LOWER(p.payerCode) LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR 
-               LOWER(p.name) LIKE LOWER(CONCAT('%', :searchTerm, '%')))
+               LOWER(p.payerCode) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')) OR 
+               LOWER(p.name) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')))
         AND (:status IS NULL OR p.status = :status)
         AND (:classification IS NULL OR p.classification = :classification)
         ORDER BY p.payerCode ASC

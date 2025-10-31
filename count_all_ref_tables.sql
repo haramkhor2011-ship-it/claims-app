@@ -5,3 +5,9 @@ FROM pg_tables
 WHERE schemaname = 'claims_ref'
 ORDER BY tablename
 \gexec
+
+
+
+
+
+

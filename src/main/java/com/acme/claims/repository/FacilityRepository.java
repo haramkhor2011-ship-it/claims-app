@@ -151,8 +151,8 @@ public interface FacilityRepository extends JpaRepository<Facility, Long> {
     @Query("""
         SELECT f FROM Facility f 
         WHERE (:searchTerm IS NULL OR 
-               LOWER(f.facilityCode) LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR 
-               LOWER(f.name) LIKE LOWER(CONCAT('%', :searchTerm, '%')))
+               LOWER(f.facilityCode) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')) OR 
+               LOWER(f.name) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')))
         AND (:status IS NULL OR f.status = :status)
         ORDER BY f.facilityCode ASC
         """)

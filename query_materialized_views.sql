@@ -9,3 +9,9 @@ FROM pg_matviews mv
 LEFT JOIN pg_stat_user_tables st ON st.schemaname = mv.schemaname AND st.relname = mv.matviewname
 ORDER BY mv.schemaname, mv.matviewname;
 
+
+
+
+
+
+

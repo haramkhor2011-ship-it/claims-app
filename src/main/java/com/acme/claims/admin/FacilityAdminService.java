@@ -27,7 +27,7 @@ public class FacilityAdminService {
                           insert into claims.facility_dhpo_config
                             (facility_code, facility_name,dhpo_username_enc, dhpo_password_enc, enc_meta_json)
                           values (?,?,?,?,?::jsonb)
-                          on conflict (facility_code) do update set
+                          on conflict on constraint uq_facility_dhpo_config do update set
                             facility_name=excluded.facility_name,
                             dhpo_username_enc=excluded.dhpo_username_enc,
                             dhpo_password_enc=excluded.dhpo_password_enc,

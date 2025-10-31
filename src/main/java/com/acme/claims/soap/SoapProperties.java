@@ -12,8 +12,12 @@ public record SoapProperties(
         RetryProps retry,
         PollProps poll,
         String transport,
-        Integer downloadConcurrency
+        Integer downloadConcurrency,
+        FacilityPollProps facilityPoll,
+        MetricsToggles metrics
 ) {
     public record RetryProps(Integer maxAttempts, Long backoffMs) {}
     public record PollProps(Integer fixedDelayMs) {}
+    public record FacilityPollProps(String strategy, Long staggerIntervalMs, Integer maxConcurrent, Boolean enableAdvanced) {}
+    public record MetricsToggles(Boolean facilityQueueEnabled) {}
 }

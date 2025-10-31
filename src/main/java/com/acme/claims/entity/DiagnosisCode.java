@@ -30,7 +30,7 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "diagnosis_code", schema = "claims_ref",
-       uniqueConstraints = @UniqueConstraint(name = "uq_diagnosis_code", columnNames = {"code", "code_system"}))
+       uniqueConstraints = @UniqueConstraint(name = "uq_diagnosis_code", columnNames = {"code"}))
 @Data
 @Builder
 @NoArgsConstructor

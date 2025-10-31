@@ -97,9 +97,10 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_error_retryable ON claims.ingestion_err
 
 CREATE TABLE IF NOT EXISTS claims.claim_key (
   id          BIGSERIAL PRIMARY KEY,
-  claim_id    TEXT NOT NULL UNIQUE,
+  claim_id    TEXT NOT NULL,
   created_at  TIMESTAMPTZ,
-  updated_at  TIMESTAMPTZ
+  updated_at  TIMESTAMPTZ,
+  CONSTRAINT uq_claim_key_claim_id UNIQUE (claim_id)
 );
 
 COMMENT ON TABLE claims.claim_key IS 'Canonical claim identifier (Claim/ID appears in both roots)';
@@ -118,7 +119,8 @@ CREATE TABLE IF NOT EXISTS claims.submission (
   ingestion_file_id  BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE RESTRICT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  tx_at              TIMESTAMPTZ NOT NULL
+  tx_at              TIMESTAMPTZ NOT NULL,
+  CONSTRAINT uq_submission_per_file UNIQUE (ingestion_file_id)
 );
 
 COMMENT ON TABLE claims.submission IS 'Submission grouping (one per ingestion file)';
@@ -283,7 +285,8 @@ CREATE TABLE IF NOT EXISTS claims.remittance (
   ingestion_file_id  BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE RESTRICT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  tx_at              TIMESTAMPTZ NOT NULL
+  tx_at              TIMESTAMPTZ NOT NULL,
+  CONSTRAINT uq_remittance_per_file UNIQUE (ingestion_file_id)
 );
 
 COMMENT ON TABLE claims.remittance IS 'Remittance grouping (one per ingestion file)';
@@ -380,7 +383,7 @@ CREATE TABLE IF NOT EXISTS claims.claim_event (
   type               SMALLINT NOT NULL,
   submission_id      BIGINT REFERENCES claims.submission(id) ON DELETE RESTRICT,
   remittance_id      BIGINT REFERENCES claims.remittance(id) ON DELETE RESTRICT,
-  created_at         TIMESTAMPTZ NOT NULL
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 COMMENT ON TABLE claims.claim_event IS 'Event tracking for claim lifecycle';
@@ -1002,18 +1005,6 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_file_audit_verification ON claims.inges
 -- Grant permissions to claims_user role
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA claims TO claims_user;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA claims TO claims_user;
-
--- ==========================================================================================================
--- SECTION 12: INTEGRATION TOGGLES (Additional toggles)
--- ==========================================================================================================
-
--- Add missing integration toggles (table created in 04-dhpo-config.sql)
--- Using ON CONFLICT to avoid duplicates if toggles already exist
-INSERT INTO claims.integration_toggle (code, enabled) 
-VALUES 
-  ('is_mv_enabled', false),
-  ('is_sub_second_mode_enabled', false)
-ON CONFLICT (code) DO NOTHING;
 
 -- ==========================================================================================================
 -- END OF CORE TABLES

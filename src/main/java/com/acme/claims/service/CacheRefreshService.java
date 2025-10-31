@@ -9,7 +9,6 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -487,7 +486,7 @@ public class CacheRefreshService {
                 .page(0)
                 .size(10)
                 .status("ACTIVE")
-                .sortBy("name")
+                .sortBy("code")  // Use "code" instead of "name" - "code" exists on all refdata entities
                 .sortDirection("ASC")
                 .build();
     }

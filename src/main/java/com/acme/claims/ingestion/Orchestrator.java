@@ -188,6 +188,7 @@ import org.springframework.stereotype.Component;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 @Profile("ingestion")
@@ -232,6 +233,9 @@ public class Orchestrator {
      * </ul>
      */
     private final Set<String> processingFiles = ConcurrentHashMap.newKeySet();
+    
+    // Track active file counts per run - used to determine when to end a run
+    private final ConcurrentHashMap<Long, AtomicInteger> activeFilesPerRun = new ConcurrentHashMap<>();
 
 
     public Orchestrator(Fetcher fetcher,
@@ -364,8 +368,14 @@ public class Orchestrator {
         );
         
         try {
-            // Set run context for this thread
-            RunContext.setCurrentRunId(runId);
+            // Set run context for this thread only if run was successfully created
+            if (runId != null) {
+                RunContext.setCurrentRunId(runId);
+                log.debug("Set RunContext to runId={}", runId);
+            } else {
+                RunContext.clear(); // Explicitly clear to prevent stale values
+                log.warn("Ingestion run creation failed, continuing without run tracking");
+            }
             
             int workers = Math.max(1, props.getConcurrency().getParserWorkers());
             int capacityHint = Math.max(1, queue.size());
@@ -376,22 +386,61 @@ public class Orchestrator {
             log.info("QUEUE STATUS: size={}, remaining={}, workers={}, runId={}",
                     queue.size(), queue.remainingCapacity(), workers, runId);
 
+            // Initialize active file counter for this run if files will be submitted
+            if (runId != null) {
+                activeFilesPerRun.putIfAbsent(runId, new AtomicInteger(0));
+            }
+
             while (submitted < burst && System.nanoTime() < deadlineNanos) {
                 WorkItem wi = queue.poll();
                 if (wi == null) break;
                 try {
                     final Long runIdForTask = runId; // bind runId to worker thread
+                    
+                    // Increment active file counter for this run
+                    if (runIdForTask != null) {
+                        activeFilesPerRun.get(runIdForTask).incrementAndGet();
+                    }
+                    
                     executor.execute(() -> {
-                        // Ensure runId is visible in worker thread
-                        RunContext.setCurrentRunId(runIdForTask);
+                        // Only set RunContext if runId is valid
+                        if (runIdForTask != null) {
+                            RunContext.setCurrentRunId(runIdForTask);
+                        }
                         try {
                             processOne(wi);
                         } finally {
+                            // Always clear RunContext to prevent thread-local leakage
                             RunContext.clear();
+                            
+                            // Decrement active file counter and end run if this was the last file
+                            if (runIdForTask != null) {
+                                AtomicInteger activeCount = activeFilesPerRun.get(runIdForTask);
+                                if (activeCount != null) {
+                                    int remaining = activeCount.decrementAndGet();
+                                    if (remaining == 0) {
+                                        // This was the last file for this run - safe to end the run
+                                        activeFilesPerRun.remove(runIdForTask);
+                                        audit.endRunSafely(runIdForTask);
+                                        log.debug("Ended ingestion run {} after all files completed", runIdForTask);
+                                    } else if (remaining < 0) {
+                                        // Shouldn't happen, but handle gracefully
+                                        log.warn("Active file count for run {} went negative: {}. Removing tracking.", runIdForTask, remaining);
+                                        activeFilesPerRun.remove(runIdForTask);
+                                    }
+                                }
+                            }
                         }
                     });
                     submitted++;
                 } catch (java.util.concurrent.RejectedExecutionException rex) {
+                    // Decrement counter if we failed to submit
+                    if (runId != null) {
+                        AtomicInteger activeCount = activeFilesPerRun.get(runId);
+                        if (activeCount != null) {
+                            activeCount.decrementAndGet();
+                        }
+                    }
                     boolean requeued = queue.offer(wi);
                     log.warn("Executor saturated; requeued={}, queueSize={}", requeued, queue.size());
                     try { fetcher.pause(); } catch (Exception ignore) {}
@@ -412,12 +461,21 @@ public class Orchestrator {
             }
             log.debug("Drain cycle end; dispatched={}, runId={}", submitted, runId);
             
-        } finally {
-            // Always clear run context and end the run
-            RunContext.clear();
-            if (runId != null) {
-                audit.endRunSafely(runId);
+            // If no files were submitted, end the run immediately
+            // Otherwise, the run will be ended by the last completing file
+            if (runId != null && submitted == 0) {
+                AtomicInteger activeCount = activeFilesPerRun.remove(runId);
+                if (activeCount != null && activeCount.get() == 0) {
+                    audit.endRunSafely(runId);
+                    log.debug("Ended ingestion run {} immediately (no files submitted)", runId);
+                }
             }
+            
+        } finally {
+            // Always clear run context
+            // NOTE: Don't end run here - it will be ended by the last completing file
+            // or immediately above if no files were submitted
+            RunContext.clear();
         }
     }
 
@@ -545,12 +603,16 @@ public class Orchestrator {
                     result.parsedEncounters(), result.persistedEncounters(),
                     result.parsedDiagnoses(), result.persistedDiagnoses(),
                     result.parsedObservations(), result.persistedObservations(),
+                    result.parsedRemitClaims(), result.persistedRemitClaims(),
+                    result.parsedRemitActivities(), result.persistedRemitActivities(),
                     result.projectedEvents(), result.projectedStatusRows(),
                     durationMs, wi.xmlBytes() != null ? wi.xmlBytes().length : 0L,
                     mode, workerThread,
                     totalGross, totalNet, totalPatientShare,
                     uniquePayers, uniqueProviders,
-                    acker != null, success,
+                    acker != null,      // ackAttempted: true if acker exists
+                    false,               // ackSent: false at audit time (ack happens later in finally block)
+                    true,                // pipelineSuccess: true (pipeline.process() completed without exception)
                     verified ? 0 : 1);
             }
 
@@ -582,13 +644,25 @@ public class Orchestrator {
             maybeArchiveFile(wi, success);
 
             if (acker != null) {
+                boolean ackSent = false;
                 try {
                     acker.maybeAck(fileId, success);
-                    log.info("ORCHESTRATOR_ACK_ATTEMPTED fileId={} fileName={} success={}",
-                        fileId, wi.fileName(), success);
+                    // If we reach here without exception, ack was attempted successfully
+                    // Note: For SoapAckerAdapter, ack may still not be sent if ackEnabled=false,
+                    // success=false, or facility not found, but we can't determine that from the interface.
+                    // For NoopAcker (localfs mode), ack is never sent, but this flag will be true.
+                    ackSent = success; // Only mark as sent if success=true (ack is only attempted on success)
+                    log.info("ORCHESTRATOR_ACK_ATTEMPTED fileId={} fileName={} success={} ackSent={}",
+                        fileId, wi.fileName(), success, ackSent);
                 } catch (Exception ackEx) {
                     log.warn("ORCHESTRATOR_ACK_FAILED fileId={} fileName={} : {}",
                         fileId, wi.fileName(), ackEx.getMessage());
+                    ackSent = false;
+                }
+                
+                // Update audit record with ack_sent status
+                if (currentRunId != null && ingestionFileId != null) {
+                    audit.updateAckSentSafely(currentRunId, ingestionFileId, ackSent);
                 }
             }
         }

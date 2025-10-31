@@ -55,7 +55,7 @@ public class ReferenceDataController {
      * @return Paginated list of facilities
      */
     @GetMapping("/facilities")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Search facilities",
         description = "Search and retrieve facilities with pagination, filtering, and sorting"
@@ -110,7 +110,7 @@ public class ReferenceDataController {
      * @return Facility details
      */
     @GetMapping("/facilities/code/{facilityCode}")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Get facility by code",
         description = "Retrieve a specific facility by its unique facility code"
@@ -130,6 +130,10 @@ public class ReferenceDataController {
         
         try {
             FacilityResponse response = referenceDataService.getFacilityByCode(facilityCode);
+            if (response == null) {
+                log.warn("Facility not found: {}", facilityCode);
+                return ResponseEntity.notFound().build();
+            }
             return ResponseEntity.ok(response);
             
         } catch (Exception e) {
@@ -149,7 +153,7 @@ public class ReferenceDataController {
      * @return Paginated list of payers
      */
     @GetMapping("/payers")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Search payers",
         description = "Search and retrieve payers with pagination, filtering, and sorting"
@@ -203,7 +207,7 @@ public class ReferenceDataController {
      * @return Payer details
      */
     @GetMapping("/payers/code/{payerCode}")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Get payer by code",
         description = "Retrieve a specific payer by its unique payer code"
@@ -223,6 +227,10 @@ public class ReferenceDataController {
         
         try {
             PayerResponse response = referenceDataService.getPayerByCode(payerCode);
+            if (response == null) {
+                log.warn("Payer not found: {}", payerCode);
+                return ResponseEntity.notFound().build();
+            }
             return ResponseEntity.ok(response);
             
         } catch (Exception e) {
@@ -242,7 +250,7 @@ public class ReferenceDataController {
      * @return Paginated list of clinicians
      */
     @GetMapping("/clinicians")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Search clinicians",
         description = "Search and retrieve clinicians with pagination, filtering, and sorting"
@@ -296,7 +304,7 @@ public class ReferenceDataController {
      * @return Clinician details
      */
     @GetMapping("/clinicians/code/{clinicianCode}")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Get clinician by code",
         description = "Retrieve a specific clinician by its unique clinician code"
@@ -316,6 +324,10 @@ public class ReferenceDataController {
         
         try {
             ClinicianResponse response = referenceDataService.getClinicianByCode(clinicianCode);
+            if (response == null) {
+                log.warn("Clinician not found: {}", clinicianCode);
+                return ResponseEntity.notFound().build();
+            }
             return ResponseEntity.ok(response);
             
         } catch (Exception e) {
@@ -335,7 +347,7 @@ public class ReferenceDataController {
      * @return Paginated list of diagnosis codes
      */
     @GetMapping("/diagnosis-codes")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Search diagnosis codes",
         description = "Search and retrieve diagnosis codes with pagination, filtering, and sorting"
@@ -383,17 +395,17 @@ public class ReferenceDataController {
     }
 
     /**
-     * Get diagnosis code by code and system.
+     * Get diagnosis code by code.
+     * Uses ICD-10 as the default code system.
      * 
      * @param code The diagnosis code
-     * @param codeSystem The code system (e.g., ICD-10)
      * @return Diagnosis code details
      */
-    @GetMapping("/diagnosis-codes/code/{code}/system/{codeSystem}")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @GetMapping("/diagnosis-codes/code/{code}")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
-        summary = "Get diagnosis code by code and system",
-        description = "Retrieve a specific diagnosis code by its code and code system"
+        summary = "Get diagnosis code by code",
+        description = "Retrieve a specific diagnosis code by its code (defaults to ICD-10 code system)"
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Successfully retrieved diagnosis code",
@@ -402,20 +414,22 @@ public class ReferenceDataController {
         @ApiResponse(responseCode = "401", description = "Unauthorized"),
         @ApiResponse(responseCode = "403", description = "Forbidden")
     })
-    public ResponseEntity<DiagnosisCodeResponse> getDiagnosisCodeByCodeAndSystem(
+    public ResponseEntity<DiagnosisCodeResponse> getDiagnosisCodeByCode(
             @Parameter(description = "Diagnosis code", example = "Z00.00")
-            @PathVariable String code,
-            @Parameter(description = "Code system", example = "ICD-10")
-            @PathVariable String codeSystem) {
+            @PathVariable String code) {
         
-        log.info("Retrieving diagnosis code by code: {} and system: {}", code, codeSystem);
+        log.info("Retrieving diagnosis code by code: {} (default code system: ICD-10)", code);
         
         try {
-            DiagnosisCodeResponse response = referenceDataService.getDiagnosisCodeByCodeAndSystem(code, codeSystem);
+            DiagnosisCodeResponse response = referenceDataService.getDiagnosisCodeByCode(code);
+            if (response == null) {
+                log.warn("Diagnosis code not found: {}", code);
+                return ResponseEntity.notFound().build();
+            }
             return ResponseEntity.ok(response);
             
         } catch (Exception e) {
-            log.error("Error retrieving diagnosis code by code: {} and system: {}", code, codeSystem, e);
+            log.error("Error retrieving diagnosis code by code: {}", code, e);
             throw e;
         }
     }
@@ -431,7 +445,7 @@ public class ReferenceDataController {
      * @return Paginated list of activity codes
      */
     @GetMapping("/activity-codes")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Search activity codes",
         description = "Search and retrieve activity codes with pagination, filtering, and sorting"
@@ -480,17 +494,17 @@ public class ReferenceDataController {
     }
 
     /**
-     * Get activity code by code and type.
+     * Get activity code by code.
+     * Searches by code only, returns the first active match found.
      * 
      * @param code The activity code
-     * @param type The activity type (e.g., CPT, HCPCS)
      * @return Activity code details
      */
-    @GetMapping("/activity-codes/code/{code}/type/{type}")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @GetMapping("/activity-codes/code/{code}")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
-        summary = "Get activity code by code and type",
-        description = "Retrieve a specific activity code by its code and type"
+        summary = "Get activity code by code",
+        description = "Retrieve an activity code by its code. Searches by code only and returns the first active match."
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Successfully retrieved activity code",
@@ -499,20 +513,22 @@ public class ReferenceDataController {
         @ApiResponse(responseCode = "401", description = "Unauthorized"),
         @ApiResponse(responseCode = "403", description = "Forbidden")
     })
-    public ResponseEntity<ActivityCodeResponse> getActivityCodeByCodeAndType(
+    public ResponseEntity<ActivityCodeResponse> getActivityCodeByCode(
             @Parameter(description = "Activity code", example = "99213")
-            @PathVariable String code,
-            @Parameter(description = "Activity type", example = "CPT")
-            @PathVariable String type) {
+            @PathVariable String code) {
         
-        log.info("Retrieving activity code by code: {} and type: {}", code, type);
+        log.info("Retrieving activity code by code: {}", code);
         
         try {
-            ActivityCodeResponse response = referenceDataService.getActivityCodeByCodeAndType(code, type);
+            ActivityCodeResponse response = referenceDataService.getActivityCodeByCode(code);
+            if (response == null) {
+                log.warn("Activity code not found: {}", code);
+                return ResponseEntity.notFound().build();
+            }
             return ResponseEntity.ok(response);
             
         } catch (Exception e) {
-            log.error("Error retrieving activity code by code: {} and type: {}", code, type, e);
+            log.error("Error retrieving activity code by code: {}", code, e);
             throw e;
         }
     }
@@ -528,7 +544,7 @@ public class ReferenceDataController {
      * @return Paginated list of denial codes
      */
     @GetMapping("/denial-codes")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Search denial codes",
         description = "Search and retrieve denial codes with pagination, filtering, and sorting"
@@ -582,7 +598,7 @@ public class ReferenceDataController {
      * @return Denial code details
      */
     @GetMapping("/denial-codes/code/{code}")
-    @PreAuthorize("hasAnyRole('FACILITY_ADMIN', 'CLAIMS_USER', 'CLAIMS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'FACILITY_ADMIN', 'STAFF')")
     @Operation(
         summary = "Get denial code by code",
         description = "Retrieve a specific denial code by its unique code"
@@ -602,6 +618,10 @@ public class ReferenceDataController {
         
         try {
             DenialCodeResponse response = referenceDataService.getDenialCodeByCode(code);
+            if (response == null) {
+                log.warn("Denial code not found: {}", code);
+                return ResponseEntity.notFound().build();
+            }
             return ResponseEntity.ok(response);
             
         } catch (Exception e) {

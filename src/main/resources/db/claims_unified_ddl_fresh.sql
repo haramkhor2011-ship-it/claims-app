@@ -229,11 +229,11 @@ create table if not exists claims_ref.diagnosis_code (
   status       text default 'ACTIVE',
   created_at	 timestamptz default now(),
   updated_at   timestamptz,
-  constraint uq_diagnosis_code unique (code, description)
+  constraint uq_diagnosis_code unique (code)
 );
 comment on table claims_ref.diagnosis_code is 'Diagnosis codes (Diagnosis.Code)';
 
-CREATE INDEX IF NOT EXISTS idx_diagnosis_code_lookup ON claims_ref.diagnosis_code(code, description);
+CREATE INDEX IF NOT EXISTS idx_diagnosis_code_lookup ON claims_ref.diagnosis_code(code);
 CREATE INDEX IF NOT EXISTS idx_diagnosis_code_status ON claims_ref.diagnosis_code(status);
 CREATE INDEX IF NOT EXISTS idx_ref_diag_code ON claims_ref.diagnosis_code(code);
 CREATE INDEX IF NOT EXISTS idx_ref_diag_desc_trgm ON claims_ref.diagnosis_code USING gin (description gin_trgm_ops);
@@ -414,7 +414,8 @@ CREATE TABLE IF NOT EXISTS claims.submission (
   ingestion_file_id  BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE RESTRICT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  tx_at              TIMESTAMPTZ NOT NULL
+  tx_at              TIMESTAMPTZ NOT NULL,
+  CONSTRAINT uq_submission_per_file UNIQUE (ingestion_file_id)
 );
 
 COMMENT ON TABLE claims.submission IS 'Submission grouping (one per ingestion file)';
@@ -566,7 +567,8 @@ CREATE TABLE IF NOT EXISTS claims.remittance (
   ingestion_file_id  BIGINT NOT NULL REFERENCES claims.ingestion_file(id) ON DELETE RESTRICT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  tx_at              TIMESTAMPTZ NOT NULL
+  tx_at              TIMESTAMPTZ NOT NULL,
+  CONSTRAINT uq_remittance_per_file UNIQUE (ingestion_file_id)
 );
 
 COMMENT ON TABLE claims.remittance IS 'Remittance grouping (one per ingestion file)';

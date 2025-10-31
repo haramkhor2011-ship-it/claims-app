@@ -13,3 +13,9 @@ WHERE tc.table_schema = 'claims_ref'
     AND tc.constraint_type IN ('UNIQUE', 'PRIMARY KEY')
 ORDER BY tc.table_name, tc.constraint_type;
 
+
+
+
+
+
+

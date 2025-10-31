@@ -183,8 +183,8 @@ public interface DiagnosisCodeRepository extends JpaRepository<DiagnosisCode, Lo
     @Query("""
         SELECT d FROM DiagnosisCode d 
         WHERE (:searchTerm IS NULL OR 
-               LOWER(d.code) LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR 
-               LOWER(d.description) LIKE LOWER(CONCAT('%', :searchTerm, '%')))
+               LOWER(d.code) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')) OR 
+               LOWER(d.description) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')))
         AND (:status IS NULL OR d.status = :status)
         AND (:codeSystem IS NULL OR d.codeSystem = :codeSystem)
         ORDER BY d.code ASC

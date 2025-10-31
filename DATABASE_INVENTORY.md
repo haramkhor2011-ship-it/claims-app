@@ -242,3 +242,9 @@ docker exec -it claims-postgres psql -U claims_user -d claims
 
 - All materialized views are empty and may need refreshing if used in production
 
+
+
+
+
+
+

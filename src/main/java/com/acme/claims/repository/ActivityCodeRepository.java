@@ -219,8 +219,8 @@ public interface ActivityCodeRepository extends JpaRepository<ActivityCode, Long
     @Query("""
         SELECT a FROM ActivityCode a 
         WHERE (:searchTerm IS NULL OR 
-               LOWER(a.code) LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR 
-               LOWER(a.description) LIKE LOWER(CONCAT('%', :searchTerm, '%')))
+               LOWER(a.code) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')) OR 
+               LOWER(a.description) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')))
         AND (:status IS NULL OR a.status = :status)
         AND (:type IS NULL OR a.type = :type)
         AND (:codeSystem IS NULL OR a.codeSystem = :codeSystem)

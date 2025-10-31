@@ -8,3 +8,9 @@ FROM pg_indexes
 WHERE schemaname = 'claims_ref'
 ORDER BY tablename, indexname;
 
+
+
+
+
+
+

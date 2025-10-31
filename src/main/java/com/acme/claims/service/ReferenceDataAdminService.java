@@ -612,7 +612,6 @@ public class ReferenceDataAdminService {
         DenialCode denialCode = DenialCode.builder()
                 .code(request.getCode())
                 .description(request.getDescription())
-                .payerCode(request.getPayerCode())
                 .build();
 
         DenialCode savedDenialCode = denialCodeRepository.save(denialCode);
@@ -646,7 +645,6 @@ public class ReferenceDataAdminService {
 
         denialCode.setCode(request.getCode());
         denialCode.setDescription(request.getDescription());
-        denialCode.setPayerCode(request.getPayerCode());
 
         DenialCode savedDenialCode = denialCodeRepository.save(denialCode);
         log.info("Successfully updated denial code: {} with ID: {}", savedDenialCode.getCode(), savedDenialCode.getId());
@@ -902,12 +900,14 @@ public class ReferenceDataAdminService {
         item.setCode(denialCode.getCode());
         item.setDescription(denialCode.getDescription());
         item.setDisplayName(denialCode.getDisplayName());
-        item.setPayerCode(denialCode.getPayerCode());
-        item.setFullCode(denialCode.getFullCode());
-        item.setPayerSpecific(denialCode.isPayerSpecific());
-        item.setGlobal(denialCode.isGlobal());
         item.setCreatedAt(denialCode.getCreatedAt());
         item.setUpdatedAt(denialCode.getUpdatedAt());
+        
+        // Set payer-related fields to null/false since DenialCode doesn't have payerCode field
+        item.setPayerCode(null);
+        item.setPayerSpecific(false);
+        item.setGlobal(true);
+        item.setFullCode(denialCode.getCode()); // Use code as full code since no payer scope
         
         // Set base fields
         item.setCode(denialCode.getCode());

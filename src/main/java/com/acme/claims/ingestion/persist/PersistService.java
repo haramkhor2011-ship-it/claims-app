@@ -92,8 +92,8 @@ import java.util.Set;
  * </ul>
  *
  * @author Claims Team
- * @since 1.0
  * @version 2.0 - Enhanced with per-claim transactions and flexible XSD validation
+ * @since 1.0
  */
 @Slf4j
 @Service
@@ -108,12 +108,12 @@ public class PersistService {
 
     /**
      * Persists a submission file without attachments.
-     * 
+     *
      * <p>This is a convenience method that delegates to the main persistence method
      * with an empty list of attachments.
-     * 
+     *
      * @param ingestionFileId the ID of the ingestion file being processed
-     * @param file the parsed submission data
+     * @param file            the parsed submission data
      * @return counts of persisted entities
      * @see #persistSubmission(long, SubmissionDTO, List)
      */
@@ -154,20 +154,25 @@ public class PersistService {
      * </ul>
      *
      * @param ingestionFileId the unique ID of the ingestion file being processed
-     * @param file the parsed submission data containing header and claims information
-     * @param attachments optional list of file attachments associated with this submission
+     * @param file            the parsed submission data containing header and claims information
+     * @param attachments     optional list of file attachments associated with this submission
      * @return PersistCounts summary of entities successfully persisted
      * @throws IllegalArgumentException if ingestionFileId is invalid or file is null
-     *
      * @see PersistCounts for detailed count information
      * @see SubmissionDTO for input data structure
      */
     @Transactional
     public PersistCounts persistSubmission(long ingestionFileId, SubmissionDTO file, List<ParseOutcome.AttachmentRecord> attachments) {
-        final OffsetDateTime now = OffsetDateTime.now();
 
         final Long submissionId = jdbc.queryForObject(
-                "insert into claims.submission(ingestion_file_id, tx_at) values (?, ?) returning id",
+                """
+                        insert into claims.submission(ingestion_file_id, tx_at)
+                        values (?, ?)
+                        on conflict on constraint uq_submission_per_file do update
+                          set tx_at = excluded.tx_at,
+                              updated_at = now()
+                        returning id
+                        """,
                 Long.class, ingestionFileId, file.header().transactionDate()
         );
         log.info("persistSubmission: created submission header id={} for ingestionFileId={}", submissionId, ingestionFileId);
@@ -179,7 +184,7 @@ public class PersistService {
                 log.info("persistSingleClaim: start claimId={} payerId={} providerId={} emiratesId={} gross={} patientShare={} net={} activities={} diagnoses={}",
                         c.id(), c.payerId(), c.providerId(), c.emiratesIdNumber(), c.gross(), c.patientShare(), c.net(),
                         (c.activities() == null ? 0 : c.activities().size()), (c.diagnoses() == null ? 0 : c.diagnoses().size()));
-                
+
                 // Process each claim in its own transaction to prevent single failure from stopping entire file
                 // Duplicate detection is now handled INSIDE persistSingleClaim with proper transaction isolation
                 PersistCounts claimCounts = persistSingleClaim(ingestionFileId, submissionId, c, attachments, file);
@@ -208,6 +213,23 @@ public class PersistService {
 
         // Note: Duplicate detection and validation errors are now logged at the individual claim level
         // within the transaction boundary to prevent race conditions
+        
+        // Only delete submission if it has NO claims in the database (check actual DB state, not just new inserts)
+        // This prevents deletion on re-ingestion when all claims already exist (claims counter = 0 but DB has data)
+        Integer existingClaimsCount = jdbc.query(
+                "select count(*) from claims.claim where submission_id = ?",
+                ps -> ps.setLong(1, submissionId),
+                rs -> rs.next() ? rs.getInt(1) : 0
+        );
+        
+        if (existingClaimsCount == null || existingClaimsCount == 0) {
+            try {
+                jdbc.update("delete from claims.submission where id = ?", submissionId);
+                log.warn("persistSubmission: deleted empty submission id={} (no claims in database)", submissionId);
+            } catch (Exception e) {
+                log.error("persistSubmission: failed to delete empty submission id={}: {}", submissionId, e.getMessage(), e);
+            }
+        }
 
         return new PersistCounts(claims, acts, obs, dxs, encounters, 0, 0, events, statusRows);
     }
@@ -259,7 +281,6 @@ public class PersistService {
     public PersistCounts persistSingleClaim(long ingestionFileId, long submissionId, SubmissionClaimDTO c,
                                             List<ParseOutcome.AttachmentRecord> attachments, SubmissionDTO file) {
         final String claimIdBiz = c.id();
-        final OffsetDateTime now = OffsetDateTime.now();
 
         // hard guard at claim level (before any DB writes)
         if (!claimHasRequired(ingestionFileId, c)) {
@@ -271,7 +292,7 @@ public class PersistService {
 
         // Determine if this is a resubmission for logging purposes
         boolean isResubmission = c.resubmission() != null;
-        
+
         if (isResubmission) {
             log.info("Processing resubmission for claimId={}, resubmissionType={}", claimIdBiz, c.resubmission().type());
         } else {
@@ -289,10 +310,17 @@ public class PersistService {
         final Long providerRefId = (c.providerId() == null) ? null
                 : refCodeResolver.resolveProvider(c.providerId(), null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
 
+        // Pre-check for existing claim to count only new inserts
+        Long preClaim = jdbc.query(
+                "select id from claims.claim where claim_key_id = ?",
+                ps -> ps.setLong(1, claimKeyId),
+                rs -> rs.next() ? rs.getLong(1) : null
+        );
         log.info("persistSingleClaim: about to insert claim for claimId={} amounts[gross={}, patientShare={}, net={}]",
                 claimIdBiz, c.gross(), c.patientShare(), c.net());
         final long claimId = upsertClaim(claimKeyId, submissionId, c, payerRefId, providerRefId, file);
-        log.info("persistSingleClaim: inserted claim dbId={} for claimId={} (submissionId={})", claimId, claimIdBiz, submissionId);
+        boolean claimInserted = (preClaim == null);
+        log.info("persistSingleClaim: inserted/located claim dbId={} for claimId={} (submissionId={})", claimId, claimIdBiz, submissionId);
 
         // Contract (optional)
         if (c.contract() != null) {
@@ -306,8 +334,19 @@ public class PersistService {
             final Long facilityRefId = (c.encounter().facilityId() == null) ? null
                     : refCodeResolver.resolveFacility(c.encounter().facilityId(), null, null, null, "SYSTEM", ingestionFileId, c.id())
                     .orElse(null);
+            Long preEnc = jdbc.query(
+                    "select id from claims.encounter where claim_id=? and facility_id=? and type=? and patient_id=? and start_at=? limit 1",
+                    ps -> {
+                        ps.setLong(1, claimId);
+                        ps.setString(2, c.encounter().facilityId());
+                        ps.setString(3, c.encounter().type());
+                        ps.setString(4, c.encounter().patientId());
+                        ps.setObject(5, c.encounter().start());
+                    },
+                    rs -> rs.next() ? rs.getLong(1) : null
+            );
             upsertEncounter(claimId, c.encounter(), facilityRefId);
-            encounters = 1;
+            if (preEnc == null) encounters++;
         }
 
         // Diagnoses (optional)
@@ -318,8 +357,17 @@ public class PersistService {
                     // PATCH: resolve diagnosis ref id
                     final Long diagnosisRefId = (d.code() == null) ? null
                             : refCodeResolver.resolveDiagnosisCode(d.code(), null, null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
+                    Long preDx = jdbc.query(
+                            "select id from claims.diagnosis where claim_id=? and diag_type=? and code=? limit 1",
+                            ps -> {
+                                ps.setLong(1, claimId);
+                                ps.setString(2, d.type());
+                                ps.setString(3, d.code());
+                            },
+                            rs -> rs.next() ? rs.getLong(1) : null
+                    );
                     upsertDiagnosis(claimId, d, diagnosisRefId);
-                    dxs++;
+                    if (preDx == null) dxs++;
                 }
             }
         }
@@ -335,14 +383,37 @@ public class PersistService {
                 final Long clinicianRefId = (a.clinician() == null) ? null
                         : refCodeResolver.resolveClinician(a.clinician(), null, null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
 
+                Long preAct = jdbc.query(
+                        "select id from claims.activity where claim_id=? and activity_id=?",
+                        ps -> {
+                            ps.setLong(1, claimId);
+                            ps.setString(2, a.id());
+                        },
+                        rs -> rs.next() ? rs.getLong(1) : null
+                );
                 long actId = upsertActivity(claimId, a, clinicianRefId, activityCodeRefId);
-
-                acts++;
+                if (preAct == null) acts++;
                 if (a.observations() != null) {
                     for (ObservationDTO o : a.observations()) {
-                        // Observation unique index will dedupe; value_text may be null → OK
+                        Long preObs = jdbc.query(
+                                """
+                                        select id from claims.observation
+                                         where activity_id=? and obs_type=? and obs_code=?
+                                           and coalesce(value_text,'') = coalesce(?, '')
+                                           and coalesce(value_type,'') = coalesce(?, '')
+                                         limit 1
+                                        """,
+                                ps -> {
+                                    ps.setLong(1, actId);
+                                    ps.setString(2, o.type());
+                                    ps.setString(3, o.code());
+                                    ps.setString(4, o.value());
+                                    ps.setString(5, o.valueType());
+                                },
+                                rs -> rs.next() ? rs.getLong(1) : null
+                        );
                         upsertObservation(actId, o);
-                        obs++;
+                        if (preObs == null) obs++;
                     }
                 }
             }
@@ -353,11 +424,12 @@ public class PersistService {
         long ev1;
         if (isResubmission) {
             // For resubmissions, try to find existing submission event first
-            Long existingEventId = jdbc.queryForObject(
-                "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
-                Long.class, claimKeyId
+            Long existingEventId = jdbc.query(
+                    "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
+                    ps -> ps.setLong(1, claimKeyId),
+                    rs -> rs.next() ? rs.getLong(1) : null
             );
-            
+
             if (existingEventId != null) {
                 ev1 = existingEventId;
                 log.info("Using existing submission event id={} for resubmission claimId={}", ev1, claimIdBiz);
@@ -379,11 +451,12 @@ public class PersistService {
                 // Handle duplicate submission event (race condition)
                 if (e.getMessage() != null && e.getMessage().contains("duplicate key")) {
                     log.info("Duplicate submission event detected for claimId={}, retrieving existing event", claimIdBiz);
-                    Long existingEventId = jdbc.queryForObject(
-                        "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
-                        Long.class, claimKeyId
+                    Long existingEventId = jdbc.query(
+                            "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
+                            ps -> ps.setLong(1, claimKeyId),
+                            rs -> rs.next() ? rs.getLong(1) : null
                     );
-                    
+
                     if (existingEventId != null) {
                         ev1 = existingEventId;
                         log.info("Using existing submission event id={} for claimId={} (race condition resolved)", ev1, claimIdBiz);
@@ -398,19 +471,37 @@ public class PersistService {
                 }
             }
         }
-        
+
         projectActivitiesToClaimEventFromSubmission(ev1, c.activities());
+        Long preStatus = jdbc.query(
+                "select id from claims.claim_status_timeline where claim_key_id=? and status=? and status_time=? limit 1",
+                ps -> {
+                    ps.setLong(1, claimKeyId);
+                    ps.setShort(2, (short) 1);
+                    ps.setObject(3, file.header().transactionDate());
+                },
+                rs -> rs.next() ? rs.getLong(1) : null
+        );
         insertStatusTimeline(claimKeyId, (short) 1, file.header().transactionDate(), ev1);
-        statusRows++;
+        if (preStatus == null) statusRows++;
 
         if (c.resubmission() != null) {
             long ev2 = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 2, submissionId, null);
             log.info("persistSingleClaim: inserted resubmission event id={} for claimId={} ingestionFileId={}", ev2, claimIdBiz, ingestionFileId);
             insertResubmission(ev2, c.resubmission(), file);
             projectActivitiesToClaimEventFromSubmission(ev2, c.activities());
+            Long preStatus2 = jdbc.query(
+                    "select id from claims.claim_status_timeline where claim_key_id=? and status=? and status_time=? limit 1",
+                    ps -> {
+                        ps.setLong(1, claimKeyId);
+                        ps.setShort(2, (short) 2);
+                        ps.setObject(3, file.header().transactionDate());
+                    },
+                    rs -> rs.next() ? rs.getLong(1) : null
+            );
             insertStatusTimeline(claimKeyId, (short) 2, file.header().transactionDate(), ev2);
             events++;
-            statusRows++;
+            if (preStatus2 == null) statusRows++;
         }
 
         // Attachments (Submission-only)
@@ -424,19 +515,19 @@ public class PersistService {
         log.info("Successfully persisted claim: {} with {} activities, {} observations, {} diagnoses, {} encounters, {} events",
                 claimIdBiz, acts, obs, dxs, encounters, events);
 
-        return new PersistCounts(1, acts, obs, dxs, encounters, 0, 0, events, statusRows);
+        return new PersistCounts(claimInserted ? 1 : 0, acts, obs, dxs, encounters, 0, 0, events, statusRows);
     }
 
     /* ========================= REMITTANCE PATH ========================= */
 
     /**
      * Persists a remittance file without attachments.
-     * 
+     *
      * <p>This is a convenience method that delegates to the main persistence method
      * with an empty list of attachments.
-     * 
+     *
      * @param ingestionFileId the ID of the ingestion file being processed
-     * @param file the parsed remittance advice data
+     * @param file            the parsed remittance advice data
      * @return counts of persisted entities
      * @see #persistRemittance(long, RemittanceAdviceDTO, List)
      */
@@ -447,7 +538,7 @@ public class PersistService {
 
     /**
      * Persists remittance advice data and updates claim statuses.
-     * 
+     *
      * <p>This method processes remittance advice files which contain payment information
      * and denial codes for previously submitted claims. It performs the following operations:
      * <ul>
@@ -459,27 +550,34 @@ public class PersistService {
      *   <li>Creates claim events and status timeline entries</li>
      *   <li>Processes file attachments (if present)</li>
      * </ul>
-     * 
+     *
      * <p>Status determination logic:
      * <ul>
      *   <li><strong>PAID (3):</strong> Payment amount equals net requested amount</li>
      *   <li><strong>PARTIALLY_PAID (4):</strong> Payment amount is less than net requested</li>
      *   <li><strong>REJECTED (5):</strong> No payment and all activities are denied</li>
      * </ul>
-     * 
+     *
      * <p>All operations are performed within a single transaction. Individual claim failures
      * are logged and skipped to allow processing of other claims in the batch.
-     * 
+     *
      * @param ingestionFileId the ID of the ingestion file being processed
-     * @param file the parsed remittance advice data
-     * @param attachments optional list of file attachments associated with this remittance
+     * @param file            the parsed remittance advice data
+     * @param attachments     optional list of file attachments associated with this remittance
      * @return PersistCounts containing the number of remittance entities persisted
      * @throws IllegalArgumentException if required parameters are null or invalid
      */
     @Transactional
     public PersistCounts persistRemittance(long ingestionFileId, RemittanceAdviceDTO file, List<ParseOutcome.AttachmentRecord> attachments) {
         final Long remittanceId = jdbc.queryForObject(
-                "insert into claims.remittance(ingestion_file_id, tx_at) values (?, ?) returning id",
+                """
+                        insert into claims.remittance(ingestion_file_id, tx_at)
+                        values (?, ?)
+                        on conflict on constraint uq_remittance_per_file do update
+                          set tx_at = excluded.tx_at,
+                              updated_at = now()
+                        returning id
+                        """,
                 Long.class, ingestionFileId, file.header().transactionDate()
         );
 
@@ -516,6 +614,23 @@ public class PersistService {
         if (skippedInvalidRemitClaim > 0) {
             errors.fileError(ingestionFileId, "VALIDATE", "MISSING_REMIT_REQUIRED_SUMMARY",
                     "Skipped " + skippedInvalidRemitClaim + " invalid remittance claim(s) due to missing requireds.", false);
+        }
+
+        // Only delete remittance if it has NO remittance claims in the database (check actual DB state, not just new inserts)
+        // This prevents deletion on re-ingestion when all remittance claims already exist (rClaims counter = 0 but DB has data)
+        Integer existingRemitClaimsCount = jdbc.query(
+                "select count(*) from claims.remittance_claim where remittance_id = ?",
+                ps -> ps.setLong(1, remittanceId),
+                rs -> rs.next() ? rs.getInt(1) : 0
+        );
+        
+        if (existingRemitClaimsCount == null || existingRemitClaimsCount == 0) {
+            try {
+                jdbc.update("delete from claims.remittance where id = ?", remittanceId);
+                log.warn("persistRemittance: deleted empty remittance id={} (no remittance claims in database)", remittanceId);
+            } catch (Exception e) {
+                log.error("persistRemittance: failed to delete empty remittance id={}: {}", remittanceId, e.getMessage(), e);
+            }
         }
 
         return new PersistCounts(0, 0, 0, 0, 0, rClaims, rActs, events, statusRows);
@@ -559,7 +674,8 @@ public class PersistService {
                                                       List<ParseOutcome.AttachmentRecord> attachments, RemittanceAdviceDTO file) {
         final String claimIdBiz = c.id();
         final long claimKeyId = upsertClaimKey(c.id(), file.header().transactionDate(), "R");
-        
+        int events = 0, statusRows = 0;
+
         // resolve denial code ref id for the claim scope (if any denial present at claim level)
         // final Long denialRefId = (c.denialCode() == null) ? null
         //         : refCodeResolver.resolveDenialCode(c.denialCode(), null, c.idPayer(), "SYSTEM", ingestionFileId, c.id())
@@ -571,6 +687,14 @@ public class PersistService {
                 : refCodeResolver.resolveProvider(c.providerId(), null, "SYSTEM", ingestionFileId, c.id())
                 .orElse(null);
 
+        Long preRc = jdbc.query(
+                "select id from claims.remittance_claim where remittance_id=? and claim_key_id=?",
+                ps -> {
+                    ps.setLong(1, remittanceId);
+                    ps.setLong(2, claimKeyId);
+                },
+                rs -> rs.next() ? rs.getLong(1) : null
+        );
         final long rcId = upsertRemittanceClaim(remittanceId, claimKeyId, c, null, payerRefId, providerRefId);
 
         int rActs = 0;
@@ -581,16 +705,33 @@ public class PersistService {
                 final Long activityCodeRefId = (a.code() == null) ? null
                         : refCodeResolver.resolveActivityCode(a.code(), a.type(), null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
                 final Long denialRefId = (a.denialCode() == null) ? null
-                        : refCodeResolver.resolveDenialCode(a.denialCode(), null, c.idPayer(), "SYSTEM", ingestionFileId, c.id()).orElse(null);
+                        : refCodeResolver.resolveDenialCode(a.denialCode(), null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
                 final Long clinicianRefId = (a.clinician() == null) ? null
                         : refCodeResolver.resolveClinician(a.clinician(), null, null, "SYSTEM", ingestionFileId, c.id()).orElse(null);
+                Long preRa = jdbc.query(
+                        "select id from claims.remittance_activity where remittance_claim_id=? and activity_id=?",
+                        ps -> {
+                            ps.setLong(1, rcId);
+                            ps.setString(2, a.id());
+                        },
+                        rs -> rs.next() ? rs.getLong(1) : null
+                );
                 upsertRemittanceActivity(rcId, a, activityCodeRefId, denialRefId, clinicianRefId);
-                rActs++;
+                if (preRa == null) rActs++;
             }
         }
 
+        Long preEvent = jdbc.query(
+                "select id from claims.claim_event where claim_key_id=? and type=3 and event_time=? limit 1",
+                ps -> {
+                    ps.setLong(1, claimKeyId);
+                    ps.setObject(2, file.header().transactionDate());
+                },
+                rs -> rs.next() ? rs.getLong(1) : null
+        );
         long ev = insertClaimEvent(claimKeyId, ingestionFileId, file.header().transactionDate(), (short) 3, null, remittanceId);
         projectActivitiesToClaimEventFromRemittance(ev, c.activities());
+        if (preEvent == null) events++;
 
         // Decide status from amounts & denials
         var netRequested = fetchSubmissionNetRequested(claimKeyId);  // sum of submission activity.net
@@ -610,7 +751,17 @@ public class PersistService {
             status = PARTIALLY_PAID; // conservative default
         }
 
+        Long preSt = jdbc.query(
+                "select id from claims.claim_status_timeline where claim_key_id=? and status=? and status_time=? limit 1",
+                ps -> {
+                    ps.setLong(1, claimKeyId);
+                    ps.setShort(2, status);
+                    ps.setObject(3, file.header().transactionDate());
+                },
+                rs -> rs.next() ? rs.getLong(1) : null
+        );
         insertStatusTimeline(claimKeyId, status, file.header().transactionDate(), ev);
+        if (preSt == null) statusRows++;
 
         // Attachments (Remittance)
         if (attachments != null && !attachments.isEmpty()) {
@@ -620,14 +771,15 @@ public class PersistService {
             }
         }
 
-        log.info("Successfully persisted remittance claim: {} with {} activities, 1 event", claimIdBiz, rActs);
+        int rClaimInserted = (preRc == null) ? 1 : 0;
+        log.info("Successfully processed remittance claim: {} activitiesAdded={}, eventAdded={}, statusAdded={}", claimIdBiz, rActs, (preEvent == null), (preSt == null));
 
-        return new PersistCounts(0, 0, 0, 0, 0, 1, rActs, 1, 1);
+        return new PersistCounts(0, 0, 0, 0, 0, rClaimInserted, rActs, events, statusRows);
     }
 
     /**
      * Null-safe BigDecimal utility method.
-     * 
+     *
      * @param v the BigDecimal value to check
      * @return the original value if not null, otherwise BigDecimal.ZERO
      */
@@ -637,7 +789,7 @@ public class PersistService {
 
     /**
      * Fetches the total net amount requested for a claim from submission activities.
-     * 
+     *
      * @param claimKeyId the claim key ID to query
      * @return the sum of net amounts from all submission activities, or 0.0 if none found
      */
@@ -652,7 +804,7 @@ public class PersistService {
 
     /**
      * Fetches the total payment amount for a remittance claim.
-     * 
+     *
      * @param remittanceClaimId the remittance claim ID to query
      * @return the sum of payment amounts from all remittance activities, or 0.0 if none found
      */
@@ -666,7 +818,7 @@ public class PersistService {
 
     /**
      * Determines if all remittance activities for a claim are denied.
-     * 
+     *
      * <p>An activity is considered denied if it has a denial code and zero payment amount.
      * This method returns true only if:
      * <ul>
@@ -674,7 +826,7 @@ public class PersistService {
      *   <li>All activities have a non-null, non-empty denial code</li>
      *   <li>All activities have zero payment amount</li>
      * </ul>
-     * 
+     *
      * @param remittanceClaimId the remittance claim ID to check
      * @return true if all activities are denied, false otherwise
      */
@@ -719,12 +871,12 @@ public class PersistService {
         try {
             // Use a more efficient query that checks both claim_key and claim_event in one go
             Integer count = jdbc.queryForObject("""
-                SELECT COUNT(*) 
-                FROM claims.claim_key ck 
-                JOIN claims.claim_event ce ON ck.id = ce.claim_key_id 
-                WHERE ck.claim_id = ? AND ce.type = 1
-                """, Integer.class, claimIdBiz);
-            
+                    SELECT COUNT(*) 
+                    FROM claims.claim_key ck 
+                    JOIN claims.claim_event ce ON ck.id = ce.claim_key_id 
+                    WHERE ck.claim_id = ? AND ce.type = 1
+                    """, Integer.class, claimIdBiz);
+
             return count != null && count > 0;
         } catch (Exception e) {
             log.warn("Error checking if claim already submitted for claimId={}: {}", claimIdBiz, e.getMessage());
@@ -741,13 +893,24 @@ public class PersistService {
      * of concurrent access and data integrity issues.</p>
      *
      * <h3>Database Operation</h3>
-     * <p>Uses PostgreSQL's {@code ON CONFLICT DO NOTHING} for atomic upsert:</p>
+     * <p>Uses PostgreSQL's {@code ON CONFLICT DO UPDATE} for atomic upsert with audit column handling:</p>
      * <pre>{@code
      * WITH ins AS (
-     *   INSERT INTO claims.claim_key (claim_id) VALUES (?) ON CONFLICT DO NOTHING RETURNING id
+     *   INSERT INTO claims.claim_key (claim_id, created_at, updated_at) 
+     *   VALUES (?, ?, ?)
+     *   ON CONFLICT ON CONSTRAINT uq_claim_key_claim_id 
+     *   DO UPDATE SET updated_at = COALESCE(EXCLUDED.updated_at, NOW())
+     *   RETURNING id
      * )
      * SELECT id FROM ins UNION ALL SELECT id FROM claims.claim_key WHERE claim_id = ? LIMIT 1
      * }</pre>
+     * <p>
+     * <b>Audit Column Behavior:</b>
+     * <ul>
+     *   <li><b>created_at:</b> Set only on first INSERT, never updated on conflict (preserves original creation time)</li>
+     *   <li><b>updated_at:</b> Updated on conflict to track when the claim_key was last referenced</li>
+     * </ul>
+     * </p>
      *
      * <h3>Race Condition Handling</h3>
      * <p><b>Scenario 1 - Normal Operation:</b></p>
@@ -781,22 +944,32 @@ public class PersistService {
      * @param claimIdBiz the business claim ID to upsert (must not be null or blank)
      * @return the database ID of the claim key record (existing or newly created)
      * @throws IllegalArgumentException if claimIdBiz is null or blank
-     * @throws RuntimeException if unable to resolve claim key after multiple attempts
+     * @throws RuntimeException         if unable to resolve claim key after multiple attempts
      */
     private long upsertClaimKey(String claimIdBiz, OffsetDateTime transactionDateTime, String transactionType) {
         Assert.hasText(claimIdBiz, "claimIdBiz must not be blank"); // fast guard
 
         try {
-            // Single round-trip, no UPDATE on conflict:
-            // 1) Try INSERT, capture id in CTE 'ins'
-            // 2) If nothing inserted (conflict), select existing id
+            // Single round-trip upsert with proper audit column handling:
+            // 1) Try INSERT with created_at and updated_at
+            // 2) On conflict, UPDATE updated_at (but preserve created_at)
+            // 3) Return the id (new or existing)
             OffsetDateTime transactionCreateTime = "S".equalsIgnoreCase(transactionType) ? transactionDateTime : null;
             OffsetDateTime transactionUpdateTime = "R".equalsIgnoreCase(transactionType) ? transactionDateTime : null;
+            
+            // Use NOW() as fallback if transactionDateTime not provided
+            OffsetDateTime now = OffsetDateTime.now();
+            OffsetDateTime insertCreatedAt = transactionCreateTime != null ? transactionCreateTime : now;
+            OffsetDateTime insertUpdatedAt = transactionUpdateTime != null ? transactionUpdateTime : now;
+            
             final String sql = """
                     WITH ins AS (
                       INSERT INTO claims.claim_key (claim_id, created_at, updated_at)
                       VALUES (?, ?, ?)
-                      ON CONFLICT (claim_id) DO NOTHING
+                      ON CONFLICT ON CONSTRAINT uq_claim_key_claim_id 
+                      DO UPDATE SET 
+                        updated_at = COALESCE(EXCLUDED.updated_at, NOW())
+                        -- Note: created_at is NOT updated on conflict (preserves original creation time)
                       RETURNING id
                     )
                     SELECT id FROM ins
@@ -806,12 +979,10 @@ public class PersistService {
                     """;
 
             // Returns the inserted id, or the existing id if conflict occurred
-            Long claimKeyId = jdbc.queryForObject(sql, Long.class, claimIdBiz, transactionCreateTime, transactionUpdateTime, claimIdBiz);
+            // If conflict occurred and UPDATE ran, the row is updated with new updated_at
+            Long claimKeyId = jdbc.queryForObject(sql, Long.class, 
+                claimIdBiz, insertCreatedAt, insertUpdatedAt, claimIdBiz);
 
-            // If we have a transaction update time (e.g., remittance), apply a follow-up UPDATE safely
-            if (transactionUpdateTime != null && claimKeyId != null) {
-                jdbc.update("update claims.claim_key set updated_at = ? where id = ?", transactionUpdateTime, claimKeyId);
-            }
             return claimKeyId;
 
         } catch (Exception e) {
@@ -821,9 +992,10 @@ public class PersistService {
 
                 // Fallback: Get the first available ID for this claim_id
                 try {
-                    Long existingId = jdbc.queryForObject(
+                    Long existingId = jdbc.query(
                             "SELECT id FROM claims.claim_key WHERE claim_id = ? ORDER BY id LIMIT 1",
-                            Long.class, claimIdBiz);
+                            ps -> ps.setString(1, claimIdBiz),
+                            rs -> rs.next() ? rs.getLong(1) : null);
 
                     if (existingId != null) {
                         log.info("Using existing claim_key ID: {} for claim_id: {}", existingId, claimIdBiz);
@@ -840,17 +1012,18 @@ public class PersistService {
 
             // Handle potential race conditions during concurrent insertions
             if (e.getMessage() != null && (
-                e.getMessage().contains("duplicate key") ||
-                e.getMessage().contains("unique constraint") ||
-                e.getMessage().contains("violates unique constraint"))) {
+                    e.getMessage().contains("duplicate key") ||
+                            e.getMessage().contains("unique constraint") ||
+                            e.getMessage().contains("violates unique constraint"))) {
 
                 log.info("Race condition detected for claim_id: {}, attempting fallback query", claimIdBiz);
 
                 try {
                     // Fallback: Query for existing record (race condition with another thread)
-                    Long existingId = jdbc.queryForObject(
+                    Long existingId = jdbc.query(
                             "SELECT id FROM claims.claim_key WHERE claim_id = ?",
-                            Long.class, claimIdBiz);
+                            ps -> ps.setString(1, claimIdBiz),
+                            rs -> rs.next() ? rs.getLong(1) : null);
 
                     if (existingId != null) {
                         log.info("Using existing claim_key ID: {} for claim_id: {} (race condition resolved)", existingId, claimIdBiz);
@@ -879,14 +1052,18 @@ public class PersistService {
                               id_payer, member_id, payer_id, provider_id, emirates_id_number, gross, patient_share, net,
                               payer_ref_id, provider_ref_id, comments, tx_at
                             ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                            on conflict (claim_key_id) do nothing
+                            on conflict on constraint uq_claim_per_key do nothing
                         """, claimKeyId, submissionId,
                 c.idPayer(), c.memberId(), c.payerId(), c.providerId(), c.emiratesIdNumber(),
                 c.gross(), c.patientShare(), c.net(),
                 payerRefId, providerRefId, c.comments(), file.header().transactionDate()
         );
-        
-        Long claimId = jdbc.queryForObject("select id from claims.claim where claim_key_id=?", Long.class, claimKeyId);
+
+        Long claimId = jdbc.query(
+                "select id from claims.claim where claim_key_id = ?",
+                ps -> ps.setLong(1, claimKeyId),
+                rs -> rs.next() ? rs.getLong(1) : null
+        );
         if (claimId == null) {
             throw new RuntimeException("Failed to retrieve claim ID after upsert for claim_key_id=" + claimKeyId);
         }
@@ -895,42 +1072,61 @@ public class PersistService {
 
 
     private void upsertEncounter(long claimId, EncounterDTO e, Long facilityRefId) { // added ref id
-        jdbc.update("""
-                            insert into claims.encounter(
-                              claim_id, facility_id, type, patient_id, start_at, end_at, start_type, end_type, transfer_source, transfer_destination,
-                              facility_ref_id                                              -- PATCH
-                            ) values (?,?,?,?,?,?,?,?,?,?,?)
-                        """, claimId, e.facilityId(), e.type(), e.patientId(), e.start(), e.end(),
-                e.startType(), e.endType(), e.transferSource(), e.transferDestination(),
-                facilityRefId                                               // PATCH
+        Integer present = jdbc.query(
+                """
+                select 1
+                  from claims.encounter
+                 where claim_id = ?
+                   and facility_id = ?
+                   and type = ?
+                   and patient_id = ?
+                   and start_at = ?
+                 limit 1
+                """,
+                ps -> { ps.setLong(1, claimId); ps.setString(2, e.facilityId()); ps.setString(3, e.type()); ps.setString(4, e.patientId()); ps.setObject(5, e.start()); },
+                rs -> rs.next() ? 1 : null
         );
+        if (present == null) {
+            jdbc.update("""
+                                insert into claims.encounter(
+                                  claim_id, facility_id, type, patient_id, start_at, end_at, start_type, end_type, transfer_source, transfer_destination,
+                                  facility_ref_id                                              -- PATCH
+                                ) values (?,?,?,?,?,?,?,?,?,?,?)
+                            """, claimId, e.facilityId(), e.type(), e.patientId(), e.start(), e.end(),
+                    e.startType(), e.endType(), e.transferSource(), e.transferDestination(),
+                    facilityRefId                                               // PATCH
+            );
+        }
     }
 
     private void upsertDiagnosis(long claimId, DiagnosisDTO d, Long diagnosisCodeRefId) { // PATCH
         jdbc.update("""
                     insert into claims.diagnosis(claim_id, diag_type, code, diagnosis_code_ref_id) -- PATCH
                     values (?, ?, ?, ?)
-                    on conflict do nothing
+                    on conflict (claim_id, diag_type, code) do nothing
+                    -- Note: Uses unique index uq_diagnosis_claim_type_code (not a named constraint)
                 """, claimId, d.type(), d.code(), diagnosisCodeRefId); // PATCH
     }
 
     /**
      * Persist contract information for a claim.
-     * 
-     * @param claimId the database ID of the claim
+     *
+     * @param claimId  the database ID of the claim
      * @param contract the contract DTO containing package information
      */
     private void upsertContract(long claimId, ContractDTO contract) {
         if (contract == null || contract.packageName() == null) {
             return; // Skip if no contract data
         }
-        
+
         jdbc.update("""
                     insert into claims.claim_contract(claim_id, package_name)
                     values (?, ?)
                     on conflict (claim_id) do update set
                         package_name = EXCLUDED.package_name,
                         updated_at = NOW()
+                    -- Note: claim_contract has no unique constraint on claim_id in DDL; 
+                    -- If this should be unique, add CONSTRAINT uq_claim_contract_claim_id UNIQUE (claim_id) to DDL
                 """, claimId, contract.packageName());
     }
 
@@ -940,12 +1136,16 @@ public class PersistService {
                               claim_id, activity_id, start_at, type, code, quantity, net, clinician, prior_authorization_id,
                               clinician_ref_id, activity_code_ref_id                         -- PATCH
                             ) values (?,?,?,?,?,?,?,?,?,?,?)
-                            on conflict (claim_id, activity_id) do nothing
+                            on conflict on constraint uq_activity_bk do nothing
                         """, claimId, a.id(), a.start(), a.type(), a.code(), a.quantity(), a.net(), a.clinician(), a.priorAuthorizationId(),
                 clinicianRefId, activityCodeRefId                             // PATCH
         );
-        
-        Long activityId = jdbc.queryForObject("select id from claims.activity where claim_id=? and activity_id=?", Long.class, claimId, a.id());
+
+        Long activityId = jdbc.query(
+                "select id from claims.activity where claim_id = ? and activity_id = ?",
+                ps -> { ps.setLong(1, claimId); ps.setString(2, a.id()); },
+                rs -> rs.next() ? rs.getLong(1) : null
+        );
         if (activityId == null) {
             throw new RuntimeException("Failed to retrieve activity ID after upsert for claim_id=" + claimId + ", activity_id=" + a.id());
         }
@@ -954,10 +1154,26 @@ public class PersistService {
 
 
     private void upsertObservation(long actId, ObservationDTO o) {
-        jdbc.update("""
-                    insert into claims.observation(activity_id, obs_type, obs_code, value_text, value_type, file_bytes)
-                    values (?,?,?,?,?,?)
-                """, actId, o.type(), o.code(), o.value(), o.valueType(), o.fileBytes());
+        Integer present = jdbc.query(
+                """
+                select 1
+                  from claims.observation
+                 where activity_id = ?
+                   and obs_type = ?
+                   and obs_code = ?
+                   and coalesce(value_text, '') = coalesce(?, '')
+                   and coalesce(value_type, '') = coalesce(?, '')
+                 limit 1
+            """,
+                ps -> { ps.setLong(1, actId); ps.setString(2, o.type()); ps.setString(3, o.code()); ps.setString(4, o.value()); ps.setString(5, o.valueType()); },
+                rs -> rs.next() ? 1 : null
+        );
+        if (present == null) {
+            jdbc.update("""
+                        insert into claims.observation(activity_id, obs_type, obs_code, value_text, value_type, file_bytes)
+                        values (?,?,?,?,?,?)
+                    """, actId, o.type(), o.code(), o.value(), o.valueType(), o.fileBytes());
+        }
     }
 
     private long insertClaimEvent(long claimKeyId, long ingestionFileId, OffsetDateTime time, short type,
@@ -965,20 +1181,21 @@ public class PersistService {
         // Handle both unique constraints:
         // 1. uq_claim_event_dedup: (claim_key_id, type, event_time) - prevents duplicate events at same time
         // 2. uq_claim_event_one_submission: (claim_key_id) WHERE type = 1 - prevents multiple submissions (UNIQUE INDEX)
-        
+
         // For submission events (type=1), check if one already exists first
         if (type == 1) {
-            Long existingEventId = jdbc.queryForObject(
-                "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
-                Long.class, claimKeyId
+            Long existingEventId = jdbc.query(
+                    "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
+                    ps -> ps.setLong(1, claimKeyId),
+                    rs -> rs.next() ? rs.getLong(1) : null
             );
-            
+
             if (existingEventId != null) {
                 log.info("Submission event already exists for claim_key_id={}, using existing event id={}", claimKeyId, existingEventId);
                 return existingEventId;
             }
         }
-        
+
         try {
             // Standard upsert for all event types
             return jdbc.queryForObject("""
@@ -988,7 +1205,9 @@ public class PersistService {
                               )
                               VALUES (?,?,?,?,?,?)
                               ON CONFLICT ON CONSTRAINT uq_claim_event_dedup DO UPDATE
-                                SET ingestion_file_id = EXCLUDED.ingestion_file_id
+                                SET ingestion_file_id = EXCLUDED.ingestion_file_id,
+                                    submission_id = EXCLUDED.submission_id,
+                                    remittance_id = EXCLUDED.remittance_id
                               RETURNING id
                             )
                             SELECT id FROM ins
@@ -1008,19 +1227,20 @@ public class PersistService {
             // Handle unique index violations (uq_claim_event_one_submission) for submission events
             if (e.getMessage() != null && e.getMessage().contains("duplicate key") && type == 1) {
                 log.info("Duplicate submission event detected for claim_key_id={}, retrieving existing event", claimKeyId);
-                
+
                 // Retrieve the existing submission event
-                Long existingEventId = jdbc.queryForObject(
-                    "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
-                    Long.class, claimKeyId
+                Long existingEventId = jdbc.query(
+                        "SELECT id FROM claims.claim_event WHERE claim_key_id = ? AND type = 1 LIMIT 1",
+                        ps -> ps.setLong(1, claimKeyId),
+                        rs -> rs.next() ? rs.getLong(1) : null
                 );
-                
+
                 if (existingEventId != null) {
                     log.info("Found existing submission event id={} for claim_key_id={}", existingEventId, claimKeyId);
                     return existingEventId;
                 }
             }
-            
+
             // Re-throw if it's not a duplicate key issue or if we can't find existing event
             throw e;
         }
@@ -1030,16 +1250,20 @@ public class PersistService {
         if (acts == null) return;
         for (ActivityDTO a : acts) {
             // First, get the activity_id_ref from the actual activity record
-            Long activityIdRef = jdbc.queryForObject(
-                "SELECT a.id FROM claims.activity a JOIN claims.claim c ON a.claim_id = c.id JOIN claims.claim_event ce ON c.claim_key_id = ce.claim_key_id WHERE a.activity_id = ? AND ce.id = ?",
-                Long.class, a.id(), eventId
+            Long activityIdRef = jdbc.query(
+                    "SELECT a.id FROM claims.activity a JOIN claims.claim c ON a.claim_id = c.id JOIN claims.claim_event ce ON c.claim_key_id = ce.claim_key_id WHERE a.activity_id = ? AND ce.id = ?",
+                    ps -> {
+                        ps.setString(1, a.id());
+                        ps.setLong(2, eventId);
+                    },
+                    rs -> rs.next() ? rs.getLong(1) : null
             );
-            
+
             if (activityIdRef == null) {
                 log.warn("Activity not found for activity_id={} and event_id={}, skipping activity projection", a.id(), eventId);
                 continue;
             }
-            
+
             jdbc.update("""
                                 insert into claims.claim_event_activity(
                                   claim_event_id, activity_id_ref, activity_id_at_event, start_at_event, type_at_event, code_at_event,
@@ -1047,6 +1271,7 @@ public class PersistService {
                                   list_price_at_event, gross_at_event, patient_share_at_event, payment_amount_at_event, denial_code_at_event
                                 ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                                 on conflict (claim_event_id, activity_id_at_event) do nothing
+                                -- Note: Uses unique index uq_claim_event_activity_key (not a named constraint)
                             """, eventId, activityIdRef, a.id(), a.start(), a.type(), a.code(),
                     a.quantity(), a.net(), a.clinician(), a.priorAuthorizationId(),
                     null, null, null, null, null);
@@ -1059,7 +1284,9 @@ public class PersistService {
                                 )
                                 select cea.id, ?, ?, ?, ?, ?
                                   from claims.claim_event_activity cea
-                                 where cea.claim_event_id = ? and cea.activity_id_at_event = ? on conflict do nothing
+                                 where cea.claim_event_id = ? and cea.activity_id_at_event = ?
+                                on conflict do nothing
+                                -- Note: event_observation has no unique constraint; uses implicit conflict detection
                             """, o.type(), o.code(), o.value(), o.valueType(), o.fileBytes(), eventId, a.id());
                 }
             }
@@ -1070,29 +1297,33 @@ public class PersistService {
         if (acts == null) return;
         for (RemittanceActivityDTO a : acts) {
             // First, get the remittance_activity_id_ref from the actual remittance activity record
-            Long remittanceActivityIdRef = jdbc.queryForObject(
-                """
-                SELECT ra.id
-                  FROM claims.remittance_activity ra
-                 WHERE ra.activity_id = ?
-                   AND ra.remittance_claim_id = (
-                        SELECT rc.id
-                          FROM claims.remittance_claim rc
-                          JOIN claims.claim_event ce
-                            ON rc.claim_key_id = ce.claim_key_id
-                           AND rc.remittance_id = ce.remittance_id
-                         WHERE ce.id = ?
-                         LIMIT 1
-                   )
-                """,
-                Long.class, a.id(), eventId
+            Long remittanceActivityIdRef = jdbc.query(
+                    """
+                            SELECT ra.id
+                              FROM claims.remittance_activity ra
+                             WHERE ra.activity_id = ?
+                               AND ra.remittance_claim_id = (
+                                    SELECT rc.id
+                                      FROM claims.remittance_claim rc
+                                      JOIN claims.claim_event ce
+                                        ON rc.claim_key_id = ce.claim_key_id
+                                       AND rc.remittance_id = ce.remittance_id
+                                     WHERE ce.id = ?
+                                     LIMIT 1
+                               )
+                            """,
+                    ps -> {
+                        ps.setString(1, a.id());
+                        ps.setLong(2, eventId);
+                    },
+                    rs -> rs.next() ? rs.getLong(1) : null
             );
-            
+
             if (remittanceActivityIdRef == null) {
                 log.warn("Remittance activity not found for activity_id={} and event_id={}, skipping activity projection", a.id(), eventId);
                 continue;
             }
-            
+
             jdbc.update("""
                                 insert into claims.claim_event_activity(
                                   claim_event_id, remittance_activity_id_ref, activity_id_at_event, start_at_event, type_at_event, code_at_event,
@@ -1111,16 +1342,33 @@ public class PersistService {
                     insert into claims.claim_resubmission(
                       claim_event_id, resubmission_type, comment, attachment, tx_at
                     ) values (?,?,?,?,?)
-                    on conflict do nothing
+                    on conflict on constraint uq_claim_resubmission_event do update set
+                      resubmission_type = excluded.resubmission_type,
+                      comment = excluded.comment,
+                      attachment = excluded.attachment,
+                      tx_at = excluded.tx_at,
+                      updated_at = now()
                 """, eventId, r.type(), r.comment(), r.attachment(), file.header().transactionDate());
     }
 
     private void insertStatusTimeline(long claimKeyId, short status, OffsetDateTime time, long eventId) {
-        jdbc.update("""
-                    insert into claims.claim_status_timeline(
-                      claim_key_id, status, status_time, claim_event_id
-                    ) values (?,?,?,?)
-                """, claimKeyId, status, time, eventId);
+        Long presentId = jdbc.query("""
+                            select id from claims.claim_status_timeline
+                             where claim_key_id=? and status=? and status_time=?
+                             limit 1
+                        """, ps -> {
+                    ps.setLong(1, claimKeyId);
+                    ps.setShort(2, status);
+                    ps.setObject(3, time);
+                },
+                rs -> rs.next() ? rs.getLong(1) : null);
+        if (presentId == null) {
+            jdbc.update("""
+                        insert into claims.claim_status_timeline(
+                          claim_key_id, status, status_time, claim_event_id
+                        ) values (?,?,?,?)
+                    """, claimKeyId, status, time, eventId);
+        }
     }
 
     /**
@@ -1132,7 +1380,7 @@ public class PersistService {
                               remittance_id, claim_key_id, id_payer, provider_id, comments, payment_reference, date_settlement, facility_id,
                               payer_ref_id, provider_ref_id, denial_code                                               
                             ) values (?,?,?,?,?,?,?,?,?,?,?)
-                            on conflict (remittance_id, claim_key_id) do nothing
+                            on conflict on constraint uq_remittance_claim do nothing
                         """, remittanceId, claimKeyId, c.idPayer(), c.providerId(), c.comments(),
                 c.paymentReference(), c.dateSettlement(), c.facilityId(), payerCodeRefId, providerCodeRefId, c.denialCode()
         );
@@ -1151,7 +1399,7 @@ public class PersistService {
                               remittance_claim_id, activity_id, start_at, type, code, quantity, net, list_price,
                               clinician, prior_authorization_id, gross, patient_share, payment_amount, denial_code, activity_code_ref_id, denial_code_ref_id, clinician_ref_id
                             ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                            on conflict (remittance_claim_id, activity_id) do nothing
+                            on conflict on constraint uq_remittance_activity do nothing
                         """, remittanceClaimId, a.id(), a.start(), a.type(), a.code(), a.quantity(), a.net(), a.listPrice(),
                 a.clinician(), a.priorAuthorizationId(), a.gross(), a.patientShare(), a.paymentAmount(), a.denialCode(), activityCodeRefId, denialCodeRefId, clinicianRefId);
     }
@@ -1169,7 +1417,8 @@ public class PersistService {
                     insert into claims.claim_attachment(
                       claim_key_id, claim_event_id, file_name, mime_type, data_base64, data_length, created_at
                     ) values (?,?,?,?,?,?, now())
-                    on conflict do nothing
+                    on conflict (claim_key_id, claim_event_id, coalesce(file_name, '')) do nothing
+                    -- Note: Uses unique index uq_claim_attachment_key_event_file (not a named constraint)
                 """, claimKeyId, claimEventId, fileName, mimeType, bytes, size);
     }
 
@@ -1186,7 +1435,7 @@ public class PersistService {
 
     /**
      * Utility method to check if a string is null or blank.
-     * 
+     *
      * @param s the string to check
      * @return true if the string is null or blank, false otherwise
      */
@@ -1196,7 +1445,7 @@ public class PersistService {
 
     /**
      * Utility method to check if an object is null.
-     * 
+     *
      * @param o the object to check
      * @return true if the object is null, false otherwise
      */
@@ -1206,7 +1455,7 @@ public class PersistService {
 
     /**
      * Validates that a submission claim has all required fields.
-     * 
+     *
      * <p>Required fields for a claim are:
      * <ul>
      *   <li>Claim ID</li>
@@ -1214,11 +1463,11 @@ public class PersistService {
      *   <li>Provider ID</li>
      *   <li>Emirates ID Number</li>
      * </ul>
-     * 
+     *
      * <p>If validation fails, an error is logged and the claim will be skipped.
-     * 
+     *
      * @param ingestionFileId the ID of the ingestion file for error logging
-     * @param c the claim DTO to validate
+     * @param c               the claim DTO to validate
      * @return true if all required fields are present, false otherwise
      */
     private boolean claimHasRequired(long ingestionFileId, SubmissionClaimDTO c) {
@@ -1237,7 +1486,7 @@ public class PersistService {
 
     /**
      * Validates that an encounter has all required fields.
-     * 
+     *
      * <p>Required fields for an encounter are:
      * <ul>
      *   <li>Patient ID</li>
@@ -1245,13 +1494,13 @@ public class PersistService {
      *   <li>Type</li>
      *   <li>Start date/time</li>
      * </ul>
-     * 
+     *
      * <p>If the encounter is null, validation passes (encounters are optional).
      * If validation fails, an error is logged and the encounter will be skipped.
-     * 
+     *
      * @param ingestionFileId the ID of the ingestion file for error logging
-     * @param claimIdBiz the business claim ID for error logging
-     * @param e the encounter DTO to validate
+     * @param claimIdBiz      the business claim ID for error logging
+     * @param e               the encounter DTO to validate
      * @return true if all required fields are present or encounter is null, false otherwise
      */
     private boolean encounterHasRequired(long ingestionFileId, String claimIdBiz, EncounterDTO e) {
@@ -1271,18 +1520,18 @@ public class PersistService {
 
     /**
      * Validates that a diagnosis has all required fields.
-     * 
+     *
      * <p>Required fields for a diagnosis are:
      * <ul>
      *   <li>Type</li>
      *   <li>Code</li>
      * </ul>
-     * 
+     *
      * <p>If validation fails, an error is logged and the diagnosis will be skipped.
-     * 
+     *
      * @param ingestionFileId the ID of the ingestion file for error logging
-     * @param claimIdBiz the business claim ID for error logging
-     * @param d the diagnosis DTO to validate
+     * @param claimIdBiz      the business claim ID for error logging
+     * @param d               the diagnosis DTO to validate
      * @return true if all required fields are present, false otherwise
      */
     private boolean diagnosisHasRequired(long ingestionFileId, String claimIdBiz, DiagnosisDTO d) {
@@ -1297,7 +1546,7 @@ public class PersistService {
 
     /**
      * Validates that an activity has all required fields.
-     * 
+     *
      * <p>Required fields for an activity are:
      * <ul>
      *   <li>Activity ID</li>
@@ -1308,12 +1557,12 @@ public class PersistService {
      *   <li>Net amount</li>
      *   <li>Clinician</li>
      * </ul>
-     * 
+     *
      * <p>If validation fails, an error is logged and the activity will be skipped.
-     * 
+     *
      * @param ingestionFileId the ID of the ingestion file for error logging
-     * @param claimIdBiz the business claim ID for error logging
-     * @param a the activity DTO to validate
+     * @param claimIdBiz      the business claim ID for error logging
+     * @param a               the activity DTO to validate
      * @return true if all required fields are present, false otherwise
      */
     private boolean activityHasRequired(long ingestionFileId, String claimIdBiz, ActivityDTO a) {
@@ -1335,7 +1584,7 @@ public class PersistService {
 
     /**
      * Validates that a remittance claim has all required fields.
-     * 
+     *
      * <p>Required fields for a remittance claim are:
      * <ul>
      *   <li>Claim ID</li>
@@ -1343,11 +1592,11 @@ public class PersistService {
      *   <li>Provider ID</li>
      *   <li>Payment Reference</li>
      * </ul>
-     * 
+     *
      * <p>If validation fails, an error is logged and the remittance claim will be skipped.
-     * 
+     *
      * @param ingestionFileId the ID of the ingestion file for error logging
-     * @param c the remittance claim DTO to validate
+     * @param c               the remittance claim DTO to validate
      * @return true if all required fields are present, false otherwise
      */
     private boolean remitClaimHasRequired(long ingestionFileId, RemittanceClaimDTO c) {
@@ -1366,7 +1615,7 @@ public class PersistService {
 
     /**
      * Validates that a remittance activity has all required fields.
-     * 
+     *
      * <p>Required fields for a remittance activity are:
      * <ul>
      *   <li>Activity ID</li>
@@ -1376,12 +1625,12 @@ public class PersistService {
      *   <li>Quantity</li>
      *   <li>Net amount</li>
      * </ul>
-     * 
+     *
      * <p>If validation fails, an error is logged and the remittance activity will be skipped.
-     * 
+     *
      * @param ingestionFileId the ID of the ingestion file for error logging
-     * @param claimIdBiz the business claim ID for error logging
-     * @param a the remittance activity DTO to validate
+     * @param claimIdBiz      the business claim ID for error logging
+     * @param a               the remittance activity DTO to validate
      * @return true if all required fields are present, false otherwise
      */
     private boolean remitActivityHasRequired(long ingestionFileId, String claimIdBiz, RemittanceActivityDTO a) {
@@ -1405,41 +1654,28 @@ public class PersistService {
     /**
      * Calculates amount totals (gross, net, patient share) for all claims in a file.
      * Used for audit trail reporting.
-     * 
+     *
      * @param ingestionFileId the ingestion file ID to calculate totals for
      * @return AmountTotals containing total gross, net, and patient share amounts
      * @since 2.1 - Enhanced audit reporting
      */
     public AmountTotals calculateAmountTotals(Long ingestionFileId) {
-        if (ingestionFileId == null) {
-            log.warn("calculateAmountTotals called with null fileId");
-            return new AmountTotals(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
-        }
-        
+        if (ingestionFileId == null) return new AmountTotals(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         try {
-            AmountTotals result = jdbc.queryForObject("""
-                SELECT 
-                    COALESCE(SUM(c.gross_amount), 0) as total_gross,
-                    COALESCE(SUM(c.net_amount), 0) as total_net,
-                    COALESCE(SUM(c.patient_share), 0) as total_patient_share
-                FROM claims.claim c
-                WHERE c.ingestion_file_id = ?
-                """, 
-                (rs, rowNum) -> new AmountTotals(
+            return jdbc.queryForObject("""
+                        select coalesce(sum(c.gross), 0) as total_gross,
+                               coalesce(sum(c.net), 0)   as total_net,
+                               coalesce(sum(c.patient_share), 0) as total_patient_share
+                          from claims.claim c
+                          join claims.submission s on s.id = c.submission_id
+                         where s.ingestion_file_id = ?
+                    """, (rs, rowNum) -> new AmountTotals(
                     rs.getBigDecimal("total_gross"),
-                    rs.getBigDecimal("total_net"), 
+                    rs.getBigDecimal("total_net"),
                     rs.getBigDecimal("total_patient_share")
-                ), 
-                ingestionFileId);
-            
-            log.debug("Calculated amounts for fileId={}: gross={}, net={}, patient={}", 
-                ingestionFileId, result.totalGross(), result.totalNet(), result.totalPatientShare());
-            
-            return result;
-            
+            ), ingestionFileId);
         } catch (Exception e) {
             log.error("Failed to calculate amount totals for fileId={}: {}", ingestionFileId, e.getMessage(), e);
-            // Return zeros on error - non-blocking
             return new AmountTotals(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         }
     }
@@ -1447,39 +1683,27 @@ public class PersistService {
     /**
      * Calculates unique entity counts (payers and providers) for all claims in a file.
      * Used for audit trail reporting.
-     * 
+     *
      * @param ingestionFileId the ingestion file ID to calculate counts for
      * @return EntityCounts containing unique payer and provider counts
      * @since 2.1 - Enhanced audit reporting
      */
     public EntityCounts calculateEntityCounts(Long ingestionFileId) {
-        if (ingestionFileId == null) {
-            log.warn("calculateEntityCounts called with null fileId");
-            return new EntityCounts(0, 0);
-        }
-        
+        if (ingestionFileId == null) return new EntityCounts(0, 0);
         try {
-            EntityCounts result = jdbc.queryForObject("""
-                SELECT 
-                    COUNT(DISTINCT c.payer_ref_id) as unique_payers,
-                    COUNT(DISTINCT c.provider_ref_id) as unique_providers
-                FROM claims.claim c
-                WHERE c.ingestion_file_id = ?
-                """, 
-                (rs, rowNum) -> new EntityCounts(
-                    rs.getInt("unique_payers"),
-                    rs.getInt("unique_providers")
-                ), 
-                ingestionFileId);
-            
-            log.debug("Calculated entity counts for fileId={}: payers={}, providers={}", 
-                ingestionFileId, result.uniquePayers(), result.uniqueProviders());
-            
-            return result;
-            
+            return jdbc.queryForObject("""
+                                select count(distinct c.payer_ref_id)   as unique_payers,
+                                       count(distinct c.provider_ref_id) as unique_providers
+                                  from claims.claim c
+                                  join claims.submission s on s.id = c.submission_id
+                                 where s.ingestion_file_id = ?
+                            """,
+                    (rs, rowNum) -> new EntityCounts(
+                            rs.getInt("unique_payers"),
+                            rs.getInt("unique_providers")
+                    ), ingestionFileId);
         } catch (Exception e) {
             log.error("Failed to calculate entity counts for fileId={}: {}", ingestionFileId, e.getMessage(), e);
-            // Return zeros on error - non-blocking
             return new EntityCounts(0, 0);
         }
     }
@@ -1495,19 +1719,20 @@ public class PersistService {
      * <p><b>Usage:</b> Returned by persistence methods to report success metrics and
      * enable monitoring of data ingestion effectiveness.</p>
      *
-     * @param claims number of claims persisted in submission operations
-     * @param acts number of activities persisted in submission operations
-     * @param obs number of observations persisted in submission operations
-     * @param dxs number of diagnoses persisted in submission operations
+     * @param claims      number of claims persisted in submission operations
+     * @param acts        number of activities persisted in submission operations
+     * @param obs         number of observations persisted in submission operations
+     * @param dxs         number of diagnoses persisted in submission operations
      * @param remitClaims number of remittance claims persisted
-     * @param remitActs number of remittance activities persisted
+     * @param remitActs   number of remittance activities persisted
      */
     public record PersistCounts(
-        int claims, int acts, int obs, int dxs, 
-        int encounters,  // NEW - track encounter persistence
-        int remitClaims, int remitActs,
-        int projectedEvents, int projectedStatusRows  // NEW - for verification debugging
-    ) {}
+            int claims, int acts, int obs, int dxs,
+            int encounters,  // NEW - track encounter persistence
+            int remitClaims, int remitActs,
+            int projectedEvents, int projectedStatusRows  // NEW - for verification debugging
+    ) {
+    }
 
     /**
      * # AmountTotals - Amount Calculation Results
@@ -1516,12 +1741,13 @@ public class PersistService {
      *
      * <p><b>Usage:</b> Returned by calculateAmountTotals() for audit trail reporting.</p>
      *
-     * @param totalGross total gross amount across all claims
-     * @param totalNet total net amount across all claims  
+     * @param totalGross        total gross amount across all claims
+     * @param totalNet          total net amount across all claims
      * @param totalPatientShare total patient share across all claims
      * @since 2.1 - Enhanced audit reporting
      */
-    public record AmountTotals(BigDecimal totalGross, BigDecimal totalNet, BigDecimal totalPatientShare) {}
+    public record AmountTotals(BigDecimal totalGross, BigDecimal totalNet, BigDecimal totalPatientShare) {
+    }
 
     /**
      * # EntityCounts - Entity Counting Results
@@ -1530,9 +1756,10 @@ public class PersistService {
      *
      * <p><b>Usage:</b> Returned by calculateEntityCounts() for audit trail reporting.</p>
      *
-     * @param uniquePayers count of distinct payers in the file
+     * @param uniquePayers    count of distinct payers in the file
      * @param uniqueProviders count of distinct providers in the file
      * @since 2.1 - Enhanced audit reporting
      */
-    public record EntityCounts(int uniquePayers, int uniqueProviders) {}
+    public record EntityCounts(int uniquePayers, int uniqueProviders) {
+    }
 }

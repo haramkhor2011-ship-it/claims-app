@@ -24,13 +24,14 @@
 
 CREATE TABLE IF NOT EXISTS claims_ref.facility (
   id             BIGSERIAL PRIMARY KEY,
-  facility_code  TEXT NOT NULL UNIQUE,  -- e.g., DHA-F-0045446
+  facility_code  TEXT NOT NULL,  -- e.g., DHA-F-0045446
   name           TEXT,
   city           TEXT,
   country        TEXT,
   status         TEXT DEFAULT 'ACTIVE',
   created_at     TIMESTAMPTZ DEFAULT NOW(),
-  updated_at     TIMESTAMPTZ
+  updated_at     TIMESTAMPTZ,
+  CONSTRAINT uq_facility_code UNIQUE (facility_code)
 );
 
 COMMENT ON TABLE claims_ref.facility IS 'Master list of provider facilities (Encounter.FacilityID)';
@@ -48,12 +49,13 @@ CREATE INDEX IF NOT EXISTS idx_facility_active ON claims_ref.facility(facility_c
 
 CREATE TABLE IF NOT EXISTS claims_ref.payer (
   id             BIGSERIAL PRIMARY KEY,
-  payer_code     TEXT NOT NULL UNIQUE,     -- e.g., INS025
+  payer_code     TEXT NOT NULL,     -- e.g., INS025
   name           TEXT,
   status         TEXT DEFAULT 'ACTIVE',
   classification TEXT,
   created_at     TIMESTAMPTZ DEFAULT NOW(),
-  updated_at     TIMESTAMPTZ
+  updated_at     TIMESTAMPTZ,
+  CONSTRAINT uq_payer_code UNIQUE (payer_code)
 );
 
 COMMENT ON TABLE claims_ref.payer IS 'Master list of Payers (Claim.PayerID)';
@@ -71,11 +73,12 @@ CREATE INDEX IF NOT EXISTS idx_payer_active ON claims_ref.payer(payer_code) WHER
 
 CREATE TABLE IF NOT EXISTS claims_ref.provider (
   id            BIGSERIAL PRIMARY KEY,
-  provider_code TEXT NOT NULL UNIQUE,
+  provider_code TEXT NOT NULL,
   name          TEXT,
   status        TEXT DEFAULT 'ACTIVE',
   created_at    TIMESTAMPTZ DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ
+  updated_at    TIMESTAMPTZ,
+  CONSTRAINT uq_provider_code UNIQUE (provider_code)
 );
 
 COMMENT ON TABLE claims_ref.provider IS 'Master list of provider organizations (Claim.ProviderID)';
@@ -92,12 +95,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_active ON claims_ref.provider(provider_c
 
 CREATE TABLE IF NOT EXISTS claims_ref.clinician (
   id              BIGSERIAL PRIMARY KEY,
-  clinician_code  TEXT NOT NULL UNIQUE, -- e.g., DHA-P-0228312
+  clinician_code  TEXT NOT NULL, -- e.g., DHA-P-0228312
   name            TEXT,
   specialty       TEXT,
   status          TEXT DEFAULT 'ACTIVE',
   created_at      TIMESTAMPTZ DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ
+  updated_at      TIMESTAMPTZ,
+  CONSTRAINT uq_clinician_code UNIQUE (clinician_code)
 );
 
 COMMENT ON TABLE claims_ref.clinician IS 'Master list of clinicians (Activity.Clinician)';
@@ -143,12 +147,12 @@ CREATE TABLE IF NOT EXISTS claims_ref.diagnosis_code (
   status       TEXT DEFAULT 'ACTIVE',
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   updated_at   TIMESTAMPTZ,
-  CONSTRAINT uq_diagnosis_code UNIQUE (code, description)
+  CONSTRAINT uq_diagnosis_code UNIQUE (code)
 );
 
 COMMENT ON TABLE claims_ref.diagnosis_code IS 'Diagnosis codes (Diagnosis.Code)';
 
-CREATE INDEX IF NOT EXISTS idx_diagnosis_code_lookup ON claims_ref.diagnosis_code(code, description);
+CREATE INDEX IF NOT EXISTS idx_diagnosis_code_lookup ON claims_ref.diagnosis_code(code);
 CREATE INDEX IF NOT EXISTS idx_diagnosis_code_status ON claims_ref.diagnosis_code(status);
 CREATE INDEX IF NOT EXISTS idx_ref_diag_code ON claims_ref.diagnosis_code(code);
 CREATE INDEX IF NOT EXISTS idx_ref_diag_desc_trgm ON claims_ref.diagnosis_code USING gin (description gin_trgm_ops);
@@ -159,13 +163,14 @@ CREATE INDEX IF NOT EXISTS idx_ref_diag_desc_trgm ON claims_ref.diagnosis_code U
 
 CREATE TABLE IF NOT EXISTS claims_ref.denial_code (
   id          BIGSERIAL PRIMARY KEY,
-  code        TEXT NOT NULL UNIQUE,
+  code        TEXT NOT NULL,
   description TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ
+  updated_at  TIMESTAMPTZ,
+  CONSTRAINT uq_denial_code UNIQUE (code)
 );
 
-COMMENT ON TABLE claims_ref.denial_code IS 'Adjudication denial codes; optionally scoped by payer_code';
+COMMENT ON TABLE claims_ref.denial_code IS 'Adjudication denial codes';
 
 CREATE INDEX IF NOT EXISTS idx_denial_code_lookup ON claims_ref.denial_code(code);
 CREATE INDEX IF NOT EXISTS idx_ref_denial_desc_trgm ON claims_ref.denial_code USING gin (description gin_trgm_ops);

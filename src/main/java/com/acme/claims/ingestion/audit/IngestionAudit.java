@@ -4,6 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class IngestionAudit {
@@ -12,12 +14,13 @@ public class IngestionAudit {
     
     public IngestionAudit(JdbcTemplate jdbc){ this.jdbc=jdbc; }
 
-    public long startRun(String profile, String fetcher, String acker, String reason){
-        jdbc.update("""
-      insert into claims.ingestion_run(profile, fetcher_name, acker_name, poll_reason, started_at)
-      values (?,?,?,?, now())
-    """, profile, fetcher, acker, reason);
-        return jdbc.queryForObject("select max(id) from claims.ingestion_run", Long.class);
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Long startRun(String profile, String fetcher, String acker, String reason){
+        return jdbc.queryForObject("""
+            insert into claims.ingestion_run(profile, fetcher_name, acker_name, poll_reason, started_at)
+            values (?,?,?,?, now())
+            returning id
+        """, Long.class, profile, fetcher, acker, reason);
     }
     public void endRun(long runId){ jdbc.update("update claims.ingestion_run set ended_at=now() where id=?", runId); }
 
@@ -42,6 +45,8 @@ public class IngestionAudit {
                               int parsedEncounters, int persistedEncounters,
                               int parsedDiagnoses, int persistedDiagnoses,
                               int parsedObservations, int persistedObservations,
+                              int parsedRemitClaims, int persistedRemitClaims,
+                              int parsedRemitActivities, int persistedRemitActivities,
                               int projectedEvents, int projectedStatusRows,
                               int verificationFailedCount, boolean ackAttempted, boolean ackSent) {
         jdbc.update("""
@@ -50,20 +55,26 @@ public class IngestionAudit {
                 header_sender_id, header_receiver_id, header_transaction_date, header_record_count, header_disposition_flag,
                 parsed_claims, persisted_claims, parsed_activities, persisted_activities,
                 parsed_encounters, persisted_encounters, parsed_diagnoses, persisted_diagnoses,
-                parsed_observations, persisted_observations, projected_events, projected_status_rows,
+                parsed_observations, persisted_observations, 
+                parsed_remit_claims, parsed_remit_activities, persisted_remit_claims, persisted_remit_activities,
+                projected_events, projected_status_rows,
                 verification_passed, verification_failed_count, ack_attempted, ack_sent,
                 created_at)
             select ?, id, 1, 'OK', true,
                    sender_id, receiver_id, transaction_date, record_count_declared, disposition_flag,
                    ?, ?, ?, ?,
                    ?, ?, ?, ?,
+                   ?, ?, 
                    ?, ?, ?, ?,
-                   ?, ?, ?, ?,
+                   ?, ?,
+                   ?, ?, ?, ?, ?,
                    now()
             from claims.ingestion_file where id=?
         """, runId, parsedClaims, persistedClaims, parsedActs, persistedActs,
              parsedEncounters, persistedEncounters, parsedDiagnoses, persistedDiagnoses,
-             parsedObservations, persistedObservations, projectedEvents, projectedStatusRows,
+             parsedObservations, persistedObservations,
+             parsedRemitClaims, parsedRemitActivities, persistedRemitClaims, persistedRemitActivities,
+             projectedEvents, projectedStatusRows,
              verified, verificationFailedCount, ackAttempted, ackSent,
              ingestionFileId);
         jdbc.update("update claims.ingestion_run set files_processed_ok = files_processed_ok + 1 where id=?", runId);
@@ -78,6 +89,8 @@ public class IngestionAudit {
                               int parsedEncounters, int persistedEncounters,
                               int parsedDiagnoses, int persistedDiagnoses,
                               int parsedObservations, int persistedObservations,
+                              int parsedRemitClaims, int persistedRemitClaims,
+                              int parsedRemitActivities, int persistedRemitActivities,
                               int projectedEvents, int projectedStatusRows,
                               long processingDurationMs, long fileSizeBytes,
                               String processingMode, String workerThread,
@@ -85,6 +98,7 @@ public class IngestionAudit {
                               java.math.BigDecimal totalPatientShare,
                               int uniquePayers, int uniqueProviders,
                               boolean ackAttempted, boolean ackSent,
+                              boolean pipelineSuccess,
                               int verificationFailedCount) {
         jdbc.update("""
             insert into claims.ingestion_file_audit(
@@ -92,8 +106,10 @@ public class IngestionAudit {
                 header_sender_id, header_receiver_id, header_transaction_date, header_record_count, header_disposition_flag,
                 parsed_claims, persisted_claims, parsed_activities, persisted_activities,
                 parsed_encounters, persisted_encounters, parsed_diagnoses, persisted_diagnoses,
-                parsed_observations, persisted_observations, projected_events, projected_status_rows,
-                verification_passed, verification_failed_count, ack_attempted, ack_sent,
+                parsed_observations, persisted_observations, 
+                parsed_remit_claims, parsed_remit_activities, persisted_remit_claims, persisted_remit_activities,
+                projected_events, projected_status_rows,
+                verification_passed, verification_failed_count, ack_attempted, ack_sent, pipeline_success,
                 processing_duration_ms, file_size_bytes, processing_mode, worker_thread_name,
                 total_gross_amount, total_net_amount, total_patient_share, unique_payers, unique_providers,
                 created_at)
@@ -101,16 +117,20 @@ public class IngestionAudit {
                    sender_id, receiver_id, transaction_date, record_count_declared, disposition_flag,
                    ?, ?, ?, ?,
                    ?, ?, ?, ?,
+                   ?, ?, 
                    ?, ?, ?, ?,
-                   ?, ?, ?, ?,
+                   ?, ?,
+                   ?, ?, ?, ?, ?,
                    ?, ?, ?, ?,
                    ?, ?, ?, ?, ?,
                    now()
             from claims.ingestion_file where id=?
         """, runId, parsedClaims, persistedClaims, parsedActs, persistedActs,
              parsedEncounters, persistedEncounters, parsedDiagnoses, persistedDiagnoses,
-             parsedObservations, persistedObservations, projectedEvents, projectedStatusRows,
-             verified, verificationFailedCount, ackAttempted, ackSent,
+             parsedObservations, persistedObservations,
+             parsedRemitClaims, parsedRemitActivities, persistedRemitClaims, persistedRemitActivities,
+             projectedEvents, projectedStatusRows,
+             verified, verificationFailedCount, ackAttempted, ackSent, pipelineSuccess,
              processingDurationMs, fileSizeBytes, processingMode, workerThread,
              totalGross, totalNet, totalPatientShare, uniquePayers, uniqueProviders,
              ingestionFileId);
@@ -139,46 +159,56 @@ public class IngestionAudit {
         jdbc.update("update claims.ingestion_run set files_failed = files_failed + 1 where id=?", runId);
     }
 
-    /**
-     * Enhanced fileFail method with retry tracking and detailed error information.
+    /*
+     * ======================================================================
+     * RETRY TRACKING - DISABLED (not used currently)
+     * ----------------------------------------------------------------------
+     * These methods were intended for enhanced failure auditing and retry
+     * tracking. Since retry tracking is not needed now and corresponding
+     * columns are not present in the DDL, these methods are commented out
+     * to avoid accidental use and compile-time drift.
+     *
+     * If retry tracking is reintroduced in the future, restore these methods
+     * along with appropriate DDL changes.
+     * ======================================================================
      */
-    public void fileFailEnhanced(long runId, long ingestionFileId, String errorClass, String message,
-                                long processingDurationMs, long fileSizeBytes,
-                                String processingMode, String workerThread,
-                                int retryCount, String[] retryReasons, String[] retryErrorCodes,
-                                java.time.OffsetDateTime firstAttemptAt, java.time.OffsetDateTime lastAttemptAt) {
-        jdbc.update("""
-            insert into claims.ingestion_file_audit(
-                ingestion_run_id, ingestion_file_id, status, reason, error_class, error_message,
-                processing_duration_ms, file_size_bytes, processing_mode, worker_thread_name,
-                retry_count, retry_reasons, retry_error_codes, first_attempt_at, last_attempt_at,
-                created_at)
-            values (?,?,2,'FAIL',?,?,
-                    ?,?,?,?,
-                    ?,?,?,?,?,
-                    now())
-        """, runId, ingestionFileId, errorClass, message,
-             processingDurationMs, fileSizeBytes, processingMode, workerThread,
-             retryCount, retryReasons, retryErrorCodes, firstAttemptAt, lastAttemptAt);
-        jdbc.update("update claims.ingestion_run set files_failed = files_failed + 1 where id=?", runId);
-    }
+    // public void fileFailEnhanced(long runId, long ingestionFileId, String errorClass, String message,
+    //                             long processingDurationMs, long fileSizeBytes,
+    //                             String processingMode, String workerThread,
+    //                             int retryCount, String[] retryReasons, String[] retryErrorCodes,
+    //                             java.time.OffsetDateTime firstAttemptAt, java.time.OffsetDateTime lastAttemptAt) {
+    //     jdbc.update("""
+    //         insert into claims.ingestion_file_audit(
+    //             ingestion_run_id, ingestion_file_id, status, reason, error_class, error_message,
+    //             duration_ms, file_size_bytes, processing_mode, worker_thread,
+    //             retry_count, retry_reasons, retry_error_codes, first_attempt_at, last_attempt_at,
+    //             created_at)
+    //         values (?,?,2,'FAIL',?,?,
+    //                 ?,?,?,?,
+    //                 ?,?,?,?,?,
+    //                 now())
+    //     """, runId, ingestionFileId, errorClass, message,
+    //          processingDurationMs, fileSizeBytes, processingMode, workerThread,
+    //          retryCount, retryReasons, retryErrorCodes, firstAttemptAt, lastAttemptAt);
+    //     jdbc.update("update claims.ingestion_run set files_failed = files_failed + 1 where id=?", runId);
+    // }
 
-    /**
-     * Track a retry attempt for a file that previously failed.
-     * This method updates the retry count and tracks retry reasons.
-     */
-    public void trackRetryAttempt(long ingestionFileId, String retryReason, String errorCode) {
-        jdbc.update("""
-            UPDATE claims.ingestion_file_audit 
-            SET retry_count = retry_count + 1,
-                retry_reasons = array_append(COALESCE(retry_reasons, ARRAY[]::text[]), ?),
-                retry_error_codes = array_append(COALESCE(retry_error_codes, ARRAY[]::text[]), ?),
-                last_attempt_at = now()
-            WHERE ingestion_file_id = ? 
-              AND status = 2 -- FAIL
-              AND id = (SELECT max(id) FROM claims.ingestion_file_audit WHERE ingestion_file_id = ?)
-        """, retryReason, errorCode, ingestionFileId, ingestionFileId);
-    }
+    // /**
+    //  * Track a retry attempt for a file that previously failed.
+    //  * This method updates the retry count and tracks retry reasons.
+    //  */
+    // public void trackRetryAttempt(long ingestionFileId, String retryReason, String errorCode) {
+    //     jdbc.update("""
+    //         UPDATE claims.ingestion_file_audit 
+    //         SET retry_count = retry_count + 1,
+    //             retry_reasons = array_append(COALESCE(retry_reasons, ARRAY[]::text[]), ?),
+    //             retry_error_codes = array_append(COALESCE(retry_error_codes, ARRAY[]::text[]), ?),
+    //             last_attempt_at = now()
+    //         WHERE ingestion_file_id = ? 
+    //           AND status = 2 -- FAIL
+    //           AND id = (SELECT max(id) FROM claims.ingestion_file_audit WHERE ingestion_file_id = ?)
+    //     """, retryReason, errorCode, ingestionFileId, ingestionFileId);
+    // }
 
     // ========== SAFE METHODS WITH ERROR HANDLING ==========
     
@@ -236,6 +266,23 @@ public class IngestionAudit {
      */
     public boolean fileFailSafely(Long runId, Long ingestionFileId, String errorClass, String message) {
         if (runId == null || ingestionFileId == null) return false;
+        
+        // Defensive validation: verify runId exists before attempting insert
+        try {
+            Long existingRunId = jdbc.queryForObject(
+                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
+                Long.class, runId);
+            if (existingRunId == null) {
+                log.warn("Ingestion run {} does not exist, skipping audit failure for file {}", 
+                    runId, ingestionFileId);
+                return false;
+            }
+        } catch (Exception verifyEx) {
+            log.warn("Failed to verify ingestion run {} before audit failure: {}. Skipping to prevent FK violation.", 
+                runId, verifyEx.getMessage());
+            return false; // Early return - don't attempt INSERT if we can't verify run exists
+        }
+        
         try {
             fileFail(runId, ingestionFileId, errorClass, message);
             return true;
@@ -252,6 +299,23 @@ public class IngestionAudit {
      */
     public boolean fileAlreadySafely(Long runId, Long ingestionFileId) {
         if (runId == null || ingestionFileId == null) return false;
+        
+        // Defensive validation: verify runId exists before attempting insert
+        try {
+            Long existingRunId = jdbc.queryForObject(
+                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
+                Long.class, runId);
+            if (existingRunId == null) {
+                log.warn("Ingestion run {} does not exist, skipping audit already for file {}", 
+                    runId, ingestionFileId);
+                return false;
+            }
+        } catch (Exception verifyEx) {
+            log.warn("Failed to verify ingestion run {} before audit already: {}. Skipping to prevent FK violation.", 
+                runId, verifyEx.getMessage());
+            return false; // Early return - don't attempt INSERT if we can't verify run exists
+        }
+        
         try {
             fileAlready(runId, ingestionFileId);
             return true;
@@ -272,13 +336,34 @@ public class IngestionAudit {
                                        int parsedEncounters, int persistedEncounters,
                                        int parsedDiagnoses, int persistedDiagnoses,
                                        int parsedObservations, int persistedObservations,
+                                       int parsedRemitClaims, int persistedRemitClaims,
+                                       int parsedRemitActivities, int persistedRemitActivities,
                                        int projectedEvents, int projectedStatusRows,
                                        int verificationFailedCount, boolean ackAttempted, boolean ackSent) {
         if (runId == null || ingestionFileId == null) return false;
+        
+        // Defensive validation: verify runId exists before attempting insert
+        try {
+            Long existingRunId = jdbc.queryForObject(
+                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
+                Long.class, runId);
+            if (existingRunId == null) {
+                log.warn("Ingestion run {} does not exist, skipping audit complete for file {}", 
+                    runId, ingestionFileId);
+                return false;
+            }
+        } catch (Exception verifyEx) {
+            log.warn("Failed to verify ingestion run {} before audit complete: {}. Skipping to prevent FK violation.", 
+                runId, verifyEx.getMessage());
+            return false; // Early return - don't attempt INSERT if we can't verify run exists
+        }
+        
         try {
             fileOkComplete(runId, ingestionFileId, verified, parsedClaims, persistedClaims, parsedActs, persistedActs,
                           parsedEncounters, persistedEncounters, parsedDiagnoses, persistedDiagnoses,
-                          parsedObservations, persistedObservations, projectedEvents, projectedStatusRows,
+                          parsedObservations, persistedObservations,
+                          parsedRemitClaims, persistedRemitClaims, parsedRemitActivities, persistedRemitActivities,
+                          projectedEvents, projectedStatusRows,
                           verificationFailedCount, ackAttempted, ackSent);
             return true;
         } catch (Exception e) {
@@ -297,6 +382,8 @@ public class IngestionAudit {
                                        int parsedEncounters, int persistedEncounters,
                                        int parsedDiagnoses, int persistedDiagnoses,
                                        int parsedObservations, int persistedObservations,
+                                       int parsedRemitClaims, int persistedRemitClaims,
+                                       int parsedRemitActivities, int persistedRemitActivities,
                                        int projectedEvents, int projectedStatusRows,
                                        long processingDurationMs, long fileSizeBytes,
                                        String processingMode, String workerThread,
@@ -304,15 +391,37 @@ public class IngestionAudit {
                                        java.math.BigDecimal totalPatientShare,
                                        int uniquePayers, int uniqueProviders,
                                        boolean ackAttempted, boolean ackSent,
+                                       boolean pipelineSuccess,
                                        int verificationFailedCount) {
         if (runId == null || ingestionFileId == null) return false;
+        
+        // Defensive validation: verify runId exists before attempting insert
+        // This prevents foreign key constraint violations from stale/invalid runIds
+        try {
+            Long existingRunId = jdbc.queryForObject(
+                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
+                Long.class, runId);
+            if (existingRunId == null) {
+                log.warn("Ingestion run {} does not exist in database, skipping audit for file {}. " +
+                        "Possible causes: run was deleted, transaction rolled back, or stale runId in context.", 
+                    runId, ingestionFileId);
+                return false; // Non-blocking: skip audit but don't fail processing
+            }
+        } catch (Exception verifyEx) {
+            log.warn("Failed to verify ingestion run {} before audit: {}. Skipping to prevent FK violation.", 
+                runId, verifyEx.getMessage());
+            return false; // Early return - don't attempt INSERT if we can't verify run exists
+        }
+        
         try {
             fileOkEnhanced(runId, ingestionFileId, verified, parsedClaims, persistedClaims, parsedActs, persistedActs,
                           parsedEncounters, persistedEncounters, parsedDiagnoses, persistedDiagnoses,
-                          parsedObservations, persistedObservations, projectedEvents, projectedStatusRows,
+                          parsedObservations, persistedObservations,
+                          parsedRemitClaims, persistedRemitClaims, parsedRemitActivities, persistedRemitActivities,
+                          projectedEvents, projectedStatusRows,
                           processingDurationMs, fileSizeBytes, processingMode, workerThread,
                           totalGross, totalNet, totalPatientShare, uniquePayers, uniqueProviders,
-                          ackAttempted, ackSent, verificationFailedCount);
+                          ackAttempted, ackSent, pipelineSuccess, verificationFailedCount);
             return true;
         } catch (Exception e) {
             log.error("Failed to audit enhanced file success: runId={}, fileId={}", 
@@ -322,40 +431,77 @@ public class IngestionAudit {
     }
 
     /**
-     * Safely record enhanced file processing failure with error handling.
+     * Safely update ack_sent status in ingestion_file_audit after ack attempt.
      * Returns false if operation fails, but doesn't throw exceptions.
      */
-    public boolean fileFailEnhancedSafely(Long runId, Long ingestionFileId, String errorClass, String message,
-                                         long processingDurationMs, long fileSizeBytes,
-                                         String processingMode, String workerThread,
-                                         int retryCount, String[] retryReasons, String[] retryErrorCodes,
-                                         java.time.OffsetDateTime firstAttemptAt, java.time.OffsetDateTime lastAttemptAt) {
+    public boolean updateAckSentSafely(Long runId, Long ingestionFileId, boolean ackSent) {
         if (runId == null || ingestionFileId == null) return false;
+        
+        // Defensive validation: verify runId exists before attempting update
         try {
-            fileFailEnhanced(runId, ingestionFileId, errorClass, message,
-                           processingDurationMs, fileSizeBytes, processingMode, workerThread,
-                           retryCount, retryReasons, retryErrorCodes, firstAttemptAt, lastAttemptAt);
+            Long existingRunId = jdbc.queryForObject(
+                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
+                Long.class, runId);
+            if (existingRunId == null) {
+                log.warn("Ingestion run {} does not exist, skipping ack_sent update for file {}", 
+                    runId, ingestionFileId);
+                return false;
+            }
+        } catch (Exception verifyEx) {
+            log.warn("Failed to verify ingestion run {} before ack update: {}. Skipping to prevent FK violation.", 
+                runId, verifyEx.getMessage());
+            return false; // Early return - don't attempt UPDATE if we can't verify run exists
+        }
+        
+        try {
+            jdbc.update("""
+                update claims.ingestion_file_audit
+                set ack_sent = ?
+                where ingestion_run_id = ? and ingestion_file_id = ?
+                """, ackSent, runId, ingestionFileId);
             return true;
         } catch (Exception e) {
-            log.error("Failed to audit enhanced file failure: runId={}, fileId={}", 
-                runId, ingestionFileId, e);
+            log.error("Failed to update ack_sent in audit: runId={}, fileId={}, ackSent={}", 
+                runId, ingestionFileId, ackSent, e);
             return false;
         }
     }
 
-    /**
-     * Safely track retry attempt with error handling.
-     * Returns false if operation fails, but doesn't throw exceptions.
-     */
-    public boolean trackRetryAttemptSafely(Long ingestionFileId, String retryReason, String errorCode) {
-        if (ingestionFileId == null) return false;
-        try {
-            trackRetryAttempt(ingestionFileId, retryReason, errorCode);
-            return true;
-        } catch (Exception e) {
-            log.error("Failed to track retry attempt: fileId={}, reason={}", 
-                ingestionFileId, retryReason, e);
-            return false;
-        }
-    }
+    // /**
+    //  * Safely record enhanced file processing failure with error handling.
+    //  * Returns false if operation fails, but doesn't throw exceptions.
+    //  */
+    // public boolean fileFailEnhancedSafely(Long runId, Long ingestionFileId, String errorClass, String message,
+    //                                      long processingDurationMs, long fileSizeBytes,
+    //                                      String processingMode, String workerThread,
+    //                                      int retryCount, String[] retryReasons, String[] retryErrorCodes,
+    //                                      java.time.OffsetDateTime firstAttemptAt, java.time.OffsetDateTime lastAttemptAt) {
+    //     if (runId == null || ingestionFileId == null) return false;
+    //     try {
+    //         fileFailEnhanced(runId, ingestionFileId, errorClass, message,
+    //                        processingDurationMs, fileSizeBytes, processingMode, workerThread,
+    //                        retryCount, retryReasons, retryErrorCodes, firstAttemptAt, lastAttemptAt);
+    //         return true;
+    //     } catch (Exception e) {
+    //         log.error("Failed to audit enhanced file failure: runId={}, fileId={}", 
+    //             runId, ingestionFileId, e);
+    //         return false;
+    //     }
+    // }
+
+    // /**
+    //  * Safely track retry attempt with error handling.
+    //  * Returns false if operation fails, but doesn't throw exceptions.
+    //  */
+    // public boolean trackRetryAttemptSafely(Long ingestionFileId, String retryReason, String errorCode) {
+    //     if (ingestionFileId == null) return false;
+    //     try {
+    //         trackRetryAttempt(ingestionFileId, retryReason, errorCode);
+    //         return true;
+    //     } catch (Exception e) {
+    //         log.error("Failed to track retry attempt: fileId={}, reason={}", 
+    //             ingestionFileId, retryReason, e);
+    //         return false;
+    //     }
+    // }
 }

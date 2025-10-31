@@ -172,8 +172,8 @@ public interface ClinicianRepository extends JpaRepository<Clinician, Long> {
     @Query("""
         SELECT c FROM Clinician c 
         WHERE (:searchTerm IS NULL OR 
-               LOWER(c.clinicianCode) LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR 
-               LOWER(c.name) LIKE LOWER(CONCAT('%', :searchTerm, '%')))
+               LOWER(c.clinicianCode) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')) OR 
+               LOWER(c.name) LIKE LOWER(FUNCTION('CONCAT', '%', CAST(:searchTerm AS string), '%')))
         AND (:status IS NULL OR c.status = :status)
         AND (:specialty IS NULL OR c.specialty = :specialty)
         ORDER BY c.clinicianCode ASC

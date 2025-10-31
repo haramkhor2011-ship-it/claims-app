@@ -66,7 +66,8 @@ insert into claims.integration_toggle (code,enabled) values ('dhpo.new.enabled',
 insert into claims.integration_toggle (code,enabled) values ('dhpo.search.enabled',false);
 insert into claims.integration_toggle (code,enabled) values ('dhpo.setDownloaded.enabled',false);
 insert into claims.integration_toggle (code,enabled) values ('dhpo.startup.backfill.enabled',true);
-
+INSERT INTO claims.integration_toggle (code, enabled) VALUES ('is_mv_enabled', false);
+INSERT INTO claims.integration_toggle (code, enabled) VALUES('is_sub_second_mode_enabled', false);
 -- ==========================================================================================================
 -- SECTION 4: RESOLUTION RULES (DOCUMENTATION)
 -- ==========================================================================================================

@@ -37,7 +37,7 @@ public class RefdataCsvLoader {
                 recs -> batchUpsert(recs, """
                         insert into claims_ref.payer(payer_code, name, classification)
                         values (?,?,?)
-                        on conflict (payer_code) do update set name=excluded.name, status=excluded.status
+                        on conflict on constraint uq_payer_code do update set name=excluded.name, status=excluded.status
                         """,
                         (rec) -> new Object[]{
                                 req(rec,"payer_code", 1, 120, true),
@@ -53,7 +53,7 @@ public class RefdataCsvLoader {
                 recs -> batchUpsert(recs, """
                         insert into claims_ref.facility(facility_code, name, city, country, status)
                         values (?,?,?,?,?)
-                        on conflict (facility_code) do update
+                        on conflict on constraint uq_facility_code do update
                            set name=excluded.name, city=excluded.city, country=excluded.country, status=excluded.status
                         """,
                         (rec) -> new Object[]{
@@ -72,7 +72,7 @@ public class RefdataCsvLoader {
                 recs -> batchUpsert(recs, """
                         insert into claims_ref.provider(provider_code, name, status)
                         values (?,?,?)
-                        on conflict (provider_code) do update set name=excluded.name, status=excluded.status
+                        on conflict on constraint uq_provider_code do update set name=excluded.name, status=excluded.status
                         """,
                         (rec) -> new Object[]{
                                 req(rec,"provider_code", 1, 120, true),
@@ -88,7 +88,7 @@ public class RefdataCsvLoader {
                 recs -> batchUpsert(recs, """
                         insert into claims_ref.clinician(clinician_code, name, specialty, status)
                         values (?,?,?,?)
-                        on conflict (clinician_code) do update
+                        on conflict on constraint uq_clinician_code do update
                            set name=excluded.name, specialty=excluded.specialty, status=excluded.status
                         """,
                         (rec) -> new Object[]{
@@ -106,7 +106,7 @@ public class RefdataCsvLoader {
                 recs -> batchUpsert(recs, """
                         insert into claims_ref.activity_code(code, code_system, description, status,type)
                         values (?,?,?,?,?)
-                        on conflict (code, type) do update
+                        on conflict on constraint uq_activity_code do update
                            set description=excluded.description, status=excluded.status, code_system=excluded.code_system
                         """,
                         (rec) -> new Object[]{
@@ -125,8 +125,8 @@ public class RefdataCsvLoader {
                 recs -> batchUpsert(recs, """
                         insert into claims_ref.diagnosis_code(code, code_system, description, status)
                         values (?,?,?,?)
-                        on conflict (code, description) do update
-                           set code_system=excluded.code_system, status=excluded.status
+                        on conflict on constraint uq_diagnosis_code do update
+                           set code_system=excluded.code_system, status=excluded.status, description=coalesce(excluded.description, claims_ref.diagnosis_code.description)
                         """,
                         (rec) -> new Object[]{
                                 req(rec,"code", 1, 16, true),                                // ICD-10 codes are short
@@ -143,7 +143,7 @@ public class RefdataCsvLoader {
                 recs -> batchUpsert(recs, """
                         insert into claims_ref.denial_code(code, description)
                         values (?,?)
-                        on conflict (code) do update set description=excluded.description
+                        on conflict on constraint uq_denial_code do update set description=excluded.description
                         """,
                         (rec) -> new Object[]{
                                 req(rec,"code", 1, 64, true),

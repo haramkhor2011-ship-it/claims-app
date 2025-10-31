@@ -7,9 +7,11 @@
 
 ### Current Architecture
 
-- **Views (v_*)**: 21 views in reports_sql/ directory
-- **Materialized Views (mv_*)**: 25 MVs in sub_second_materialized_views.sql
-- **Functions (get*)**: 14 functions in reports_sql/ directory
+- **Views (v_*)**: Views in `docker/db-init/06-report-views.sql` (tested and working in actual DB)
+- **Materialized Views (mv_*)**: MVs in `docker/db-init/07-materialized-views.sql` (tested and working in actual DB)
+- **Functions (get*)**: Functions in `docker/db-init/08-functions-procedures.sql` and `reports_sql/*.sql` (tested and working in actual DB)
+
+**Note**: Some MVs are currently commented out in `docker/db-init/07-materialized-views.sql` and need to be uncommented and optimized after filter fixes.
 
 ### Key Finding
 
@@ -234,7 +236,7 @@ EXECUTE '
 
 ### Special Case: Functions with EXISTS Subqueries for ref_ids
 
-**Current Problem (lines 667-680):**
+**Current Problem** (in `reports_sql/balance_amount_report_implementation_final.sql` or `docker/db-init/08-functions-procedures.sql`):
 ```sql
 IF p_facility_ref_ids IS NOT NULL THEN
   v_where_clause := v_where_clause || ' AND EXISTS (
@@ -286,6 +288,41 @@ When optimizing each function:
 
 ## Part 1: Materialized Views Analysis
 
+### Source of Truth
+
+**All MV definitions are in**: `docker/db-init/07-materialized-views.sql`
+
+**Important Note on Commented-Out MVs**:
+
+Several materialized views are currently commented out in `docker/db-init/07-materialized-views.sql` and need attention:
+
+1. **View-based MVs** (aliases of views):
+   - `mv_balance_amount_overall` - Commented out (line ~141)
+   - `mv_balance_amount_initial` - Commented out
+   - `mv_balance_amount_resubmission` - Commented out
+   - `mv_remittance_advice_header` - Commented out
+   - `mv_remittance_advice_claim_wise` - Commented out
+   - `mv_remittance_advice_activity_wise` - Commented out
+   - `mv_doctor_denial_high_denial` - Commented out
+   - `mv_doctor_denial_detail` - Commented out
+   - `mv_rejected_claims_by_year` - Commented out (line ~1509)
+   - `mv_rejected_claims_summary_tab` - Commented out
+   - `mv_rejected_claims_receiver_payer` - Commented out
+   - `mv_rejected_claims_claim_wise` - Commented out
+   - `mv_claim_summary_monthwise` - Commented out
+   - `mv_remittances_resubmission_claim_level` - Commented out (duplicate)
+
+2. **Action Required**:
+   - These MVs should be uncommented and enabled after filter optimization
+   - They need filter optimization same as active MVs
+   - Performance indexes may be missing and need to be added
+   - Some have ORDER BY clauses that should be removed from MV definition
+
+3. **Filter Optimization Priority**:
+   - Optimize active MVs first (Priority 1)
+   - Then uncomment and optimize commented-out MVs (Priority 2)
+   - Ensure all follow the same CTE filtering pattern
+
 ### Base Tables Used Across All MVs
 
 1. `claims.claim_key` - Canonical claim identifiers
@@ -304,7 +341,7 @@ When optimizing each function:
 
 #### Pattern 1: CTEs Without Base Table Filtering
 
-**MV**: `mv_balance_amount_summary` (lines 31-132)
+**MV**: `mv_balance_amount_summary` (in `docker/db-init/07-materialized-views.sql`)
 
 **Structure**:
 ```sql
@@ -335,7 +372,7 @@ LEFT JOIN (CTE: enc_agg) -- encounter aggregations
 
 #### Pattern 2: Complex CTE Filtering (Good Pattern Found)
 
-**MV**: `mv_remittances_resubmission_activity_level` (lines 543-827)
+**MV**: `mv_remittances_resubmission_activity_level` (in `docker/db-init/07-materialized-views.sql`)
 
 **Structure**:
 ```sql
@@ -379,7 +416,7 @@ SELECT ...
 
 #### Pattern 3: Minimal CTE Usage
 
-**MV**: `mv_claims_monthly_agg` (lines 333-358)
+**MV**: `mv_claims_monthly_agg` (in `docker/db-init/07-materialized-views.sql`)
 
 **Structure**:
 ```sql
@@ -407,19 +444,38 @@ GROUP BY ...
 
 ### Detailed MV Inventory
 
-| MV Name | Base Tables | CTEs | Filter Location | Filter Opportunities |
-|---------|-------------|------|-----------------|---------------------|
-| `mv_balance_amount_summary` | claim_key, claim, encounter, claim_activity_summary | 4 (rem_agg, resub_agg, enc_agg, cst) | None in MV | Date, facility, payer in base queries |
-| `mv_remittance_advice_summary` | claim_key, claim, remittance_claim | 1 (claim_remittance_agg) | WHERE cra.claim_key_id IS NOT NULL | Date, facility, payer in base queries |
-| `mv_doctor_denial_summary` | claim_key, claim, encounter, activity, clinician | 2 (remittance_aggregated, clinician_activity_agg) | WHERE cl.id IS NOT NULL | Date, facility, clinician in base queries |
-| `mv_claims_monthly_agg` | claim | 0 | None | N/A (aggregate) |
-| `mv_claim_details_complete` | claim_key, claim, encounter, activity, remittance_claim | 1 (activity_remittance_agg) | None | Date, facility, payer, clinician in base queries |
-| `mv_resubmission_cycles` | claim_key, claim_event, claim_resubmission | 1 (event_remittance_agg) | WHERE ce.type IN (1,2) | Date, facility in base queries |
-| `mv_remittances_resubmission_activity_level` | claim_key, claim, activity, encounter, facility | 5 CTEs | Partial (self-pay, type=2 filters) | Date, facility, payer in base queries |
-| `mv_remittances_resubmission_claim_level` | claim_key, claim, encounter | 2 CTEs (remittance_summary, resubmission_summary) | WHERE ce.type = 2 | Date, facility, payer in base queries |
-| `mv_rejected_claims_summary` | claim_key, claim, encounter, activity, claim_status | 1 (activity_rejection_agg) | WHERE ara.has_rejection_data = 1 | Date, facility, payer in base queries |
-| `mv_claim_summary_payerwise` | claim_key, claim, encounter, remittance_claim | 1 (remittance_aggregated) | WHERE ra.claim_key_id IS NOT NULL | Date, facility, payer in base queries |
-| `mv_claim_summary_encounterwise` | Same as payerwise | 1 (remittance_aggregated) | Same as payerwise | Same as payerwise |
+**Source File**: `docker/db-init/07-materialized-views.sql` (All MVs listed below are active unless noted as commented out)
+
+| MV Name | Status | Base Tables | CTEs | Filter Location | Filter Opportunities |
+|---------|--------|-------------|------|-----------------|---------------------|
+| `mv_balance_amount_summary` | ✅ Active | claim_key, claim, encounter, claim_activity_summary | 4 (rem_agg, resub_agg, enc_agg, cst) | None in MV | Date, facility, payer in base queries |
+| `mv_remittance_advice_summary` | ✅ Active | claim_key, claim, remittance_claim | 1 (claim_remittance_agg) | WHERE cra.claim_key_id IS NOT NULL | Date, facility, payer in base queries |
+| `mv_doctor_denial_summary` | ✅ Active | claim_key, claim, encounter, activity, clinician | 2 (remittance_aggregated, clinician_activity_agg) | WHERE cl.id IS NOT NULL | Date, facility, clinician in base queries |
+| `mv_claims_monthly_agg` | ✅ Active | claim | 0 | None | N/A (aggregate) |
+| `mv_claim_details_complete` | ✅ Active | claim_key, claim, encounter, activity, remittance_claim | 1 (activity_remittance_agg) | None | Date, facility, payer, clinician in base queries |
+| `mv_resubmission_cycles` | ✅ Active | claim_key, claim_event, claim_resubmission | 1 (event_remittance_agg) | WHERE ce.type IN (1,2) | Date, facility in base queries |
+| `mv_remittances_resubmission_activity_level` | ✅ Active | claim_key, claim, activity, encounter, facility | 5 CTEs | Partial (self-pay, type=2 filters) | Date, facility, payer in base queries |
+| `mv_remittances_resubmission_claim_level` | ✅ Active | claim_key, claim, encounter | 2 CTEs (remittance_summary, resubmission_summary) | WHERE ce.type = 2 | Date, facility, payer in base queries |
+| `mv_rejected_claims_summary` | ✅ Active | claim_key, claim, encounter, activity, claim_status | 1 (activity_rejection_agg) | WHERE ara.has_rejection_data = 1 | Date, facility, payer in base queries |
+| `mv_claim_summary_payerwise` | ✅ Active | claim_key, claim, encounter, remittance_claim | 1 (remittance_aggregated) | WHERE ra.claim_key_id IS NOT NULL | Date, facility, payer in base queries |
+| `mv_claim_summary_encounterwise` | ✅ Active | Same as payerwise | 1 (remittance_aggregated) | Same as payerwise | Same as payerwise |
+| `mv_balance_amount_overall` | ⏸️ Commented Out | View-based (alias of v_balance_amount_to_be_received) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_balance_amount_initial` | ⏸️ Commented Out | View-based (alias of v_initial_not_remitted_balance) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_balance_amount_resubmission` | ⏸️ Commented Out | View-based (alias of v_after_resubmission_not_remitted_balance) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_remittance_advice_header` | ⏸️ Commented Out | View-based (alias of v_remittance_advice_header) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_remittance_advice_claim_wise` | ⏸️ Commented Out | View-based (alias of v_remittance_advice_claim_wise) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_remittance_advice_activity_wise` | ⏸️ Commented Out | View-based (alias of v_remittance_advice_activity_wise) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_doctor_denial_high_denial` | ⏸️ Commented Out | View-based (alias of v_doctor_denial_high_denial) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_doctor_denial_detail` | ⏸️ Commented Out | View-based (alias of v_doctor_denial_detail) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_rejected_claims_by_year` | ⏸️ Commented Out | claim_key, claim, remittance_activity | Multiple CTEs | WHERE ra.denial_code IS NOT NULL | Needs uncommenting + filter optimization + remove ORDER BY |
+| `mv_rejected_claims_summary_tab` | ⏸️ Commented Out | View-based (alias of v_rejected_claims_summary) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_rejected_claims_receiver_payer` | ⏸️ Commented Out | View-based (alias of v_rejected_claims_receiver_payer) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_rejected_claims_claim_wise` | ⏸️ Commented Out | View-based (alias of v_rejected_claims_claim_wise) | 0 | N/A | Needs uncommenting + filter optimization |
+| `mv_claim_summary_monthwise` | ⏸️ Commented Out | View-based (alias of v_claim_summary_monthwise) | 0 | N/A | Needs uncommenting + filter optimization |
+
+**Legend**:
+- ✅ Active: Currently enabled and working in database
+- ⏸️ Commented Out: Currently disabled, needs to be uncommented and optimized
 
 ---
 
@@ -429,7 +485,7 @@ GROUP BY ...
 
 #### Pattern 1: Views with CTEs
 
-**View**: `v_balance_amount_to_be_received_base` (balance_amount_report_implementation_final.sql lines 97-287)
+**View**: `v_balance_amount_to_be_received_base` (in `docker/db-init/06-report-views.sql`)
 
 **Structure**:
 ```sql
@@ -480,7 +536,7 @@ LEFT JOIN claims.encounter e ON e.claim_id = c.id
 
 #### Pattern 2: Views Without CTEs (Direct Joins)
 
-**View**: `v_claim_details_with_activity` (claim_details_with_activity_final.sql lines 54-234)
+**View**: `v_claim_details_with_activity` (in `reports_sql/claim_details_with_activity_final.sql` or `docker/db-init/06-report-views.sql` if present)
 
 **Structure**:
 ```sql
@@ -548,7 +604,7 @@ This would significantly reduce the join operations.
 
 #### Pattern 1: Dynamic WHERE Clause Building
 
-**Function**: `get_balance_amount_to_be_received` (balance_amount_report_implementation_final.sql lines 496-815)
+**Function**: `get_balance_amount_to_be_received` (in `reports_sql/balance_amount_report_implementation_final.sql` or `docker/db-init/08-functions-procedures.sql`)
 
 **Filter Parameters**:
 - Date filters: `p_date_from`, `p_date_to`, `p_year`, `p_month`
@@ -594,7 +650,7 @@ WITH filtered_claims AS (
 
 #### Pattern 2: Simple WHERE Filtering
 
-**Function**: `get_claim_details_with_activity` (claim_details_with_activity_final.sql lines 235-400)
+**Function**: `get_claim_details_with_activity` (in `reports_sql/claim_details_with_activity_final.sql` or `docker/db-init/08-functions-procedures.sql`)
 
 **Filter Parameters**:
 - Multiple filters: p_facility_code, p_receiver_id, p_payer_code, p_clinician, etc.
@@ -745,7 +801,7 @@ WITH filtered_claims AS (
 
 ### 4. Reference ID Filters
 
-**Current Implementation** (from balance_amount_report_implementation_final.sql lines 667-680):
+**Current Implementation** (from `reports_sql/balance_amount_report_implementation_final.sql` or `docker/db-init/08-functions-procedures.sql`):
 ```sql
 IF p_facility_ref_ids IS NOT NULL AND array_length(p_facility_ref_ids,1) > 0 THEN
   IF p_use_mv THEN
@@ -1009,7 +1065,7 @@ WITH latest_remittance AS (
 
 ### Optimization 1: Replace ref_id EXISTS with Direct JOINs
 
-**Current** (lines 667-680 in balance_amount_report_implementation_final.sql):
+**Current** (in `reports_sql/balance_amount_report_implementation_final.sql` or `docker/db-init/08-functions-procedures.sql`):
 ```sql
 IF p_facility_ref_ids IS NOT NULL AND array_length(p_facility_ref_ids,1) > 0 THEN
   v_where_clause := v_where_clause || ' AND EXISTS (
@@ -1087,10 +1143,53 @@ LIMIT p_limit OFFSET p_offset;
 ### Recommended Action Items
 
 1. ✅ **Document Current State** (This document)
-2. ⏭️ **Replace EXISTS Subqueries** with JOINs in functions
-3. ⏭️ **Add Ref_ID Columns** to MVs that don't have them
-4. ⏭️ **Optimize Date Filters** - use date comparisons instead of EXTRACT
-5. ⏭️ **Add Indexes** to filtered columns if missing
+2. ⏭️ **Optimize Active MVs in `docker/db-init/07-materialized-views.sql`**
+   - Add CTE-based filtering to existing MVs
+   - Replace EXISTS subqueries with JOINs in functions
+3. ⏭️ **Uncomment and Optimize Commented-Out MVs**
+   - Review commented-out MVs in `docker/db-init/07-materialized-views.sql`
+   - Uncomment them one by one after fixing filter issues
+   - Apply same CTE filtering pattern
+   - Add missing indexes
+   - Remove ORDER BY from MV definitions where present
+4. ⏭️ **Optimize Functions in `docker/db-init/08-functions-procedures.sql`**
+   - Implement CTE-based filtering pattern
+   - Replace EXISTS with JOINs for ref_id filters
+5. ⏭️ **Optimize Views in `docker/db-init/06-report-views.sql`**
+   - Add CTE-based filtering where applicable
+6. ⏭️ **Add Ref_ID Columns** to MVs that don't have them
+7. ⏭️ **Optimize Date Filters** - use date comparisons instead of EXTRACT
+8. ⏭️ **Add Indexes** to filtered columns if missing
+
+### Synchronization Between docker/db-init and reports_sql
+
+**Important**: When making filter optimizations, follow this workflow:
+
+1. **Primary Source**: `docker/db-init/*.sql` files are the **source of truth**
+   - These are tested and working in the actual database
+   - Changes here are deployed via Docker initialization
+   - File locations:
+     - Views: `docker/db-init/06-report-views.sql`
+     - MVs: `docker/db-init/07-materialized-views.sql`
+     - Functions: `docker/db-init/08-functions-procedures.sql`
+
+2. **Secondary Source**: `reports_sql/*.sql` files may contain newer implementations
+   - Use as reference for latest patterns
+   - May not be fully tested yet
+   - Sync back to docker/db-init after testing
+
+3. **Workflow for Filter Optimization**:
+   ```
+   a. Make changes to docker/db-init/*.sql (primary)
+   b. Test changes in database
+   c. Sync working changes to reports_sql/*.sql (secondary)
+   d. Document any differences between the two
+   ```
+
+4. **Commented-Out MVs**: Located in `docker/db-init/07-materialized-views.sql`
+   - Review each commented-out MV before uncommenting
+   - Apply filter optimization pattern
+   - Test before enabling in production
 
 ---
 
@@ -1120,6 +1219,9 @@ LIMIT p_limit OFFSET p_offset;
 21. v_remittance_advice_activity_wise
 
 ### Materialized Views (mv_*)
+**All in `docker/db-init/07-materialized-views.sql`**
+
+**Active MVs** (✅ Currently Enabled):
 1. mv_balance_amount_summary
 2. mv_remittance_advice_summary
 3. mv_doctor_denial_summary
@@ -1131,19 +1233,21 @@ LIMIT p_limit OFFSET p_offset;
 9. mv_rejected_claims_summary
 10. mv_claim_summary_payerwise
 11. mv_claim_summary_encounterwise
-12. mv_balance_amount_overall (view-based)
-13. mv_balance_amount_initial (view-based)
-14. mv_balance_amount_resubmission (view-based)
-15. mv_remittance_advice_header (view-based)
-16. mv_remittance_advice_claim_wise (view-based)
-17. mv_remittance_advice_activity_wise (view-based)
-18. mv_doctor_denial_high_denial (view-based)
-19. mv_doctor_denial_detail (view-based)
-20. mv_rejected_claims_by_year (view-based)
-21. mv_rejected_claims_summary_tab (view-based)
-22. mv_rejected_claims_receiver_payer (view-based)
-23. mv_rejected_claims_claim_wise (view-based)
-24. mv_claim_summary_monthwise (view-based)
+
+**Commented-Out MVs** (⏸️ Need Uncommenting + Optimization):
+12. mv_balance_amount_overall (view-based, commented out at line ~141)
+13. mv_balance_amount_initial (view-based, commented out)
+14. mv_balance_amount_resubmission (view-based, commented out)
+15. mv_remittance_advice_header (view-based, commented out)
+16. mv_remittance_advice_claim_wise (view-based, commented out)
+17. mv_remittance_advice_activity_wise (view-based, commented out)
+18. mv_doctor_denial_high_denial (view-based, commented out)
+19. mv_doctor_denial_detail (view-based, commented out)
+20. mv_rejected_claims_by_year (commented out at line ~1509, has ORDER BY that needs removal)
+21. mv_rejected_claims_summary_tab (view-based, commented out)
+22. mv_rejected_claims_receiver_payer (view-based, commented out)
+23. mv_rejected_claims_claim_wise (view-based, commented out)
+24. mv_claim_summary_monthwise (view-based, commented out)
 25. mv_remittances_resubmission_claim_level (view-based, duplicate of #8)
 
 ### Functions (get_*)

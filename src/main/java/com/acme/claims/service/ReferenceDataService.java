@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -89,7 +90,7 @@ public class ReferenceDataService {
         log.debug("Searching facilities with request: {}", request);
         long startTime = System.currentTimeMillis();
         
-        Pageable pageable = createPageable(request);
+        Pageable pageable = createPageableForFacility(request);
         Page<Facility> facilityPage = facilityRepository.searchFacilities(
                 request.getSearchTerm(), 
                 request.getStatus(), 
@@ -160,7 +161,7 @@ public class ReferenceDataService {
         log.debug("Searching payers with request: {}", request);
         long startTime = System.currentTimeMillis();
         
-        Pageable pageable = createPageable(request);
+        Pageable pageable = createPageableForPayer(request);
         Page<Payer> payerPage = payerRepository.searchPayers(
                 request.getSearchTerm(), 
                 request.getStatus(),
@@ -232,7 +233,7 @@ public class ReferenceDataService {
         log.debug("Searching clinicians with request: {}", request);
         long startTime = System.currentTimeMillis();
         
-        Pageable pageable = createPageable(request);
+        Pageable pageable = createPageableForClinician(request);
         Page<Clinician> clinicianPage = clinicianRepository.searchClinicians(
                 request.getSearchTerm(), 
                 request.getStatus(),
@@ -304,7 +305,7 @@ public class ReferenceDataService {
         log.debug("Searching diagnosis codes with request: {}", request);
         long startTime = System.currentTimeMillis();
         
-        Pageable pageable = createPageable(request);
+        Pageable pageable = createPageableForCodeEntity(request);
         Page<DiagnosisCode> diagnosisCodePage = diagnosisCodeRepository.searchDiagnosisCodes(
                 request.getSearchTerm(), 
                 request.getStatus(),
@@ -327,7 +328,27 @@ public class ReferenceDataService {
     }
 
     /**
+     * Get diagnosis code by code with caching.
+     * Uses ICD-10 as the default code system.
+     * 
+     * @param code the diagnosis code
+     * @return Optional diagnosis code item
+     */
+    @Cacheable(value = "diagnosisCodes", key = "'code:' + #code")
+    public DiagnosisCodeResponse getDiagnosisCodeByCode(String code) {
+        log.debug("Fetching diagnosis code by code: {} (default code system: ICD-10)", code);
+        
+        // Use ICD-10 as default code system
+        String defaultCodeSystem = "ICD-10";
+        
+        return diagnosisCodeRepository.findByCodeAndCodeSystem(code, defaultCodeSystem)
+                .map(this::mapToDiagnosisCodeResponse)
+                .orElse(null);
+    }
+
+    /**
      * Get diagnosis code by code and system with caching.
+     * This method is kept for internal use or when code system needs to be explicitly specified.
      * 
      * @param code the diagnosis code
      * @param codeSystem the code system
@@ -377,7 +398,7 @@ public class ReferenceDataService {
         log.debug("Searching activity codes with request: {}", request);
         long startTime = System.currentTimeMillis();
         
-        Pageable pageable = createPageable(request);
+        Pageable pageable = createPageableForCodeEntity(request);
         Page<ActivityCode> activityCodePage = activityCodeRepository.searchActivityCodes(
                 request.getSearchTerm(), 
                 request.getStatus(),
@@ -401,7 +422,37 @@ public class ReferenceDataService {
     }
 
     /**
+     * Get activity code by code with caching.
+     * Searches by code only and returns the first active match found.
+     * Uses index idx_ref_activity_code for fast lookup.
+     * 
+     * @param code the activity code
+     * @return Optional activity code item
+     */
+    @Cacheable(value = "activityCodes", key = "'code:' + #code")
+    public ActivityCodeResponse getActivityCodeByCode(String code) {
+        log.debug("Fetching activity code by code: {} (using index idx_ref_activity_code)", code);
+        
+        // Find all activity codes with this code (may have multiple types)
+        List<ActivityCode> codes = activityCodeRepository.findByCode(code);
+        
+        if (codes.isEmpty()) {
+            return null;
+        }
+        
+        // Prefer active codes first, then return the first one
+        Optional<ActivityCode> activeCode = codes.stream()
+                .filter(ActivityCode::isActive)
+                .findFirst();
+        
+        ActivityCode selectedCode = activeCode.orElse(codes.get(0));
+        
+        return mapToActivityCodeResponse(selectedCode);
+    }
+
+    /**
      * Get activity code by code and type with caching.
+     * This method is kept for internal use or when type needs to be explicitly specified.
      * 
      * @param code the activity code
      * @param type the activity type
@@ -451,10 +502,9 @@ public class ReferenceDataService {
         log.debug("Searching denial codes with request: {}", request);
         long startTime = System.currentTimeMillis();
         
-        Pageable pageable = createPageable(request);
+        Pageable pageable = createPageableForCodeEntity(request);
         Page<DenialCode> denialCodePage = denialCodeRepository.searchDenialCodes(
                 request.getSearchTerm(), 
-                null, // payer code filter can be added later
                 pageable
         );
         
@@ -493,11 +543,91 @@ public class ReferenceDataService {
 
     /**
      * Create Pageable object from request.
+     * Maps "code" to the correct field name for each entity type.
      */
     private Pageable createPageable(ReferenceDataRequest request) {
+        String sortBy = request.getSortBy();
+        // "code" field doesn't exist - entities use specific code fields (facilityCode, payerCode, clinicianCode)
+        // For now, default to name which exists on Facility, Payer, and Clinician
+        if ("code".equals(sortBy)) {
+            sortBy = "name";
+        }
         Sort sort = Sort.by(
                 Sort.Direction.fromString(request.getSortDirection()),
-                request.getSortBy()
+                sortBy
+        );
+        return PageRequest.of(request.getPage(), request.getSize(), sort);
+    }
+
+    /**
+     * Create Pageable object for Facility entity.
+     * Maps "code" to "facilityCode" since Facility doesn't have a "code" field.
+     */
+    private Pageable createPageableForFacility(ReferenceDataRequest request) {
+        String sortBy = request.getSortBy();
+        if ("code".equals(sortBy)) {
+            sortBy = "facilityCode";
+        } else if ("name".equals(sortBy)) {
+            sortBy = "name"; // name exists on Facility
+        }
+        Sort sort = Sort.by(
+                Sort.Direction.fromString(request.getSortDirection()),
+                sortBy
+        );
+        return PageRequest.of(request.getPage(), request.getSize(), sort);
+    }
+
+    /**
+     * Create Pageable object for Payer entity.
+     * Maps "code" to "payerCode" since Payer doesn't have a "code" field.
+     */
+    private Pageable createPageableForPayer(ReferenceDataRequest request) {
+        String sortBy = request.getSortBy();
+        if ("code".equals(sortBy)) {
+            sortBy = "payerCode";
+        } else if ("name".equals(sortBy)) {
+            sortBy = "name"; // name exists on Payer
+        }
+        Sort sort = Sort.by(
+                Sort.Direction.fromString(request.getSortDirection()),
+                sortBy
+        );
+        return PageRequest.of(request.getPage(), request.getSize(), sort);
+    }
+
+    /**
+     * Create Pageable object for Clinician entity.
+     * Maps "code" to "clinicianCode" since Clinician doesn't have a "code" field.
+     */
+    private Pageable createPageableForClinician(ReferenceDataRequest request) {
+        String sortBy = request.getSortBy();
+        if ("code".equals(sortBy)) {
+            sortBy = "clinicianCode";
+        } else if ("name".equals(sortBy)) {
+            sortBy = "name"; // name exists on Clinician
+        }
+        Sort sort = Sort.by(
+                Sort.Direction.fromString(request.getSortDirection()),
+                sortBy
+        );
+        return PageRequest.of(request.getPage(), request.getSize(), sort);
+    }
+
+    /**
+     * Create Pageable object for code-based entities (DiagnosisCode, ActivityCode, DenialCode).
+     * Maps "name" to "description" since these entities don't have a "name" field.
+     * Note: These entities DO have a "code" field, so "code" works as-is.
+     */
+    private Pageable createPageableForCodeEntity(ReferenceDataRequest request) {
+        String sortBy = request.getSortBy();
+        // Map "name" to "description" for code-based entities that use "description" instead of "name"
+        if ("name".equals(sortBy)) {
+            sortBy = "description";
+        }
+        // "code" field exists on these entities, so no mapping needed
+        Sort sort = Sort.by(
+                Sort.Direction.fromString(request.getSortDirection()),
+                sortBy
         );
         return PageRequest.of(request.getPage(), request.getSize(), sort);
     }
@@ -668,12 +798,14 @@ public class ReferenceDataService {
         item.setCode(denialCode.getCode());
         item.setDescription(denialCode.getDescription());
         item.setDisplayName(denialCode.getDisplayName());
-        item.setPayerCode(denialCode.getPayerCode());
-        item.setFullCode(denialCode.getFullCode());
-        item.setPayerSpecific(denialCode.isPayerSpecific());
-        item.setGlobal(denialCode.isGlobal());
         item.setCreatedAt(denialCode.getCreatedAt());
         item.setUpdatedAt(denialCode.getUpdatedAt());
+        
+        // Set payer-related fields to null/false since DenialCode doesn't have payerCode field
+        item.setPayerCode(null);
+        item.setPayerSpecific(false);
+        item.setGlobal(true);
+        item.setFullCode(denialCode.getCode()); // Use code as full code since no payer scope
         
         // Set base fields
         item.setCode(denialCode.getCode());

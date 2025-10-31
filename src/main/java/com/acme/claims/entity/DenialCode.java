@@ -15,11 +15,10 @@ import java.time.LocalDateTime;
  * 
  * This entity represents denial codes used in remittance advice processing.
  * Denial codes indicate why claims or activities were denied or adjusted.
- * Each denial code is unique and may be optionally scoped by payer_code.
+ * Each denial code is unique.
  * 
  * Features:
  * - Unique constraint on code
- * - Optional payer-specific scoping via payer_code
  * - Audit timestamps (created_at, updated_at)
  * - Full-text search support via trigram indexes
  * - No soft delete (denial codes are typically not deleted)
@@ -58,13 +57,6 @@ public class DenialCode {
     private String description;
 
     /**
-     * Optional payer code for payer-specific denial codes
-     * If null, the denial code applies to all payers
-     */
-    @Column(name = "payer_code")
-    private String payerCode;
-
-    /**
      * Timestamp when the record was created
      * Automatically set by Hibernate
      */
@@ -81,24 +73,6 @@ public class DenialCode {
     private LocalDateTime updatedAt;
 
     /**
-     * Check if this denial code is payer-specific
-     * 
-     * @return true if payer_code is not null
-     */
-    public boolean isPayerSpecific() {
-        return payerCode != null && !payerCode.trim().isEmpty();
-    }
-
-    /**
-     * Check if this denial code applies to all payers
-     * 
-     * @return true if payer_code is null or empty
-     */
-    public boolean isGlobal() {
-        return !isPayerSpecific();
-    }
-
-    /**
      * Get formatted display name for UI rendering
      * Format: "code - description"
      * 
@@ -111,17 +85,5 @@ public class DenialCode {
         return code;
     }
 
-    /**
-     * Get full code with payer scope for identification
-     * Format: "code (payerCode)" or "code (GLOBAL)"
-     * 
-     * @return formatted unique identifier with scope
-     */
-    public String getFullCode() {
-        if (isPayerSpecific()) {
-            return code + " (" + payerCode + ")";
-        }
-        return code + " (GLOBAL)";
-    }
 }
 

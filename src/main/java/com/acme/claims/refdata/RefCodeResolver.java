@@ -32,7 +32,7 @@ public class RefCodeResolver {
                 () -> jdbc.queryForObject("""
                         insert into claims_ref.payer(payer_code, name, status)
                         values (?,?, 'ACTIVE')
-                        on conflict (payer_code) do update set name=coalesce(excluded.name, claims_ref.payer.name)
+                        on conflict on constraint uq_payer_code do update set name=coalesce(excluded.name, claims_ref.payer.name)
                         returning id
                         """, Long.class, payerCode, name),
                 "claims_ref.payer", payerCode, null, actor, ingestionFileId, claimExternalId
@@ -48,7 +48,7 @@ public class RefCodeResolver {
                 () -> jdbc.queryForObject("""
                         insert into claims_ref.provider(provider_code, name, status)
                         values (?,?, 'ACTIVE')
-                        on conflict (provider_code) do update set name=coalesce(excluded.name, claims_ref.provider.name)
+                        on conflict on constraint uq_provider_code do update set name=coalesce(excluded.name, claims_ref.provider.name)
                         returning id
                         """, Long.class, providerCode, name),
                 "claims_ref.provider", providerCode, null, actor, ingestionFileId, claimExternalId
@@ -65,7 +65,7 @@ public class RefCodeResolver {
                 () -> jdbc.queryForObject("""
                         insert into claims_ref.facility(facility_code, name, city, country, status)
                         values (?,?,?,?,'ACTIVE')
-                        on conflict (facility_code) do update
+                        on conflict on constraint uq_facility_code do update
                           set name = coalesce(excluded.name, claims_ref.facility.name),
                               city = coalesce(excluded.city, claims_ref.facility.city),
                               country = coalesce(excluded.country, claims_ref.facility.country)
@@ -85,7 +85,7 @@ public class RefCodeResolver {
                 () -> jdbc.queryForObject("""
                         insert into claims_ref.clinician(clinician_code, name, specialty, status)
                         values (?,?,?, 'ACTIVE')
-                        on conflict (clinician_code) do update
+                        on conflict on constraint uq_clinician_code do update
                           set name = coalesce(excluded.name, claims_ref.clinician.name),
                               specialty = coalesce(excluded.specialty, claims_ref.clinician.specialty)
                         returning id
@@ -104,7 +104,7 @@ public class RefCodeResolver {
                 () -> jdbc.queryForObject("""
                         insert into claims_ref.activity_code(code, type, description, status)
                         values (?,?,?, 'ACTIVE')
-                        on conflict (code, type) do update
+                        on conflict on constraint uq_activity_code do update
                           set description = coalesce(excluded.description, claims_ref.activity_code.description)
                         returning id
                         """, Long.class, code, system, description),
@@ -112,19 +112,37 @@ public class RefCodeResolver {
         );
     }
 
-    /** Return diagnosis_code.id for (code, system) (default ICD-10). */
+    /** 
+     * Return diagnosis_code.id for (code, system) (default ICD-10). Match by code only.
+     * 
+     * RACE CONDITION MITIGATION:
+     * This method uses a SELECT-then-INSERT pattern with ON CONFLICT to handle concurrent inserts.
+     * While ON CONFLICT protects against constraint violations, there's still a performance gap:
+     * - Thread A: SELECT (not found) → INSERT ... ON CONFLICT
+     * - Thread B: SELECT (not found, before A commits) → INSERT ... ON CONFLICT
+     * 
+     * Both threads will succeed (ON CONFLICT handles it), but both do the INSERT attempt.
+     * For true optimization, we could skip the SELECT and always INSERT with ON CONFLICT,
+     * but the current approach reduces unnecessary writes for already-existing codes.
+     * 
+     * The ON CONFLICT clause ensures atomicity at the database level, preventing actual
+     * constraint violations even in high-concurrency scenarios.
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Long> resolveDiagnosisCode(String code, String system, String description,
                                                String actor, Long ingestionFileId, String claimExternalId) {
         String sys = Optional.ofNullable(system).filter(s -> !s.isBlank()).orElse("ICD-10");
         return resolveId(
-                "select id from claims_ref.diagnosis_code where code=? and code_system=?",
-                ps -> { ps.setString(1, code); ps.setString(2, sys); },
+                "select id from claims_ref.diagnosis_code where code = ?",
+                ps -> { ps.setString(1, code); },
                 () -> jdbc.queryForObject("""
                         insert into claims_ref.diagnosis_code(code, code_system, description, status)
                         values (?,?,?, 'ACTIVE')
-                        on conflict (code, code_system) do update
-                          set description = coalesce(excluded.description, claims_ref.diagnosis_code.description)
+                        on conflict on constraint uq_diagnosis_code do update
+                          set description = coalesce(excluded.description, claims_ref.diagnosis_code.description),
+                              code_system = coalesce(excluded.code_system, claims_ref.diagnosis_code.code_system),
+                              status = coalesce(excluded.status, claims_ref.diagnosis_code.status),
+                              updated_at = now()
                         returning id
                         """, Long.class, code, sys, description),
                 "claims_ref.diagnosis_code", code, sys, actor, ingestionFileId, claimExternalId
@@ -138,7 +156,7 @@ public class RefCodeResolver {
      *  (b) change return type to Optional<String> and wire FK as TEXT.
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Optional<Long> resolveDenialCode(String code, String description, String payerCode,
+    public Optional<Long> resolveDenialCode(String code, String description,
                                             String actor, Long ingestionFileId, String claimExternalId) {
         // Preferred schema: claims_ref.denial_code(id bigserial PK, code unique)
         // Adjust if you kept TEXT PK on code.
@@ -147,13 +165,12 @@ public class RefCodeResolver {
                 "select id from claims_ref.denial_code where code=?",
                 ps -> ps.setString(1, code),
                 () -> jdbc.queryForObject("""
-                        insert into claims_ref.denial_code(code, description, payer_code)
-                        values (?,?,?)
-                        on conflict (code) do update
-                          set description = coalesce(excluded.description, claims_ref.denial_code.description),
-                              payer_code  = coalesce(excluded.payer_code, claims_ref.denial_code.payer_code)
+                        insert into claims_ref.denial_code(code, description)
+                        values (?,?)
+                        on conflict on constraint uq_denial_code do update
+                          set description = coalesce(excluded.description, claims_ref.denial_code.description)
                         returning id
-                        """, Long.class, code, description, payerCode),
+                        """, Long.class, code, description),
                 "claims_ref.denial_code", code, null, actor, ingestionFileId, claimExternalId
         );
     }

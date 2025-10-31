@@ -27,5 +27,22 @@ public class DhpoMetrics {
         reg.counter("dhpo.ack.count", t).increment();
     }
 
+    public void recordFacilityPoll(String facility, String op, long candidates, long queued){
+        Tags t = Tags.of("facility", nv(facility), "op", nv(op));
+        reg.counter("dhpo.poll.candidates", t).increment(candidates);
+        reg.counter("dhpo.poll.queued", t).increment(queued);
+    }
+
+    public void recordFacilityIngestion(String facility, String source, String mode, boolean ok, long durMs){
+        Tags t = Tags.of("facility", nv(facility), "source", nv(source), "mode", nv(mode), "result", ok ? "ok" : "fail");
+        reg.counter("ingestion.facility.count", t).increment();
+        Timer.builder("ingestion.facility.duration").tags(t).register(reg).record(durMs, TimeUnit.MILLISECONDS);
+    }
+
+    public void recordFacilityQueue(String facility, String op, long queued){
+        Tags t = Tags.of("facility", nv(facility), "op", nv(op));
+        reg.counter("dhpo.queue.files", t).increment(queued);
+    }
+
     private static String nv(String s){ return (s==null||s.isBlank()) ? "unknown" : s; }
 }

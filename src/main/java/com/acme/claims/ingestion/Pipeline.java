@@ -404,6 +404,7 @@ public class Pipeline {
             String mode   = (wi.sourcePath() != null) ? "disk" : "mem";
             String source = (wi.source() != null) ? wi.source() : "unknown";
             dhpoMetrics.recordIngestion(wi.source(), mode, success, durMs);
+            // per-facility metrics intentionally not recorded here to avoid changing pipeline behavior
             // NOTE: File archiving moved to Orchestrator after verification
         }
     }
@@ -419,7 +420,7 @@ public class Pipeline {
                     VALUES
                       (?,     ?,  ?,         'UNKNOWN', 'UNKNOWN',  now(),
                        0,                   'UNKNOWN', ?, now())
-                    ON CONFLICT (file_id) DO UPDATE
+                    ON CONFLICT ON CONSTRAINT uq_ingestion_file DO UPDATE
                        SET updated_at = now()                 -- touch row, no rollback-inducing error
                     RETURNING id
                 """, Long.class, wi.fileId(), wi.fileName(), rootType, xmlBytes);

@@ -5,6 +5,7 @@ import com.acme.claims.domain.model.entity.FacilityDhpoConfig;
 import com.acme.claims.domain.repo.FacilityDhpoConfigRepo;
 import com.acme.claims.ingestion.fetch.soap.DhpoFetchInbox;
 import com.acme.claims.metrics.DhpoMetrics;
+import com.acme.claims.ingestion.monitor.IngestionKpiLogger;
 import com.acme.claims.security.ame.CredsCipherService;
 import com.acme.claims.soap.SoapProperties;
 import com.acme.claims.soap.config.DhpoClientProperties;
@@ -86,6 +87,7 @@ public class DhpoFetchCoordinator {
     private final DhpoFetchInbox inbox;
     private final DhpoFileRegistry fileRegistry;
     private final DhpoMetrics dhpoMetrics;
+    private final IngestionKpiLogger kpiLogger;
     private final java.util.concurrent.atomic.AtomicBoolean searchRunning = new java.util.concurrent.atomic.AtomicBoolean(false);
     private final java.util.concurrent.atomic.AtomicBoolean deltaRunning  = new java.util.concurrent.atomic.AtomicBoolean(false);
 
@@ -141,7 +143,7 @@ public class DhpoFetchCoordinator {
                 for (var f : list) {
                     scope.fork(() -> {
                         try {
-                            // 300-day backfill logic
+                            // 1000-day backfill logic
                             LocalDateTime now = LocalDateTime.now();
                             LocalDateTime startDate = now.minusDays(1000);
                             for (int i = 0; i < 50; i++) {
@@ -165,6 +167,7 @@ public class DhpoFetchCoordinator {
                 }
                 scope.join();
                 scope.throwIfFailed();
+                try { kpiLogger.logKpisImmediate(); } catch (Exception ignore) {}
             }
             log.info("Startup backfill completed successfully");
         } catch (Exception e) {
@@ -199,28 +202,34 @@ public class DhpoFetchCoordinator {
                 return;
             }
             
-            try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
-                for (var f : list) {
-                    scope.fork(() -> {
-                        try {
-                            processDelta(f);
-                            return null;
-                        } catch (DhpoFetchException e) {
-                            // Log structured exception with context
-                            log.error("Facility {} delta poll failed [{}]: {}", 
-                                    e.getFacilityCode(), e.getErrorCode(), e.getMessage(), e);
-                            throw e;
-                        } catch (Exception e) {
-                            // Wrap unexpected exceptions
-                            log.error("Facility {} delta poll failed with unexpected error: {}", 
-                                    f.getFacilityCode(), e.getMessage(), e);
-                            throw new DhpoFetchException(f.getFacilityCode(), "DELTA_POLL", 
-                                    "UNEXPECTED_ERROR", "Unexpected error during delta poll", e);
-                        }
-                    });
+            if (soapProps.facilityPoll() != null && Boolean.TRUE.equals(soapProps.facilityPoll().enableAdvanced())) {
+                String strat = soapProps.facilityPoll().strategy() == null ? "staggered" : soapProps.facilityPoll().strategy();
+                switch (strat.toLowerCase()) {
+                    case "concurrent" -> executeConcurrentDeltaPolling(list);
+                    default -> executeStaggeredDeltaPolling(list, 
+                            soapProps.facilityPoll().staggerIntervalMs() == null ? 0L : soapProps.facilityPoll().staggerIntervalMs(),
+                            soapProps.facilityPoll().maxConcurrent() == null ? Integer.MAX_VALUE : soapProps.facilityPoll().maxConcurrent());
                 }
+            } else {
+                try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+                    for (var f : list) {
+                        scope.fork(() -> {
+                            try {
+                                processDelta(f);
+                                return null;
+                            } catch (DhpoFetchException e) {
+                                log.error("Facility {} delta poll failed [{}]: {}", e.getFacilityCode(), e.getErrorCode(), e.getMessage(), e);
+                                throw e;
+                            } catch (Exception e) {
+                                log.error("Facility {} delta poll failed with unexpected error: {}", f.getFacilityCode(), e.getMessage(), e);
+                                throw new DhpoFetchException(f.getFacilityCode(), "DELTA_POLL", "UNEXPECTED_ERROR", "Unexpected error during delta poll", e);
+                            }
+                        });
+                    }
                 scope.join();
                 scope.throwIfFailed();
+                try { kpiLogger.logKpisImmediate(); } catch (Exception ignore) {}
+                }
             }
         } catch (Exception e) {
             log.error("Delta poll scheduler failed: {}", e.getMessage(), e);
@@ -269,14 +278,15 @@ public class DhpoFetchCoordinator {
         }
 
         if (parsed.files().isEmpty()) {
-            log.debug("Facility {}: no new transactions", f.getFacilityCode());
+            log.info("DHPO_DELTA_SUMMARY facility={} op=GetNewTransactions candidates=0 queued=0", f.getFacilityCode());
             return;
         }
         
-        log.info("Facility {}: {} new items", f.getFacilityCode(), parsed.files().size());
+        long candidates = parsed.files().size();
         futures = new ArrayList<>(parsed.files().size());
         
         try (var vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            long queued = 0;
             for (var row : parsed.files()) {
                 futures.add(vt.submit(() -> {
                     if (!tryMarkInflight(f.getFacilityCode(), row.fileId())) {
@@ -295,7 +305,13 @@ public class DhpoFetchCoordinator {
                         unmarkInflight(f.getFacilityCode(), row.fileId());
                     }
                 }));
+                queued++;
             }
+            dhpoMetrics.recordFacilityPoll(f.getFacilityCode(), "delta", candidates, queued);
+            if (soapProps.metrics() != null && Boolean.TRUE.equals(soapProps.metrics().facilityQueueEnabled())) {
+                dhpoMetrics.recordFacilityQueue(f.getFacilityCode(), "delta", queued);
+            }
+            log.info("DHPO_DELTA_SUMMARY facility={} op=GetNewTransactions candidates={} queued={}", f.getFacilityCode(), candidates, queued);
         } catch (Exception e) {
             throw new DhpoFetchException(f.getFacilityCode(), "VIRTUAL_THREAD_EXECUTION", 
                     "THREAD_ERROR", "Failed to execute virtual threads for downloads", e);
@@ -328,51 +344,44 @@ public class DhpoFetchCoordinator {
                 return;
             }
             
-            try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
-                for (var f : list) {
-                    scope.fork(() -> {
-                        try {
-                            // === TEMP BACKFILL START ===
-                            // Temporary multi-window backfill for testing only:
-                            // Run 30 consecutive 10-day windows covering ~last 300 days.
-                            // This explicitly uses date ranges so dhpoProps.searchDaysBack does NOT apply.
-                            // NOTE: Remove this block and restore the original calls below for live.
-                            LocalDateTime now = LocalDateTime.now();
-                            LocalDateTime startDate = now.minusDays(300); // Start from 300 days back
-                            for (int i = 0; i < 30; i++) {
-                                LocalDateTime from = startDate.plusDays(10L * i);
-                                LocalDateTime to = from.plusDays(10);
-                                // submissions (direction=1, tx=2) - TransactionStatus=1 (new/undownloaded)
-                                searchWindowRange(f, 1, 2, 1, from, to);
-                                // submissions (direction=1, tx=2) - TransactionStatus=2 (downloaded)
-                                searchWindowRange(f, 1, 2, 2, from, to);
-                                // remittances (direction=2, tx=8) - TransactionStatus=1 (new/undownloaded)
-                                searchWindowRange(f, 2, 8, 1, from, to);
-                                // remittances (direction=2, tx=8) - TransactionStatus=2 (downloaded)
-                                searchWindowRange(f, 2, 8, 2, from, to);
-                            }
-                            // === TEMP BACKFILL END ===
-
-                            // Original behavior (restore after ingestion):
-                            // searchWindow(f, 1, 2);
-                            // searchWindow(f, 2, 8);
-                            return null;
-                        } catch (DhpoFetchException e) {
-                            // Log structured exception with context
-                            log.error("Facility {} search poll failed [{}]: {}", 
-                                    e.getFacilityCode(), e.getErrorCode(), e.getMessage(), e);
-                            throw e;
-                        } catch (Exception e) {
-                            // Wrap unexpected exceptions
-                            log.error("Facility {} search poll failed with unexpected error: {}", 
-                                    f.getFacilityCode(), e.getMessage(), e);
-                            throw new DhpoFetchException(f.getFacilityCode(), "SEARCH_POLL", 
-                                    "UNEXPECTED_ERROR", "Unexpected error during search poll", e);
-                        }
-                    });
+            if (soapProps.facilityPoll() != null && Boolean.TRUE.equals(soapProps.facilityPoll().enableAdvanced())) {
+                String strat = soapProps.facilityPoll().strategy() == null ? "staggered" : soapProps.facilityPoll().strategy();
+                switch (strat.toLowerCase()) {
+                    case "concurrent" -> executeConcurrentSearchPolling(list);
+                    default -> executeStaggeredSearchPolling(list, 
+                            soapProps.facilityPoll().staggerIntervalMs() == null ? 0L : soapProps.facilityPoll().staggerIntervalMs(),
+                            soapProps.facilityPoll().maxConcurrent() == null ? Integer.MAX_VALUE : soapProps.facilityPoll().maxConcurrent());
                 }
-                scope.join();
-                scope.throwIfFailed();
+            } else {
+                try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+                    for (var f : list) {
+                        scope.fork(() -> {
+                            try {
+                                // === SEARCH TRANSACTIONS START ===
+                                LocalDateTime now = LocalDateTime.now();
+                                LocalDateTime startDate = now.minusDays(100);
+                                for (int i = 0; i < 10; i++) {
+                                    LocalDateTime from = startDate.plusDays(10L * i);
+                                    LocalDateTime to = from.plusDays(10);
+                                    searchWindowRange(f, 1, 2, 1, from, to);
+                                    searchWindowRange(f, 1, 2, 2, from, to);
+                                    searchWindowRange(f, 2, 8, 1, from, to);
+                                    searchWindowRange(f, 2, 8, 2, from, to);
+                                }
+                                // === SEARCH TRANSACTIONS END ===
+                                return null;
+                            } catch (DhpoFetchException e) {
+                                log.error("Facility {} search poll failed [{}]: {}", e.getFacilityCode(), e.getErrorCode(), e.getMessage(), e);
+                                throw e;
+                            } catch (Exception e) {
+                                log.error("Facility {} search poll failed with unexpected error: {}", f.getFacilityCode(), e.getMessage(), e);
+                                throw new DhpoFetchException(f.getFacilityCode(), "SEARCH_POLL", "UNEXPECTED_ERROR", "Unexpected error during search poll", e);
+                            }
+                        });
+                    }
+                    scope.join();
+                    scope.throwIfFailed();
+                }
             }
         } catch (Exception e) {
             log.error("Search poll scheduler failed: {}", e.getMessage(), e);
@@ -430,10 +439,10 @@ public class DhpoFetchCoordinator {
         }
 
         long candidates = parsed.files().stream().filter(fr -> fr.isDownloaded()==null || Boolean.FALSE.equals(fr.isDownloaded())).count();
-        log.info("Facility {} Search dir={} tx={} candidates={}",
-                f.getFacilityCode(), direction, transactionId, candidates);
+        log.info("DHPO_SEARCH_SUMMARY facility={} dir={} tx={} candidates={} queued=pending", f.getFacilityCode(), direction, transactionId, candidates);
         
         try (var vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            long queued = 0;
             for(var file : parsed.files().stream().filter(fr -> fr.isDownloaded() == null || !fr.isDownloaded()).toList()) {
                 futures.add(vt.submit(() -> {
                     if (!tryMarkInflight(f.getFacilityCode(), file.fileId())) {
@@ -452,7 +461,13 @@ public class DhpoFetchCoordinator {
                         unmarkInflight(f.getFacilityCode(), file.fileId());
                     }
                 }));
+                queued++;
             }
+            dhpoMetrics.recordFacilityPoll(f.getFacilityCode(), "search", candidates, queued);
+            if (soapProps.metrics() != null && Boolean.TRUE.equals(soapProps.metrics().facilityQueueEnabled())) {
+                dhpoMetrics.recordFacilityQueue(f.getFacilityCode(), "search", queued);
+            }
+            log.info("DHPO_SEARCH_SUMMARY facility={} dir={} tx={} candidates={} queued={}", f.getFacilityCode(), direction, transactionId, candidates, queued);
         } catch (Exception e) {
             throw new DhpoFetchException(f.getFacilityCode(), "VIRTUAL_THREAD_EXECUTION", 
                     "THREAD_ERROR", "Failed to execute virtual threads for search downloads", e);
@@ -504,11 +519,12 @@ public class DhpoFetchCoordinator {
         }
         log.info("Files received after SOAP call ={}", parsed.files().size());
         long candidates = parsed.files().stream().filter(fr -> fr.isDownloaded()==null || Boolean.FALSE.equals(fr.isDownloaded())).count();
-        log.info("Facility {} SearchRange dir={} tx={} txStatus={} from={} to={} candidates(isDownloaded:False)={}",
+        log.info("DHPO_SEARCHRANGE_SUMMARY facility={} dir={} tx={} txStatus={} from={} to={} candidates={} queued=pending",
                 f.getFacilityCode(), direction, transactionId, transactionStatus, FMT.format(from), FMT.format(to), candidates);
 
         try (var vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
 //            for (var file : parsed.files().stream().filter(fr -> fr.isDownloaded() == null || !fr.isDownloaded()).toList()) {
+            long queued = 0;
             for (var file : parsed.files()) {
                 futures.add(vt.submit(() -> {
                     if (!tryMarkInflight(f.getFacilityCode(), file.fileId())) {
@@ -527,7 +543,14 @@ public class DhpoFetchCoordinator {
                         unmarkInflight(f.getFacilityCode(), file.fileId());
                     }
                 }));
+                queued++;
             }
+            dhpoMetrics.recordFacilityPoll(f.getFacilityCode(), "searchRange", candidates, queued);
+            if (soapProps.metrics() != null && Boolean.TRUE.equals(soapProps.metrics().facilityQueueEnabled())) {
+                dhpoMetrics.recordFacilityQueue(f.getFacilityCode(), "searchRange", queued);
+            }
+            log.info("DHPO_SEARCHRANGE_SUMMARY facility={} dir={} tx={} txStatus={} from={} to={} candidates={} queued={}",
+                    f.getFacilityCode(), direction, transactionId, transactionStatus, FMT.format(from), FMT.format(to), candidates, queued);
         } catch (Exception e) {
             throw new DhpoFetchException(f.getFacilityCode(), "VIRTUAL_THREAD_EXECUTION",
                     "THREAD_ERROR", "Failed to execute virtual threads for search downloads", e);
@@ -726,5 +749,86 @@ public class DhpoFetchCoordinator {
         }
     }
 
+    // ===== Advanced polling helpers (feature-gated by claims.soap.facilityPoll.enableAdvanced) =====
+    private void executeStaggeredDeltaPolling(List<FacilityDhpoConfig> facilities, long staggerMs, int maxConcurrent) throws Exception {
+        log.info("DELTA_ADVANCED strategy=staggered staggerMs={} maxConcurrent={}", staggerMs, maxConcurrent);
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+            final Semaphore limiter = new Semaphore(Math.max(1, maxConcurrent));
+            for (var fac : facilities) {
+                if (staggerMs > 0) try { Thread.sleep(staggerMs); } catch (InterruptedException ignored) {}
+                limiter.acquireUninterruptibly();
+                scope.fork(() -> {
+                    try {
+                        processDelta(fac);
+                        return null;
+                    } finally { limiter.release(); }
+                });
+            }
+            scope.join();
+            scope.throwIfFailed();
+        }
+    }
 
+    private void executeConcurrentDeltaPolling(List<FacilityDhpoConfig> facilities) throws Exception {
+        log.info("DELTA_ADVANCED strategy=concurrent");
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+            for (var fac : facilities) {
+                scope.fork(() -> { processDelta(fac); return null; });
+            }
+            scope.join();
+            scope.throwIfFailed();
+        }
+    }
+
+    private void executeStaggeredSearchPolling(List<FacilityDhpoConfig> facilities, long staggerMs, int maxConcurrent) throws Exception {
+        log.info("SEARCH_ADVANCED strategy=staggered staggerMs={} maxConcurrent={}", staggerMs, maxConcurrent);
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+            final Semaphore limiter = new Semaphore(Math.max(1, maxConcurrent));
+            for (var fac : facilities) {
+                if (staggerMs > 0) try { Thread.sleep(staggerMs); } catch (InterruptedException ignored) {}
+                limiter.acquireUninterruptibly();
+                scope.fork(() -> {
+                    try {
+                        // current backfill: 30 x 10-day windows
+                        LocalDateTime now = LocalDateTime.now();
+                        LocalDateTime startDate = now.minusDays(1000);
+                        for (int i = 0; i < 20; i++) {
+                            LocalDateTime from = startDate.plusDays(50L * i);
+                            LocalDateTime to = from.plusDays(50);
+                            searchWindowRange(fac, 1, 2, 1, from, to);
+                            searchWindowRange(fac, 1, 2, 2, from, to);
+                            searchWindowRange(fac, 2, 8, 1, from, to);
+                            searchWindowRange(fac, 2, 8, 2, from, to);
+                        }
+                        return null;
+                    } finally { limiter.release(); }
+                });
+            }
+            scope.join();
+            scope.throwIfFailed();
+        }
+    }
+
+    private void executeConcurrentSearchPolling(List<FacilityDhpoConfig> facilities) throws Exception {
+        log.info("SEARCH_ADVANCED strategy=concurrent");
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+            for (var fac : facilities) {
+                scope.fork(() -> {
+                    LocalDateTime now = LocalDateTime.now();
+                    LocalDateTime startDate = now.minusDays(300);
+                    for (int i = 0; i < 30; i++) {
+                        LocalDateTime from = startDate.plusDays(10L * i);
+                        LocalDateTime to = from.plusDays(10);
+                        searchWindowRange(fac, 1, 2, 1, from, to);
+                        searchWindowRange(fac, 1, 2, 2, from, to);
+                        searchWindowRange(fac, 2, 8, 1, from, to);
+                        searchWindowRange(fac, 2, 8, 2, from, to);
+                    }
+                    return null;
+                });
+            }
+            scope.join();
+            scope.throwIfFailed();
+        }
+    }
 }
