@@ -2,6 +2,7 @@ package com.acme.claims.ingestion.audit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -213,6 +214,74 @@ public class IngestionAudit {
     // ========== SAFE METHODS WITH ERROR HANDLING ==========
     
     /**
+     * Helper method to verify ingestion run exists with retry logic.
+     * Handles transaction visibility delays by retrying with exponential backoff.
+     * Returns true if run exists, false otherwise.
+     * 
+     * <p>This method addresses PostgreSQL transaction isolation where a newly committed
+     * runId may not be immediately visible in a different transaction/connection.
+     * Increased delays (100ms, 200ms, 500ms) accommodate connection pool routing
+     * and transaction visibility windows.</p>
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    private boolean verifyRunExists(Long runId, int maxRetries) {
+        if (runId == null) return false;
+        
+        // Increased delays to handle transaction visibility windows
+        // PostgreSQL + Spring may need 100-200ms for visibility across connections
+        int[] delays = {0, 100, 200, 500}; // milliseconds: immediate, then retries with delays
+        int retries = Math.min(maxRetries, delays.length - 1);
+        
+        for (int attempt = 0; attempt <= retries; attempt++) {
+            try {
+                if (attempt > 0) {
+                    Thread.sleep(delays[attempt]);
+                }
+                
+                // Use COUNT query - more reliable than SELECT with empty results
+                // COUNT always returns a number (0 or 1), avoiding empty result set issues
+                Integer count = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM claims.ingestion_run WHERE id = ?",
+                    Integer.class,
+                    runId);
+                
+                if (count != null && count > 0) {
+                    if (attempt > 0) {
+                        log.debug("Verified run {} exists on attempt {} (after {}ms delay)", 
+                            runId, attempt + 1, delays[attempt]);
+                    }
+                    return true; // Run exists
+                }
+                
+                // If count is 0 and this is the last attempt, return false
+                if (attempt == retries) {
+                    log.warn("Ingestion run {} not found after {} retries (delays: {})", 
+                        runId, retries + 1, java.util.Arrays.toString(delays));
+                    return false;
+                }
+                
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.warn("Interrupted while verifying run existence: runId={}", runId);
+                return false;
+            } catch (Exception e) {
+                // On transient errors, retry
+                if (attempt < retries) {
+                    log.debug("Run verification failed on attempt {}: {}, retrying...", 
+                        attempt + 1, e.getMessage());
+                    continue;
+                }
+                // On last attempt, log and return false
+                log.warn("Run verification failed after {} attempts: runId={}, error={}", 
+                    retries + 1, runId, e.getMessage());
+                return false;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
      * Safely start an ingestion run with error handling.
      * Returns null if operation fails, ensuring ingestion continues.
      */
@@ -268,24 +337,20 @@ public class IngestionAudit {
         if (runId == null || ingestionFileId == null) return false;
         
         // Defensive validation: verify runId exists before attempting insert
-        try {
-            Long existingRunId = jdbc.queryForObject(
-                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
-                Long.class, runId);
-            if (existingRunId == null) {
-                log.warn("Ingestion run {} does not exist, skipping audit failure for file {}", 
-                    runId, ingestionFileId);
-                return false;
-            }
-        } catch (Exception verifyEx) {
-            log.warn("Failed to verify ingestion run {} before audit failure: {}. Skipping to prevent FK violation.", 
-                runId, verifyEx.getMessage());
-            return false; // Early return - don't attempt INSERT if we can't verify run exists
+        // If verification fails, still attempt insert and catch FK violation as fallback
+        boolean verified = verifyRunExists(runId, 3);
+        if (!verified) {
+            log.debug("Run {} verification failed, attempting insert anyway (will catch FK violation if needed)", runId);
         }
         
         try {
             fileFail(runId, ingestionFileId, errorClass, message);
             return true;
+        } catch (DataIntegrityViolationException e) {
+            // FK violation means runId doesn't exist - log and return false
+            log.warn("FK violation while auditing file failure {}: runId={} does not exist: {}", 
+                ingestionFileId, runId, e.getMessage());
+            return false;
         } catch (Exception e) {
             log.error("Failed to audit file failure: runId={}, fileId={}", 
                 runId, ingestionFileId, e);
@@ -301,24 +366,20 @@ public class IngestionAudit {
         if (runId == null || ingestionFileId == null) return false;
         
         // Defensive validation: verify runId exists before attempting insert
-        try {
-            Long existingRunId = jdbc.queryForObject(
-                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
-                Long.class, runId);
-            if (existingRunId == null) {
-                log.warn("Ingestion run {} does not exist, skipping audit already for file {}", 
-                    runId, ingestionFileId);
-                return false;
-            }
-        } catch (Exception verifyEx) {
-            log.warn("Failed to verify ingestion run {} before audit already: {}. Skipping to prevent FK violation.", 
-                runId, verifyEx.getMessage());
-            return false; // Early return - don't attempt INSERT if we can't verify run exists
+        // If verification fails, still attempt insert and catch FK violation as fallback
+        boolean verified = verifyRunExists(runId, 3);
+        if (!verified) {
+            log.debug("Run {} verification failed, attempting insert anyway (will catch FK violation if needed)", runId);
         }
         
         try {
             fileAlready(runId, ingestionFileId);
             return true;
+        } catch (DataIntegrityViolationException e) {
+            // FK violation means runId doesn't exist - log and return false
+            log.warn("FK violation while auditing file already {}: runId={} does not exist: {}", 
+                ingestionFileId, runId, e.getMessage());
+            return false;
         } catch (Exception e) {
             log.error("Failed to audit file already processed: runId={}, fileId={}", 
                 runId, ingestionFileId, e);
@@ -343,19 +404,10 @@ public class IngestionAudit {
         if (runId == null || ingestionFileId == null) return false;
         
         // Defensive validation: verify runId exists before attempting insert
-        try {
-            Long existingRunId = jdbc.queryForObject(
-                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
-                Long.class, runId);
-            if (existingRunId == null) {
-                log.warn("Ingestion run {} does not exist, skipping audit complete for file {}", 
-                    runId, ingestionFileId);
-                return false;
-            }
-        } catch (Exception verifyEx) {
-            log.warn("Failed to verify ingestion run {} before audit complete: {}. Skipping to prevent FK violation.", 
-                runId, verifyEx.getMessage());
-            return false; // Early return - don't attempt INSERT if we can't verify run exists
+        // If verification fails, still attempt insert and catch FK violation as fallback
+        boolean verifiedRun = verifyRunExists(runId, 3);
+        if (!verifiedRun) {
+            log.debug("Run {} verification failed, attempting insert anyway (will catch FK violation if needed)", runId);
         }
         
         try {
@@ -366,6 +418,11 @@ public class IngestionAudit {
                           projectedEvents, projectedStatusRows,
                           verificationFailedCount, ackAttempted, ackSent);
             return true;
+        } catch (DataIntegrityViolationException e) {
+            // FK violation means runId doesn't exist - log and return false
+            log.warn("FK violation while auditing file complete {}: runId={} does not exist: {}", 
+                ingestionFileId, runId, e.getMessage());
+            return false;
         } catch (Exception e) {
             log.error("Failed to audit complete file success: runId={}, fileId={}", 
                 runId, ingestionFileId, e);
@@ -396,21 +453,13 @@ public class IngestionAudit {
         if (runId == null || ingestionFileId == null) return false;
         
         // Defensive validation: verify runId exists before attempting insert
-        // This prevents foreign key constraint violations from stale/invalid runIds
-        try {
-            Long existingRunId = jdbc.queryForObject(
-                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
-                Long.class, runId);
-            if (existingRunId == null) {
-                log.warn("Ingestion run {} does not exist in database, skipping audit for file {}. " +
-                        "Possible causes: run was deleted, transaction rolled back, or stale runId in context.", 
-                    runId, ingestionFileId);
-                return false; // Non-blocking: skip audit but don't fail processing
-            }
-        } catch (Exception verifyEx) {
-            log.warn("Failed to verify ingestion run {} before audit: {}. Skipping to prevent FK violation.", 
-                runId, verifyEx.getMessage());
-            return false; // Early return - don't attempt INSERT if we can't verify run exists
+        // If verification fails, still attempt insert and catch FK violation as fallback
+        // This handles transaction visibility delays more gracefully
+        boolean verifiedRun = verifyRunExists(runId, 3);
+        if (!verifiedRun) {
+            log.debug("Run {} verification failed, attempting insert anyway (will catch FK violation if needed). " +
+                    "Possible causes: transaction visibility delay, run was deleted, or stale runId in context.", 
+                runId);
         }
         
         try {
@@ -423,6 +472,11 @@ public class IngestionAudit {
                           totalGross, totalNet, totalPatientShare, uniquePayers, uniqueProviders,
                           ackAttempted, ackSent, pipelineSuccess, verificationFailedCount);
             return true;
+        } catch (DataIntegrityViolationException e) {
+            // FK violation means runId doesn't exist - log and return false
+            log.warn("FK violation while auditing file enhanced {}: runId={} does not exist: {}", 
+                ingestionFileId, runId, e.getMessage());
+            return false;
         } catch (Exception e) {
             log.error("Failed to audit enhanced file success: runId={}, fileId={}", 
                 runId, ingestionFileId, e);
@@ -438,27 +492,23 @@ public class IngestionAudit {
         if (runId == null || ingestionFileId == null) return false;
         
         // Defensive validation: verify runId exists before attempting update
-        try {
-            Long existingRunId = jdbc.queryForObject(
-                "SELECT id FROM claims.ingestion_run WHERE id = ? LIMIT 1",
-                Long.class, runId);
-            if (existingRunId == null) {
-                log.warn("Ingestion run {} does not exist, skipping ack_sent update for file {}", 
-                    runId, ingestionFileId);
-                return false;
-            }
-        } catch (Exception verifyEx) {
-            log.warn("Failed to verify ingestion run {} before ack update: {}. Skipping to prevent FK violation.", 
-                runId, verifyEx.getMessage());
-            return false; // Early return - don't attempt UPDATE if we can't verify run exists
+        // If verification fails, still attempt update (UPDATE won't fail on FK violation, just affects 0 rows)
+        boolean verifiedRun = verifyRunExists(runId, 3);
+        if (!verifiedRun) {
+            log.debug("Run {} verification failed, attempting update anyway (will silently affect 0 rows if run doesn't exist)", runId);
         }
         
         try {
-            jdbc.update("""
+            int rowsUpdated = jdbc.update("""
                 update claims.ingestion_file_audit
                 set ack_sent = ?
                 where ingestion_run_id = ? and ingestion_file_id = ?
                 """, ackSent, runId, ingestionFileId);
+            
+            if (rowsUpdated == 0 && !verifiedRun) {
+                log.debug("Update ack_sent affected 0 rows for runId={}, fileId={} (run may not exist)", 
+                    runId, ingestionFileId);
+            }
             return true;
         } catch (Exception e) {
             log.error("Failed to update ack_sent in audit: runId={}, fileId={}, ackSent={}", 

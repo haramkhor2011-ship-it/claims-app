@@ -22,15 +22,26 @@ public class DhpoFetchInbox {
     }
 
     /** Generic submit allowing explicit source/sourcePath. */
-    public void submit(String fileId, byte[] xmlBytes, Path sourcePath, String source, String fileName) {
+    public boolean submit(String fileId, byte[] xmlBytes, Path sourcePath, String source, String fileName) {
         WorkItem workItem = new WorkItem(fileId, xmlBytes, sourcePath, source, fileName);
-        queue.offer(workItem);
+        boolean enqueued = queue.offer(workItem);
+        if (!enqueued) {
+            // Queue is full. Block briefly to avoid drops, then retry once non-blocking.
+            try {
+                // Best-effort: wait up to 250ms before giving up
+                return queue.offer(workItem, 250, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
         // NOTE: ingestionQueue is handled by Orchestrator via SoapFetcherAdapter callback
+        return true;
     }
 
     /** Convenience for SOAP (sourcePath=null, source="soap"). */
-    public void submitSoap(String fileId, byte[] xmlBytes, String fileName) {
-        submit(fileId, xmlBytes, null, "soap", fileName);
+    public boolean submitSoap(String fileId, byte[] xmlBytes, String fileName) {
+        return submit(fileId, xmlBytes, null, "soap", fileName);
     }
 
     WorkItem takeInterruptibly() throws InterruptedException {
