@@ -114,7 +114,8 @@ private void processOne(WorkItem wi) {
     try {
         // Existing processing logic...
         var result = pipeline.process(wi);
-        boolean verified = verifyService.verifyFile(result.ingestionFileId(), fileId);
+        var verification = verifyService.verifyFile(result.ingestionFileId(), fileId);
+        boolean verified = verification.passed();
         success = verified;
         
         // Audit successful processing
