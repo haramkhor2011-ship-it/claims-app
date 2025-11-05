@@ -85,6 +85,8 @@ public class VerifyService {
      */
     @Transactional(propagation = Propagation.REQUIRED)
     public VerificationOutcome verifyFile(long ingestionFileId, String xmlFileId, Integer expectedClaims, Integer expectedActivities) {
+        // Persist a verification_run row up front so every downstream INSERT into verification_result
+        // has a valid parent id and the FK that broke previously can succeed.
         Long verificationRunId = createVerificationRun(ingestionFileId);
         List<String> failureMessages = new ArrayList<>();
         List<String> warningMessages = new ArrayList<>();
@@ -247,6 +249,8 @@ public class VerifyService {
 
     private long insertRule(RuleSpec rule) {
         try {
+            // Seed the verification_rule table on the fly so legacy environments without these rows
+            // still get consistent FK targets for the verification results.
             return jdbc.queryForObject(
                 "INSERT INTO claims.verification_rule (code, description, severity, sql_text) VALUES (?, ?, ?, ?) RETURNING id",
                 Long.class,

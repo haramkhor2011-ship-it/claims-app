@@ -562,6 +562,8 @@ public class Orchestrator {
             ingestionFileId = result.ingestionFileId();
             
             // Enhanced verification: check that ALL parsed claims were persisted
+            // Verify returns the persisted verification_run id and rule metrics so we can audit
+            // without reaching back into verify service state and to keep FK constraints satisfied.
             var verificationOutcome = verifyService.verifyFile(ingestionFileId, fileId,
                 result.parsedClaims(), result.parsedActivities());
             boolean verified = verificationOutcome.passed();
