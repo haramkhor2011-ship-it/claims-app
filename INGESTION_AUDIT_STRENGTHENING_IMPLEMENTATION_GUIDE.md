@@ -72,8 +72,10 @@ metrics.setPersistedActivities(counts.acts());
 
 // Track verification
 metrics.startVerify();
-boolean verified = verifyService.verifyFile(result.ingestionFileId(), fileId);
+var verification = verifyService.verifyFile(result.ingestionFileId(), fileId);
+boolean verified = verification.passed();
 metrics.setVerificationPassed(verified);
+metrics.setVerificationFailedCount(verification.failedRuleCount());
 
 // End processing
 metrics.endProcessing();

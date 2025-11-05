@@ -562,8 +562,12 @@ public class Orchestrator {
             ingestionFileId = result.ingestionFileId();
             
             // Enhanced verification: check that ALL parsed claims were persisted
-            boolean verified = verifyService.verifyFile(ingestionFileId, fileId, 
+            // Verify returns the persisted verification_run id and rule metrics so we can audit
+            // without reaching back into verify service state and to keep FK constraints satisfied.
+            var verificationOutcome = verifyService.verifyFile(ingestionFileId, fileId,
                 result.parsedClaims(), result.parsedActivities());
+            boolean verified = verificationOutcome.passed();
+            int failedRules = verificationOutcome.failedRuleCount();
             success = verified;
 
             // Audit successful file processing
@@ -613,18 +617,18 @@ public class Orchestrator {
                     acker != null,      // ackAttempted: true if acker exists
                     false,               // ackSent: false at audit time (ack happens later in finally block)
                     true,                // pipelineSuccess: true (pipeline.process() completed without exception)
-                    verified ? 0 : 1);
+                    failedRules);
             }
 
             long ms = (System.nanoTime() - t0) / 1_000_000;
             if (ms > 2000) {
-                log.warn("ORCHESTRATOR_PROCESS_SLOW fileId={} fileName={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={}",
+                log.warn("ORCHESTRATOR_PROCESS_SLOW fileId={} fileName={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={} failedRules={}",
                     fileId, wi.fileName(), ms, result.rootType(), result.parsedClaims(), result.parsedActivities(),
-                    result.persistedClaims(), result.persistedActivities(), verified);
+                    result.persistedClaims(), result.persistedActivities(), verified, failedRules);
             } else {
-                log.info("ORCHESTRATOR_PROCESS_OK fileId={} fileName={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={}",
+                log.info("ORCHESTRATOR_PROCESS_OK fileId={} fileName={} {}ms rootType={} parsed[c={},a={}] persisted[c={},a={}] verified={} failedRules={}",
                     fileId, wi.fileName(), ms, result.rootType(), result.parsedClaims(), result.parsedActivities(),
-                    result.persistedClaims(), result.persistedActivities(), verified);
+                    result.persistedClaims(), result.persistedActivities(), verified, failedRules);
             }
         } catch (Exception ex) {
             log.error("ORCHESTRATOR_PROCESS_FAIL fileId={} fileName={} source={} : {}",
