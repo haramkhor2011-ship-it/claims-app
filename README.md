@@ -384,43 +384,45 @@ Verification ensures data quality and system correctness. Metrics provide visibi
 
 ---
 
-## 11. Appendix
+## 11. Documentation Structure
 
-**Decision Records:** See `decision_records.pdf` for ADR-001 to ADR-010.
+This project uses a unified documentation approach with four comprehensive guides:
 
-**Cross-Reference of Project Files:**
+### **📚 Core Documentation**
 
-* `claims_app_strategy.pdf` → Strategy & architecture.
-* `claims_ingestion_MASTER_plan.pdf` → Orchestrator master plan.
-* `claims_ingestion_api_blueprint.pdf` → Deployment & profiles.
-* `chatgpt_ddl.txt` → Full DDL.
-* `decision_records.pdf` → ADRs.
-* `claims_verify.sql` → Verification queries.
-* `metrics_reports_and_api_plan.pdf` → Metrics & Admin API.
-* `XSD Index — ClaimSubmission & RemittanceAdvice.txt` → XSD mapping.
+* **[Architecture & System Design](ARCHITECTURE_AND_SYSTEM_DESIGN.md)** - Complete technical reference covering system architecture, database design, data flow, security implementation, and technical decisions.
 
-**Future Enhancements:**
+* **[Operations & Deployment Guide](OPERATIONS_AND_DEPLOYMENT.md)** - Comprehensive operational guidance for deploying, monitoring, and maintaining the system in production environments.
 
-* Role-based access for `auth` schema.
-* RLS (row-level security) for multi-tenant scenarios.
-* Encryption of sensitive columns.
-* API enhancements for claim search filters.
+* **[Development & Implementation Guide](DEVELOPMENT_AND_IMPLEMENTATION.md)** - Complete development reference covering setup, implementation patterns, testing strategies, and best practices.
 
----
+* **[Troubleshooting & Analysis Guide](TROUBLESHOOTING_AND_ANALYSIS.md)** - Consolidated problem resolution reference containing all analysis reports, troubleshooting guides, and issue resolution documentation.
 
-## ✅ Final Note
+### **🔧 Quick Reference**
 
-This README now covers all tasks:
+* **Docker Setup**: See [Operations & Deployment Guide](OPERATIONS_AND_DEPLOYMENT.md#docker-deployment-recommended)
+* **Development Setup**: See [Development & Implementation Guide](DEVELOPMENT_AND_IMPLEMENTATION.md#development-environment-setup)
+* **Security Configuration**: See [Architecture & System Design](ARCHITECTURE_AND_SYSTEM_DESIGN.md#security-architecture)
+* **Performance Issues**: See [Troubleshooting & Analysis Guide](TROUBLESHOOTING_AND_ANALYSIS.md#common-issues--solutions)
 
-* Task 1: Overview & Architecture
-* Task 2: Database Design
-* Task 3: XSD Mapping & DTOs
-* Task 4: Orchestrator & Ingestion Flow
-* Task 5: Verification & Metrics
-* Task 6: Deployment & Security
-* Task 7: Developer Guide
-* Task 8: Appendix (ADRs, cross-reference, future plans)
+### **📋 Legacy References**
+
+* `decision_records.pdf` → ADR-001 to ADR-010 (architectural decisions)
+* `claims_verify.sql` → Verification queries
+* `XSD Index — ClaimSubmission & RemittanceAdvice.txt` → XSD mapping reference
 
 ---
 
-> This README is our SSOT. Always update this file first when something changes in design, schema, or flow.
+## ✅ Documentation Philosophy
+
+This unified documentation approach provides:
+
+* **Single Source of Truth**: Each area has one comprehensive document
+* **Targeted Content**: Each document focuses on its specific audience and use cases
+* **Consolidated Knowledge**: All related information is grouped together
+* **Easy Navigation**: Clear cross-references between documents
+* **Maintainable**: Easier to keep documentation current and accurate
+
+---
+
+> This README serves as the entry point to the Claims Processing System documentation. For detailed information, refer to the specific guides linked above.
